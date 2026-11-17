@@ -1,14 +1,19 @@
 // Package config loads FlareHound's JSON configuration.
 //
-// The API token is never stored in the config file: the file only names the
-// environment variable that carries it (see SPEC.md, security model).
+// Secrets (API token, bot token, webhook URL) are never stored in the
+// config file: the file only names the environment variables that carry
+// them (see SPEC.md, security model).
 package config
 
 import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
+	_ "time/tzdata" // the alpine image ships no zoneinfo
 )
 
 type Zone struct {
@@ -26,12 +31,64 @@ type Thresholds struct {
 	Origin5xxMin       int64   `json:"origin_5xx_min"`
 	NewFaceMinCount    int64   `json:"new_face_min_count"`
 	CollapseDownPct    float64 `json:"collapse_down_pct"`
+	MinCount           int64   `json:"min_count"`
 	EscalationPct      float64 `json:"escalation_pct"`
 	RecoveryCleanRound int     `json:"recovery_clean_rounds"`
 }
 
+// DefaultThresholds are the 2026-11-17 battle-tested values (SPEC 7.2).
+func DefaultThresholds() Thresholds {
+	return Thresholds{
+		TotalUpPct:         35,
+		WorkerCallsUpPct:   35,
+		CPUP50UpPct:        25,
+		DynamicUpPct:       50,
+		Origin5xxMultiple:  3,
+		Origin5xxMin:       50,
+		NewFaceMinCount:    5000,
+		CollapseDownPct:    50,
+		MinCount:           1000,
+		EscalationPct:      25,
+		RecoveryCleanRound: 2,
+	}
+}
+
+// PathRule is a path-level threshold override (SPEC 7.2) for sensitive,
+// low-volume paths whose anomalies would drown in zone totals.
+// Path uses * as wildcard, e.g. "/login*".
+type PathRule struct {
+	Name     string  `json:"name"`
+	Path     string  `json:"path"`
+	UpPct    float64 `json:"up_pct"`
+	MinCount int64   `json:"min_count"`
+}
+
+// PathCheckpoint is a daily fixed checkpoint (SPEC 7.4): the origin
+// reach (uncached requests) of a path that should stay at or below Max.
+type PathCheckpoint struct {
+	Label string `json:"label"`
+	Path  string `json:"path"`
+	Max   int64  `json:"max"`
+}
+
+// Artifact is a known accounting artifact (SPEC 7.4) counted and shown
+// separately so it is never mistaken for real visitor errors.
+type Artifact struct {
+	Label      string `json:"label"`
+	Path       string `json:"path"`
+	EdgeStatus int    `json:"edge_status"`
+}
+
+// KnownFaces is the user-maintained known-pattern library (SPEC 17):
+// sources registered here never count as "new faces".
+type KnownFaces struct {
+	ASNs       []int    `json:"asns"`
+	UserAgents []string `json:"user_agents"` // case-insensitive substrings
+}
+
 type Notify struct {
 	WebhookURL          string `json:"webhook_url"`
+	WebhookURLEnv       string `json:"webhook_url_env"`
 	TelegramBotTokenEnv string `json:"telegram_bot_token_env"`
 	TelegramChatID      string `json:"telegram_chat_id"`
 }
@@ -44,54 +101,170 @@ type Config struct {
 	} `json:"cloudflare"`
 	Schedule struct {
 		IntradayInterval string `json:"intraday_interval"`
+		IntradayOffset   string `json:"intraday_offset"`
+		SettleDelay      string `json:"settle_delay"`
 		DailyReportAt    string `json:"daily_report_at"`
 		Timezone         string `json:"timezone"`
 	} `json:"schedule"`
 	Thresholds Thresholds `json:"thresholds"`
-	Notify     Notify     `json:"notify"`
-	StateFile  string     `json:"state_file"`
+	PathRules  []PathRule `json:"path_rules"`
+	Daily      struct {
+		Paths     []PathCheckpoint `json:"paths"`
+		Artifacts []Artifact       `json:"artifacts"`
+	} `json:"daily"`
+	KnownFaces KnownFaces `json:"known_faces"`
+	Report     struct {
+		Language string `json:"language"` // "en" | "zh"
+	} `json:"report"`
+	Notify    Notify `json:"notify"`
+	StateFile string `json:"state_file"`
 
-	// APIToken is resolved from the environment at load time; never persisted.
-	APIToken string `json:"-"`
-	// TelegramBotToken likewise, when configured.
+	// Secrets resolved from the environment at load time; never persisted.
+	APIToken         string `json:"-"`
 	TelegramBotToken string `json:"-"`
+	WebhookURL       string `json:"-"`
+
+	Location *time.Location `json:"-"`
 }
 
+// Secrets returns every secret value, for log redaction.
+func (c *Config) Secrets() []string {
+	return []string{c.APIToken, c.TelegramBotToken, c.WebhookURL}
+}
+
+var hhmm = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
+var tag = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
 // Load reads and validates the config file at path, then resolves secrets
-// from the environment.
+// from the environment. Fields absent from the file keep their defaults.
 func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	var c Config
+	c := Config{Thresholds: DefaultThresholds()}
+	c.Cloudflare.APITokenEnv = "CF_API_TOKEN"
+	c.Schedule.IntradayInterval = "1h"
+	c.Schedule.IntradayOffset = "7m"
+	c.Schedule.SettleDelay = "3m"
+	c.Schedule.DailyReportAt = "08:00"
+	c.Report.Language = "en"
+	c.StateFile = "data/state.json"
 	if err := json.Unmarshal(raw, &c); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
+	if err := c.resolve(); err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+func (c *Config) resolve() error {
 	if c.Cloudflare.APITokenEnv == "" {
 		c.Cloudflare.APITokenEnv = "CF_API_TOKEN"
 	}
 	c.APIToken = os.Getenv(c.Cloudflare.APITokenEnv)
 	if c.APIToken == "" {
-		return nil, fmt.Errorf("environment variable %s is empty: a read-only Cloudflare API token is required", c.Cloudflare.APITokenEnv)
+		return fmt.Errorf("environment variable %s is empty: a read-only Cloudflare API token is required", c.Cloudflare.APITokenEnv)
 	}
 	if c.Notify.TelegramBotTokenEnv != "" {
 		c.TelegramBotToken = os.Getenv(c.Notify.TelegramBotTokenEnv)
 	}
+	c.WebhookURL = c.Notify.WebhookURL
+	if c.Notify.WebhookURLEnv != "" {
+		c.WebhookURL = os.Getenv(c.Notify.WebhookURLEnv)
+	}
+
 	if len(c.Cloudflare.Zones) == 0 {
-		return nil, fmt.Errorf("config: at least one zone is required")
+		return fmt.Errorf("config: at least one zone is required")
+	}
+	needAccount := false
+	for i, z := range c.Cloudflare.Zones {
+		if !tag.MatchString(z.ZoneID) {
+			return fmt.Errorf("config: zones[%d].zone_id %q is not a 32-char hex Cloudflare zone ID", i, z.ZoneID)
+		}
+		if z.Name == "" {
+			c.Cloudflare.Zones[i].Name = z.ZoneID
+		}
+		if len(z.Workers) > 0 {
+			needAccount = true
+		}
+	}
+	if needAccount && !tag.MatchString(c.Cloudflare.AccountID) {
+		return fmt.Errorf("config: account_id %q is not a 32-char hex account ID (required to watch Workers)", c.Cloudflare.AccountID)
+	}
+
+	for _, d := range []struct{ name, v string }{
+		{"intraday_interval", c.Schedule.IntradayInterval},
+		{"intraday_offset", c.Schedule.IntradayOffset},
+		{"settle_delay", c.Schedule.SettleDelay},
+	} {
+		if _, err := time.ParseDuration(d.v); err != nil {
+			return fmt.Errorf("config: schedule.%s: %v", d.name, err)
+		}
+	}
+	if iv := c.IntradayInterval(); iv%time.Hour != 0 {
+		return fmt.Errorf("config: schedule.intraday_interval must be a whole number of hours (windows are full clock hours)")
+	}
+	if off := c.IntradayOffset(); off < 0 || off >= time.Hour {
+		return fmt.Errorf("config: schedule.intraday_offset must be within [0, 1h)")
+	}
+	if c.Schedule.DailyReportAt != "" && !hhmm.MatchString(c.Schedule.DailyReportAt) {
+		return fmt.Errorf("config: schedule.daily_report_at %q must be HH:MM (or empty to disable)", c.Schedule.DailyReportAt)
+	}
+	c.Location = time.Local
+	if c.Schedule.Timezone != "" {
+		loc, err := time.LoadLocation(c.Schedule.Timezone)
+		if err != nil {
+			return fmt.Errorf("config: schedule.timezone: %v", err)
+		}
+		c.Location = loc
+	}
+	switch c.Report.Language {
+	case "en", "zh":
+	case "":
+		c.Report.Language = "en"
+	default:
+		return fmt.Errorf("config: report.language must be \"en\" or \"zh\"")
+	}
+	for i, p := range c.PathRules {
+		if !strings.HasPrefix(p.Path, "/") {
+			return fmt.Errorf("config: path_rules[%d].path must start with /", i)
+		}
+		if p.Name == "" {
+			c.PathRules[i].Name = p.Path
+		}
+	}
+	for i, p := range c.Daily.Paths {
+		if !strings.HasPrefix(p.Path, "/") {
+			return fmt.Errorf("config: daily.paths[%d].path must start with /", i)
+		}
 	}
 	if c.StateFile == "" {
 		c.StateFile = "data/state.json"
 	}
-	return &c, nil
+	return nil
 }
 
 // IntradayInterval parses the configured interval, defaulting to 1h.
-func (c *Config) IntradayInterval() time.Duration {
-	d, err := time.ParseDuration(c.Schedule.IntradayInterval)
-	if err != nil || d <= 0 {
-		return time.Hour
+func (c *Config) IntradayInterval() time.Duration { return dur(c.Schedule.IntradayInterval, time.Hour) }
+
+// IntradayOffset is how long after the hour boundary the check runs,
+// absorbing analytics ingestion lag (SPEC 7.1: ~7 minutes).
+func (c *Config) IntradayOffset() time.Duration { return dur(c.Schedule.IntradayOffset, 7*time.Minute) }
+
+// SettleDelay is how long to wait before re-reading a window that looks
+// collapsed, to tell ingestion lag from a real drop (SPEC 6).
+func (c *Config) SettleDelay() time.Duration { return dur(c.Schedule.SettleDelay, 3*time.Minute) }
+
+func dur(s string, def time.Duration) time.Duration {
+	d, err := time.ParseDuration(s)
+	if err != nil || d < 0 || (d == 0 && def == time.Hour) {
+		return def
 	}
 	return d
 }
+
+// DataDir is the directory holding the state file; per-zone state,
+// the notification outbox and future archives live next to it.
+func (c *Config) DataDir() string { return filepath.Dir(c.StateFile) }

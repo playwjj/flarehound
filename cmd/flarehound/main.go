@@ -1,8 +1,8 @@
 // FlareHound: a self-hosted watchdog for websites behind Cloudflare.
 //
-// v0.1 skeleton: the intraday check (last full hour vs. yesterday, same
-// hour) runs end to end — query, evaluate, dedupe, notify. The daily
-// digest lands in v0.2 (see SPEC.md roadmap).
+// One process runs two schedules (SPEC 7.1): the intraday watch, a few
+// minutes after every clock hour, and the daily report at a fixed local
+// time. Both are read-only against Cloudflare.
 package main
 
 import (
@@ -10,15 +10,18 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"strings"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
 	"time"
 
-	"github.com/playwjj/flarehound/internal/analyze"
 	"github.com/playwjj/flarehound/internal/cfapi"
+	"github.com/playwjj/flarehound/internal/check"
 	"github.com/playwjj/flarehound/internal/config"
+	"github.com/playwjj/flarehound/internal/logx"
 	"github.com/playwjj/flarehound/internal/notify"
-	"github.com/playwjj/flarehound/internal/report"
-	"github.com/playwjj/flarehound/internal/state"
+	"github.com/playwjj/flarehound/internal/schedule"
 )
 
 // version is stamped at release time via -ldflags "-X main.version=..."
@@ -28,150 +31,107 @@ var version = "dev"
 func main() {
 	cfgPath := flag.String("config", "config.json", "path to config file")
 	once := flag.Bool("once", false, "run one intraday check and exit")
+	daily := flag.Bool("daily", false, "build the daily report now and exit")
+	dryRun := flag.Bool("dry-run", false, "print messages to stdout instead of sending them")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println("flarehound", version)
 		return
 	}
+	redactor := logx.Install(os.Stderr)
 	log.Printf("flarehound %s starting", version)
 
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
-	client := cfapi.New(cfg.APIToken)
-	notifier := buildNotifier(cfg)
-	th := thresholds(cfg)
+	redactor.Add(cfg.Secrets()...)
 
-	run := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	disp := buildDispatcher(cfg, *dryRun)
+	runner := &check.Runner{API: cfapi.New(cfg.APIToken), Cfg: cfg, Sender: disp}
+
+	forEachZone := func(kind string, fn func(context.Context, config.Zone) error) {
+		rctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 		defer cancel()
+		if err := disp.Flush(rctx); err != nil {
+			log.Printf("outbox: %v", err)
+		}
 		for _, zone := range cfg.Cloudflare.Zones {
-			if err := checkZone(ctx, cfg, client, notifier, th, zone); err != nil {
-				log.Printf("zone %s: %v", zone.Name, err)
+			if err := fn(rctx, zone); err != nil {
+				if check.IsAccessError(err) {
+					log.Printf("zone %s: %s: %v — the token cannot see this zone/account", zone.Name, kind, err)
+				} else {
+					log.Printf("zone %s: %s: %v", zone.Name, kind, err)
+				}
 			}
 		}
 	}
 
-	run()
-	if *once {
+	if *once || *daily {
+		if *once {
+			forEachZone("intraday", runner.Intraday)
+		}
+		if *daily {
+			if cfg.Schedule.DailyReportAt == "" {
+				log.Fatal("daily report is disabled (schedule.daily_report_at is empty)")
+			}
+			forEachZone("daily", runner.Daily)
+		}
 		return
 	}
-	tick := time.NewTicker(cfg.IntradayInterval())
-	defer tick.Stop()
-	for range tick.C {
-		run()
+
+	// Catch up on the newest settled window right away; the state file's
+	// last-window marker keeps a restart from double-counting it.
+	forEachZone("intraday", runner.Intraday)
+
+	interval, offset := cfg.IntradayInterval(), cfg.IntradayOffset()
+	for {
+		now := time.Now()
+		next := schedule.NextIntraday(now, interval, offset)
+		kind := "intraday"
+		if cfg.Schedule.DailyReportAt != "" {
+			d, err := schedule.NextDaily(now, cfg.Schedule.DailyReportAt, cfg.Location, offset)
+			if err == nil && !d.After(next) {
+				next, kind = d, "daily"
+			}
+		}
+		log.Printf("next %s run at %s", kind, next.In(cfg.Location).Format(time.RFC3339))
+		select {
+		case <-ctx.Done():
+			log.Printf("shutting down")
+			return
+		case <-time.After(time.Until(next)):
+		}
+		// When both fall on the same minute, run both: intraday first.
+		if kind == "daily" && schedule.NextIntraday(now, interval, offset).Equal(next) {
+			forEachZone("intraday", runner.Intraday)
+		}
+		if kind == "daily" {
+			forEachZone("daily", runner.Daily)
+		} else {
+			forEachZone("intraday", runner.Intraday)
+		}
 	}
 }
 
-func thresholds(cfg *config.Config) analyze.Thresholds {
-	t := cfg.Thresholds
-	return analyze.Thresholds{
-		TotalUpPct:         t.TotalUpPct,
-		WorkerCallsUpPct:   t.WorkerCallsUpPct,
-		CPUP50UpPct:        t.CPUP50UpPct,
-		DynamicUpPct:       t.DynamicUpPct,
-		Origin5xxMultiple:  t.Origin5xxMultiple,
-		Origin5xxMin:       t.Origin5xxMin,
-		NewFaceMinCount:    t.NewFaceMinCount,
-		CollapseDownPct:    t.CollapseDownPct,
-		EscalationPct:      t.EscalationPct,
-		RecoveryCleanRound: t.RecoveryCleanRound,
+func buildDispatcher(cfg *config.Config, dryRun bool) *notify.Dispatcher {
+	outbox := filepath.Join(cfg.DataDir(), "outbox.json")
+	if dryRun {
+		return notify.NewDispatcher("", notify.Stdout{})
 	}
-}
-
-func buildNotifier(cfg *config.Config) notify.Notifier {
-	var ns notify.Multi
-	if cfg.Notify.WebhookURL != "" {
-		ns = append(ns, notify.Webhook{URL: cfg.Notify.WebhookURL})
+	var chans []notify.Notifier
+	if cfg.WebhookURL != "" {
+		chans = append(chans, notify.Webhook{URL: cfg.WebhookURL})
 	}
 	if cfg.TelegramBotToken != "" && cfg.Notify.TelegramChatID != "" {
-		ns = append(ns, notify.Telegram{BotToken: cfg.TelegramBotToken, ChatID: cfg.Notify.TelegramChatID})
+		chans = append(chans, notify.Telegram{BotToken: cfg.TelegramBotToken, ChatID: cfg.Notify.TelegramChatID})
 	}
-	return ns
-}
-
-// statePath derives a per-zone state file when several zones are watched,
-// so their anomaly state machines never mix.
-func statePath(cfg *config.Config, zone config.Zone) string {
-	if len(cfg.Cloudflare.Zones) <= 1 {
-		return cfg.StateFile
+	if len(chans) == 0 {
+		log.Printf("warning: no notification channel configured — findings will only appear in this log")
 	}
-	slug := strings.NewReplacer(".", "-", "/", "-").Replace(zone.Name)
-	return strings.TrimSuffix(cfg.StateFile, ".json") + "-" + slug + ".json"
-}
-
-func fetchMetrics(ctx context.Context, client *cfapi.Client, cfg *config.Config, zone config.Zone, from, to time.Time, topLimit int) (analyze.Metrics, error) {
-	var m analyze.Metrics
-	var err error
-	if m.Total, err = client.TotalRequests(ctx, zone.ZoneID, from, to); err != nil {
-		return m, err
-	}
-	if m.Dynamic, err = client.DynamicRequests(ctx, zone.ZoneID, from, to); err != nil {
-		return m, err
-	}
-	if m.Origin5xx, err = client.Origin5xx(ctx, zone.ZoneID, from, to); err != nil {
-		return m, err
-	}
-	if m.TopUA, err = client.TopUserAgents(ctx, zone.ZoneID, from, to, topLimit); err != nil {
-		return m, err
-	}
-	if m.TopASN, err = client.TopASNs(ctx, zone.ZoneID, from, to, topLimit); err != nil {
-		return m, err
-	}
-	// TODO(v0.3): aggregate all of the zone's workers; the skeleton
-	// evaluates the first listed worker, which covers the common
-	// single-frontend-worker layout.
-	if len(zone.Workers) > 0 {
-		calls, cpu, err := client.WorkerStats(ctx, cfg.Cloudflare.AccountID, zone.Workers[0], from, to)
-		if err != nil {
-			return m, err
-		}
-		m.WorkerCalls = calls
-		m.CPUP50ms = cpu
-	}
-	return m, nil
-}
-
-func checkZone(ctx context.Context, cfg *config.Config, client *cfapi.Client, notifier notify.Notifier, th analyze.Thresholds, zone config.Zone) error {
-	// Windows: last full clock hour vs. the same hour yesterday.
-	// Analytics ingestion lags a few minutes; the scheduler's offset
-	// from the hour boundary absorbs it.
-	now := time.Now().UTC().Truncate(time.Hour)
-	curFrom, curTo := now.Add(-time.Hour), now
-	baseFrom, baseTo := curFrom.Add(-24*time.Hour), curTo.Add(-24*time.Hour)
-
-	cur, err := fetchMetrics(ctx, client, cfg, zone, curFrom, curTo, 10)
-	if err != nil {
-		return err
-	}
-	base, err := fetchMetrics(ctx, client, cfg, zone, baseFrom, baseTo, 25)
-	if err != nil {
-		return err
-	}
-
-	findings := analyze.Evaluate(cur, base, th)
-
-	sp := statePath(cfg, zone)
-	st, err := state.Load(sp)
-	if err != nil {
-		return err
-	}
-	decision := state.Decide(st, findings, float64(cur.Total), float64(cur.WorkerCalls), th.EscalationPct, th.RecoveryCleanRound)
-	if err := st.Save(sp); err != nil {
-		return err
-	}
-
-	switch decision {
-	case state.DecAlert, state.DecEscalate, state.DecRecovered:
-		text := report.Render(decision, zone.Name, cur, base, findings)
-		if err := notifier.Send(ctx, text); err != nil {
-			return err
-		}
-		log.Printf("zone %s: notified (decision=%d, findings=%d)", zone.Name, decision, len(findings))
-	default:
-		log.Printf("zone %s: quiet (findings=%d, active=%v)", zone.Name, len(findings), st.Active)
-	}
-	return nil
+	return notify.NewDispatcher(outbox, chans...)
 }

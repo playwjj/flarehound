@@ -8,56 +8,110 @@
 //     clientReferer filter. The ASN dimension is clientAsn (lowercase n).
 //   - Adaptive counts include Worker subrequests; only ever compare
 //     adaptive numbers with adaptive numbers, same window shape.
+//
+// The package does query assembly and result parsing only — no business
+// judgement lives here.
 package cfapi
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
+	"strings"
 	"time"
 )
 
-const endpoint = "https://api.cloudflare.com/client/v4/graphql"
+// DefaultEndpoint is the only host the read-only token is ever sent to.
+const DefaultEndpoint = "https://api.cloudflare.com/client/v4/graphql"
+
+// ErrNoAccess is returned when the API answers but the zone or account
+// is not in the response — almost always a token-permission problem.
+// It must never be read as "zero traffic" (that would fake a collapse).
+var ErrNoAccess = errors.New("zone/account not visible to this token (check token permissions and IDs)")
 
 type Client struct {
-	token string
-	http  *http.Client
+	token    string
+	endpoint string
+	http     *http.Client
 }
 
 func New(token string) *Client {
-	return &Client{token: token, http: &http.Client{Timeout: 60 * time.Second}}
+	return &Client{token: token, endpoint: DefaultEndpoint, http: &http.Client{Timeout: 60 * time.Second}}
 }
 
-type gqlResponse struct {
-	Data struct {
-		Viewer struct {
-			Zones []struct {
-				Groups []group `json:"httpRequestsAdaptiveGroups"`
-			} `json:"zones"`
-			Accounts []struct {
-				Invocations []invocation `json:"workersInvocationsAdaptive"`
-			} `json:"accounts"`
-		} `json:"viewer"`
-	} `json:"data"`
-	Errors []struct {
-		Message string `json:"message"`
-	} `json:"errors"`
+// WithEndpoint overrides the API endpoint (tests only).
+func (c *Client) WithEndpoint(url string) *Client { c.endpoint = url; return c }
+
+// quote renders s as a GraphQL string literal. JSON string escaping is a
+// valid subset of GraphQL's, so user agents, paths and script names with
+// quotes or backslashes cannot break out of the literal.
+func quote(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }
 
-type group struct {
-	Count      int64 `json:"count"`
-	Dimensions struct {
-		UserAgent string `json:"userAgent"`
-		ClientASN int    `json:"clientAsn"`
-		Path      string `json:"clientRequestPath"`
-	} `json:"dimensions"`
+func ts(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:05Z") }
+
+// Filter narrows a query beyond the time window. Zero values are ignored.
+type Filter struct {
+	CacheStatus       string // e.g. "dynamic"
+	OriginStatusFrom  int    // inclusive
+	OriginStatusTo    int    // exclusive
+	EdgeStatus        int    // exact edge response status
+	PathLike          string // SQL-like pattern, % wildcard
+	UserAgent         string // exact
+	ASN               int    // exact
+	WorkerScript      string // workers dataset only
+	FirewallAction    string // firewall dataset only
+	FirewallNotAction string // firewall dataset only
 }
 
-type invocation struct {
-	Sum struct {
+func (f Filter) render(from, to time.Time) string {
+	parts := []string{"datetime_geq:" + quote(ts(from)), "datetime_lt:" + quote(ts(to))}
+	if f.CacheStatus != "" {
+		parts = append(parts, "cacheStatus:"+quote(f.CacheStatus))
+	}
+	if f.OriginStatusFrom > 0 {
+		parts = append(parts, fmt.Sprintf("originResponseStatus_geq:%d", f.OriginStatusFrom))
+	}
+	if f.OriginStatusTo > 0 {
+		parts = append(parts, fmt.Sprintf("originResponseStatus_lt:%d", f.OriginStatusTo))
+	}
+	if f.EdgeStatus > 0 {
+		parts = append(parts, fmt.Sprintf("edgeResponseStatus:%d", f.EdgeStatus))
+	}
+	if f.PathLike != "" {
+		parts = append(parts, "clientRequestPath_like:"+quote(f.PathLike))
+	}
+	if f.UserAgent != "" {
+		parts = append(parts, "userAgent:"+quote(f.UserAgent))
+	}
+	if f.ASN > 0 {
+		parts = append(parts, fmt.Sprintf("clientAsn:%d", f.ASN))
+	}
+	if f.WorkerScript != "" {
+		parts = append(parts, "scriptName:"+quote(f.WorkerScript))
+	}
+	if f.FirewallAction != "" {
+		parts = append(parts, "action:"+quote(f.FirewallAction))
+	}
+	if f.FirewallNotAction != "" {
+		parts = append(parts, "action_neq:"+quote(f.FirewallNotAction))
+	}
+	return strings.Join(parts, ",")
+}
+
+// row is one group of any adaptive dataset; dimensions are decoded
+// generically so one parser serves every Top-N query.
+type row struct {
+	Count      int64          `json:"count"`
+	Dimensions map[string]any `json:"dimensions"`
+	Sum        struct {
 		Requests int64 `json:"requests"`
 	} `json:"sum"`
 	Quantiles struct {
@@ -65,9 +119,27 @@ type invocation struct {
 	} `json:"quantiles"`
 }
 
+type scope struct {
+	HTTP     []row `json:"httpRequestsAdaptiveGroups"`
+	Firewall []row `json:"firewallEventsAdaptiveGroups"`
+	Workers  []row `json:"workersInvocationsAdaptive"`
+}
+
+type gqlResponse struct {
+	Data struct {
+		Viewer struct {
+			Zones    []scope `json:"zones"`
+			Accounts []scope `json:"accounts"`
+		} `json:"viewer"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
 func (c *Client) query(ctx context.Context, q string) (*gqlResponse, error) {
 	body, _ := json.Marshal(map[string]string{"query": q})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +150,7 @@ func (c *Client) query(ctx context.Context, q string) (*gqlResponse, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		return nil, err
 	}
@@ -102,86 +174,130 @@ func truncate(b []byte, n int) string {
 	return string(b)
 }
 
-func ts(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:05Z") }
-
-func (c *Client) zoneCount(ctx context.Context, zoneID string, from, to time.Time, extraFilter string) (int64, error) {
-	q := fmt.Sprintf(`{viewer{zones(filter:{zoneTag:"%s"}){httpRequestsAdaptiveGroups(limit:1,filter:{datetime_geq:"%s",datetime_lt:"%s"%s}){count}}}}`,
-		zoneID, ts(from), ts(to), extraFilter)
-	r, err := c.query(ctx, q)
-	if err != nil {
-		return 0, err
+func (c *Client) zoneRows(ctx context.Context, zoneID, dataset, selection string, limit int, order bool, filter string) ([]row, error) {
+	ob := ""
+	if order {
+		ob = "orderBy:[count_DESC],"
 	}
-	if len(r.Data.Viewer.Zones) == 0 || len(r.Data.Viewer.Zones[0].Groups) == 0 {
-		return 0, nil
-	}
-	return r.Data.Viewer.Zones[0].Groups[0].Count, nil
-}
-
-// TotalRequests returns all adaptive-counted requests in the window.
-func (c *Client) TotalRequests(ctx context.Context, zoneID string, from, to time.Time) (int64, error) {
-	return c.zoneCount(ctx, zoneID, from, to, "")
-}
-
-// DynamicRequests returns uncached (origin/Worker-rendered) responses.
-func (c *Client) DynamicRequests(ctx context.Context, zoneID string, from, to time.Time) (int64, error) {
-	return c.zoneCount(ctx, zoneID, from, to, `,cacheStatus:"dynamic"`)
-}
-
-// Origin5xx returns responses whose origin status was 500-599.
-func (c *Client) Origin5xx(ctx context.Context, zoneID string, from, to time.Time) (int64, error) {
-	return c.zoneCount(ctx, zoneID, from, to, `,originResponseStatus_geq:500,originResponseStatus_lt:600`)
-}
-
-// Face is one row of a Top-N breakdown (user agent or ASN).
-type Face struct {
-	Name  string
-	Count int64
-}
-
-func (c *Client) topFaces(ctx context.Context, zoneID string, from, to time.Time, limit int, dimension string) ([]Face, error) {
-	q := fmt.Sprintf(`{viewer{zones(filter:{zoneTag:"%s"}){httpRequestsAdaptiveGroups(limit:%d,orderBy:[count_DESC],filter:{datetime_geq:"%s",datetime_lt:"%s"}){count dimensions{%s}}}}}`,
-		zoneID, limit, ts(from), ts(to), dimension)
+	q := fmt.Sprintf(`{viewer{zones(filter:{zoneTag:%s}){%s(limit:%d,%sfilter:{%s}){%s}}}}`,
+		quote(zoneID), dataset, limit, ob, filter, selection)
 	r, err := c.query(ctx, q)
 	if err != nil {
 		return nil, err
 	}
 	if len(r.Data.Viewer.Zones) == 0 {
-		return nil, nil
+		return nil, ErrNoAccess
 	}
-	var out []Face
-	for _, g := range r.Data.Viewer.Zones[0].Groups {
-		name := g.Dimensions.UserAgent
-		if dimension == "clientAsn" {
-			name = fmt.Sprintf("AS%d", g.Dimensions.ClientASN)
+	z := r.Data.Viewer.Zones[0]
+	if dataset == "firewallEventsAdaptiveGroups" {
+		return z.Firewall, nil
+	}
+	return z.HTTP, nil
+}
+
+// Count returns the adaptive request count for the window and filter.
+func (c *Client) Count(ctx context.Context, zoneID string, from, to time.Time, f Filter) (int64, error) {
+	rows, err := c.zoneRows(ctx, zoneID, "httpRequestsAdaptiveGroups", "count", 1, false, f.render(from, to))
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	for _, r := range rows {
+		n += r.Count
+	}
+	return n, nil
+}
+
+// Face is one row of a Top-N breakdown (user agent, ASN, path, IP, …).
+// Name is the display form ("AS15169" for ASNs); ASN is set for ASN rows.
+type Face struct {
+	Name  string `json:"name"`
+	ASN   int    `json:"asn,omitempty"`
+	Count int64  `json:"count"`
+}
+
+// Dimension names accepted by Top.
+const (
+	DimUserAgent   = "userAgent"
+	DimASN         = "clientAsn"
+	DimPath        = "clientRequestPath"
+	DimCacheStatus = "cacheStatus"
+	DimClientIP    = "clientIP"
+)
+
+// Top returns the Top-N groups of one dimension, ordered by count.
+func (c *Client) Top(ctx context.Context, zoneID string, from, to time.Time, dim string, limit int, f Filter) ([]Face, error) {
+	rows, err := c.zoneRows(ctx, zoneID, "httpRequestsAdaptiveGroups", "count dimensions{"+dim+"}", limit, true, f.render(from, to))
+	if err != nil {
+		return nil, err
+	}
+	return faces(rows, dim), nil
+}
+
+func faces(rows []row, dims ...string) []Face {
+	out := make([]Face, 0, len(rows))
+	for _, r := range rows {
+		var names []string
+		face := Face{Count: r.Count}
+		for _, d := range dims {
+			v := r.Dimensions[d]
+			if d == DimASN {
+				if n, ok := v.(float64); ok {
+					face.ASN = int(n)
+					names = append(names, fmt.Sprintf("AS%d", face.ASN))
+					continue
+				}
+			}
+			names = append(names, fmt.Sprint(v))
 		}
-		out = append(out, Face{Name: name, Count: g.Count})
+		face.Name = strings.Join(names, " ")
+		out = append(out, face)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Count > out[j].Count })
+	return out
+}
+
+// FirewallByRule returns firewall-event counts grouped by rule and action
+// ("<action> <source>:<ruleId>"). Not available on every plan: callers
+// must treat an error as "data unavailable", not as zero.
+func (c *Client) FirewallByRule(ctx context.Context, zoneID string, from, to time.Time, limit int) ([]Face, error) {
+	rows, err := c.zoneRows(ctx, zoneID, "firewallEventsAdaptiveGroups", "count dimensions{action source ruleId}", limit, true, Filter{}.render(from, to))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Face, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, Face{
+			Name:  fmt.Sprintf("%v %v:%v", r.Dimensions["action"], r.Dimensions["source"], r.Dimensions["ruleId"]),
+			Count: r.Count,
+		})
 	}
 	return out, nil
 }
 
-// TopUserAgents returns the Top-N user agents by request count.
-func (c *Client) TopUserAgents(ctx context.Context, zoneID string, from, to time.Time, limit int) ([]Face, error) {
-	return c.topFaces(ctx, zoneID, from, to, limit, "userAgent")
-}
-
-// TopASNs returns the Top-N client ASNs by request count.
-func (c *Client) TopASNs(ctx context.Context, zoneID string, from, to time.Time, limit int) ([]Face, error) {
-	return c.topFaces(ctx, zoneID, from, to, limit, "clientAsn")
-}
-
-// WorkerStats returns invocation count and CPU P50 (milliseconds) for one
-// Worker script in the window. The dataset has quantiles only; there is no
-// CPU total — cost estimates must be derived and labelled as estimates.
+// WorkerStats returns invocation count (requests, including subrequests)
+// and CPU P50 in milliseconds for one Worker script in the window.
+// The dataset has quantiles only; there is no CPU total — cost estimates
+// must be derived and labelled as estimates.
 func (c *Client) WorkerStats(ctx context.Context, accountID, script string, from, to time.Time) (requests int64, cpuP50ms float64, err error) {
-	q := fmt.Sprintf(`{viewer{accounts(filter:{accountTag:"%s"}){workersInvocationsAdaptive(limit:10,filter:{datetime_geq:"%s",datetime_lt:"%s",scriptName:"%s"}){sum{requests}quantiles{cpuTimeP50}}}}}`,
-		accountID, ts(from), ts(to), script)
+	q := fmt.Sprintf(`{viewer{accounts(filter:{accountTag:%s}){workersInvocationsAdaptive(limit:100,filter:{%s}){sum{requests}quantiles{cpuTimeP50}}}}}`,
+		quote(accountID), Filter{WorkerScript: script}.render(from, to))
 	r, err := c.query(ctx, q)
 	if err != nil {
 		return 0, 0, err
 	}
-	if len(r.Data.Viewer.Accounts) == 0 || len(r.Data.Viewer.Accounts[0].Invocations) == 0 {
-		return 0, 0, nil
+	if len(r.Data.Viewer.Accounts) == 0 {
+		return 0, 0, ErrNoAccess
 	}
-	inv := r.Data.Viewer.Accounts[0].Invocations[0]
-	return inv.Sum.Requests, inv.Quantiles.CPUP50 / 1000.0, nil
+	// Usually a single group. If the API splits it, the request-weighted
+	// mean of the P50s is an approximation, not a true quantile.
+	var wsum float64
+	for _, inv := range r.Data.Viewer.Accounts[0].Workers {
+		requests += inv.Sum.Requests
+		wsum += inv.Quantiles.CPUP50 * float64(inv.Sum.Requests)
+	}
+	if requests > 0 {
+		cpuP50ms = wsum / float64(requests) / 1000.0
+	}
+	return requests, cpuP50ms, nil
 }

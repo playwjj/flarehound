@@ -1,0 +1,77 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func write(t *testing.T, body string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+var zone = `{"zone_id":"` + strings.Repeat("a", 32) + `","name":"example.com"}`
+
+func TestDefaultsApplied(t *testing.T) {
+	t.Setenv("CF_API_TOKEN", "tok")
+	c, err := Load(write(t, `{"cloudflare":{"zones":[`+zone+`]},"thresholds":{"total_up_pct":50}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Thresholds.TotalUpPct != 50 {
+		t.Error("explicit threshold lost")
+	}
+	if c.Thresholds.WorkerCallsUpPct != 35 || c.Thresholds.RecoveryCleanRound != 2 || c.Thresholds.MinCount != 1000 {
+		t.Errorf("omitted thresholds must default, got %+v", c.Thresholds)
+	}
+	if c.IntradayOffset().Minutes() != 7 || c.Report.Language != "en" || c.Location == nil {
+		t.Error("schedule/report defaults")
+	}
+}
+
+func TestSecretsFromEnvOnly(t *testing.T) {
+	t.Setenv("CF_API_TOKEN", "")
+	if _, err := Load(write(t, `{"cloudflare":{"zones":[`+zone+`]}}`)); err == nil {
+		t.Fatal("missing token accepted")
+	}
+	t.Setenv("CF_API_TOKEN", "tok")
+	t.Setenv("HOOK", "https://hooks.example/secret")
+	c, err := Load(write(t, `{"cloudflare":{"zones":[`+zone+`]},"notify":{"webhook_url_env":"HOOK"}}`))
+	if err != nil || c.WebhookURL != "https://hooks.example/secret" {
+		t.Fatalf("webhook from env: %v %q", err, c.WebhookURL)
+	}
+}
+
+func TestValidation(t *testing.T) {
+	t.Setenv("CF_API_TOKEN", "tok")
+	for name, body := range map[string]string{
+		"bad zone id":     `{"cloudflare":{"zones":[{"zone_id":"x\"}"}]}}`,
+		"workers no acct": `{"cloudflare":{"zones":[{"zone_id":"` + strings.Repeat("a", 32) + `","workers":["w"]}]}}`,
+		"bad interval":    `{"cloudflare":{"zones":[` + zone + `]},"schedule":{"intraday_interval":"30m"}}`,
+		"bad hhmm":        `{"cloudflare":{"zones":[` + zone + `]},"schedule":{"daily_report_at":"8am"}}`,
+		"bad tz":          `{"cloudflare":{"zones":[` + zone + `]},"schedule":{"timezone":"Mars/Base"}}`,
+		"bad lang":        `{"cloudflare":{"zones":[` + zone + `]},"report":{"language":"fr"}}`,
+		"bad path":        `{"cloudflare":{"zones":[` + zone + `]},"path_rules":[{"path":"login"}]}`,
+	} {
+		if _, err := Load(write(t, body)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func TestExampleConfigLoads(t *testing.T) {
+	t.Setenv("CF_API_TOKEN", "tok")
+	raw, err := os.ReadFile("../../config.example.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(write(t, string(raw))); err != nil {
+		t.Fatalf("config.example.json must load: %v", err)
+	}
+}

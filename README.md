@@ -4,7 +4,7 @@
 
 Cloudflare gives you data. FlareHound gives you the conclusion.
 
-> Status: **v0.1 skeleton**. The detection model, thresholds and alert discipline are ported from a real incident response (a residential-proxy crawler flood, 2026-11-17). Daily reports and the full intraday rule set land in v0.2–v0.3 — see [SPEC.md](SPEC.md) (in Chinese) for the full design.
+> Status: **v0.3** — the hourly watch and the daily report are complete. The detection model, thresholds and alert discipline are ported from a real incident response (a residential-proxy crawler flood, 2026-11-17). Next up: the suggestion engine (v0.4). See [SPEC.md](SPEC.md) (in Chinese) for the full design.
 
 ## Why
 
@@ -37,7 +37,34 @@ docker compose up -d
 export CF_API_TOKEN=...
 ```
 
-4. Point `notify.webhook_url` at any endpoint that accepts a JSON POST (Telegram/Slack/Discord bridges included), or configure the Telegram bot.
+4. Point `notify.webhook_url_env` at an environment variable holding any endpoint that accepts a JSON POST (Telegram/Slack/Discord bridges included), or configure the Telegram bot.
+5. Pick the report language: `"report": {"language": "en"}` or `"zh"` (Chinese).
+
+Try it before going live — this prints the messages instead of sending them:
+
+```bash
+flarehound -config config.json -once -dry-run    # one hourly check
+flarehound -config config.json -daily -dry-run   # today's daily report
+```
+
+### What a message looks like
+
+```
+FlareHound · example.com — anomaly
+Worker web calls +52.0%, Worker web CPU P50 +50.0%, dynamic +75.0%, zone requests +52.0% (+1 more)
+Window 2026-11-17 08:00–09:00 (Asia/Shanghai)
+
+Attribution:
+- expensive (Worker/origin) 40,000 → 70,000 (+30,000); cheap (edge cache) 60,000 → 82,000 (+22,000)
+- top dynamic paths: /rank 35,000 (was 20,000)
+- AS207990 hits: /rank 35,000
+
+Hypotheses:
+- [high] Crawler/bot surge: new source AS207990 carries ~87% of the excess.
+  Falsified if its path mix matches normal visitors and it comes from residential/mobile networks …
+
+Sources are dispersed (top IP < 1% of the excess): per-IP blocking will not help — act at ASN or path level (challenge).
+```
 
 ### Token permissions (read-only)
 
@@ -65,9 +92,16 @@ Default alert lines (all configurable — these are the battle-tested values fro
 | Dynamic (uncached) responses vs. yesterday | +50% |
 | Origin 5xx | 3× baseline **and** > 50 |
 | New face in Top 10 (UA or ASN) | > 5,000 requests/hour |
-| Collapse in requests or invocations | −50% |
+| Collapse in requests or invocations | −50% (re-read after 3 min; still-arriving data is never called a collapse) |
+| Volume floor for percentage rules | 1,000 requests per window |
 
-Known false-positive class handled out of the box: legitimate crawlers (e.g. Googlebot) bump their user-agent version strings and trip "new face" — FlareHound verifies them by ASN before attributing a surge.
+Per-path overrides (`path_rules`) put a tighter line on sensitive low-volume paths like `/login*`.
+
+Known false-positive class handled out of the box: legitimate crawlers (Googlebot, Bingbot, Applebot, YandexBot, Baiduspider) bump their user-agent version strings and trip "new face" — FlareHound checks that ≥ 90% of that UA's traffic comes from the crawler's own ASN before excluding it, so impostors still alert. Register your own monitors and services under `known_faces`.
+
+**Alert discipline:** one alert when an anomaly starts; one more only if it shows a *new* signal or a reported signal grows another 25%; one line when two clean rounds pass. Failed deliveries are retried 3 times and then queued on disk for the next round.
+
+**Daily report** (default 08:00 local): last 24 h vs the 24 h before, cache-cost split, top paths / ASNs / user agents with new ones marked, firewall events per rule, and your fixed checkpoints (`daily.paths` origin-reach limits, `daily.artifacts` known accounting artifacts).
 
 ## Deployment
 
@@ -75,8 +109,8 @@ The primary form factor is a single Go binary in a Docker container, running on 
 
 ## Roadmap
 
-- **v0.2** — daily digest (24 h comparison + fixed checkpoints)
-- **v0.3** — full intraday watch (new-face detection, escalation/recovery state machine, attribution queries)
+- ~~v0.2~~ — daily digest (24 h comparison + fixed checkpoints) ✅
+- ~~v0.3~~ — full intraday watch (new-face detection, escalation/recovery state machine, attribution queries) ✅
 - **v0.4** — suggestion engine (block / challenge / rate-limit / cache candidates)
 - **v0.5** — one-click blocking (IP / CIDR / ASN / country / user-agent — block from an alert or the CLI, expiring blocks, guard rails, audit log)
 - **v0.6** — WAF rule audit (coverage gaps on sensitive paths, ordering/redundancy issues, per-rule hit stats, over-broad exemptions)

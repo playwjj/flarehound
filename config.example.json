@@ -1,1 +1,53 @@
-{"cloudflare":{"account_id":"your-account-id","api_token_env":"CF_API_TOKEN","zones":[{"name":"example.com","workers":["my-worker"],"zone_id":"your-zone-id"}]},"notify":{"telegram_bot_token_env":"","telegram_chat_id":"","webhook_url":""},"schedule":{"daily_report_at":"08:00","intraday_interval":"1h","timezone":"Asia/Shanghai"},"state_file":"data/state.json","thresholds":{"collapse_down_pct":50,"cpu_p50_up_pct":25,"dynamic_up_pct":50,"escalation_pct":25,"new_face_min_count":5000,"origin_5xx_min":50,"origin_5xx_multiplier":3,"recovery_clean_rounds":2,"total_up_pct":35,"worker_calls_up_pct":35}}
+{
+  "cloudflare": {
+    "account_id": "00000000000000000000000000000000",
+    "api_token_env": "CF_API_TOKEN",
+    "zones": [
+      {
+        "name": "example.com",
+        "zone_id": "00000000000000000000000000000000",
+        "workers": ["my-worker"]
+      }
+    ]
+  },
+  "schedule": {
+    "intraday_interval": "1h",
+    "intraday_offset": "7m",
+    "settle_delay": "3m",
+    "daily_report_at": "08:00",
+    "timezone": "Asia/Shanghai"
+  },
+  "thresholds": {
+    "total_up_pct": 35,
+    "worker_calls_up_pct": 35,
+    "cpu_p50_up_pct": 25,
+    "dynamic_up_pct": 50,
+    "origin_5xx_multiplier": 3,
+    "origin_5xx_min": 50,
+    "new_face_min_count": 5000,
+    "collapse_down_pct": 50,
+    "min_count": 1000,
+    "escalation_pct": 25,
+    "recovery_clean_rounds": 2
+  },
+  "path_rules": [
+    { "name": "login", "path": "/login*", "up_pct": 100, "min_count": 20 }
+  ],
+  "daily": {
+    "paths": [
+      { "label": "login origin reach", "path": "/login*", "max": 0 }
+    ],
+    "artifacts": []
+  },
+  "known_faces": {
+    "asns": [],
+    "user_agents": []
+  },
+  "report": { "language": "en" },
+  "notify": {
+    "webhook_url_env": "FLAREHOUND_WEBHOOK_URL",
+    "telegram_bot_token_env": "",
+    "telegram_chat_id": ""
+  },
+  "state_file": "data/state.json"
+}

@@ -6,6 +6,9 @@ services:
     environment:
       # Read-only Cloudflare API token. Never put it in config.json.
       CF_API_TOKEN: ${CF_API_TOKEN:?set CF_API_TOKEN to a read-only Cloudflare API token}
+      # Notification secrets, referenced by name from config.json.
+      FLAREHOUND_WEBHOOK_URL: ${FLAREHOUND_WEBHOOK_URL:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
     volumes:
       - ./config.json:/app/config.json:ro
       - ./data:/app/data
