@@ -15,7 +15,8 @@
     "intraday_offset": "7m",
     "settle_delay": "3m",
     "daily_report_at": "08:00",
-    "timezone": "Asia/Shanghai"
+    "timezone": "Asia/Shanghai",
+    "max_parallel_zones": 4
   },
   "thresholds": {
     "total_up_pct": 35,
@@ -54,7 +55,12 @@
     "webhook_url_env": "FLAREHOUND_WEBHOOK_URL",
     "telegram_bot_token_env": "",
     "telegram_chat_id": "",
-    "jsonl_file": ""
+    "jsonl_file": "",
+    "slack_webhook_url_env": "",
+    "discord_webhook_url_env": "",
+    "wecom_webhook_url_env": "",
+    "feishu_webhook_url_env": "",
+    "feishu_secret_env": ""
   },
   "state_file": "data/state.json",
   "blocking": {

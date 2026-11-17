@@ -1,8 +1,8 @@
 # FlareHound 规格说明书（SPEC）
 
-- 版本：0.7（v0.2 每日报告、v0.3 日内看守、v0.4 建议引擎与本地归档、v0.5 一键封锁、v0.6 WAF 规则体检、v0.7 通用执行模块落地）
+- 版本：0.8（v0.2 每日报告、v0.3 日内看守、v0.4 建议引擎与本地归档、v0.5 一键封锁、v0.6 WAF 规则体检、v0.7 通用执行模块、v0.8 通知渠道与多 zone 并行落地）
 - 日期：2026-11-17
-- 状态：v0.7 已实现（Free zone 实测），v0.8 通知渠道补齐 / 多 zone 并行待开发
+- 状态：v0.8 已实现，v1.0 口径校准与文档站待开发
 - 许可证：MIT
 
 > 英文说明见 [README.md](README.md)。本文档是给贡献者与维护者看的完整规格，定义产品边界、数据口径、检测规则与路线图。实现与本文冲突时，先改本文再改代码。
@@ -111,7 +111,7 @@
 5. Top 10 User-Agent、Top 10 ASN（维度名 `clientAsn`）；基线窗口另查 Top 25，作为「老面孔」名单；
 6. 异常命中时追加归因查询：dynamic 按 `clientRequestPath` 分组 Top 5；新面孔 UA/ASN 的主要路径；防火墙事件按规则 ID 计数（验证拦截是否生效）。
 
-**WAF 体检数据源（v0.6 起）**：规则集本体经 REST API 读取（`GET /zones/{zone_id}/rulesets` 及各 phase 入口），与 GraphQL 分析数据分开；规则命中统计仍走 `firewallEventsAdaptiveGroups` 按 `ruleId` 聚合。读取规则集需要 Firewall Services Read（只读）。
+**WAF 体检数据源（v0.6 起）**：规则集本体经 REST API 读取（`GET /zones/{zone_id}/rulesets` 及各 phase 入口），与 GraphQL 分析数据分开；规则命中统计仍走 `firewallEventsAdaptiveGroups` 按 `ruleId` 聚合。读取规则集需要 Zone → WAF Read（只读；见第 12 节权限名称说明）。
 
 **口径与已知的坑**（实战沉淀，实现时必须遵守）：
 
@@ -131,7 +131,7 @@
 - 防火墙数据集未启用：防火墙事件与封锁项尝试量显示「不可用」，不报 0，不发查询。
 - 爬虫验真优先用 `verifiedBotCategory`（Cloudflare 自身的已验证机器人分类，Free 可用）：自称已知爬虫的新 UA，≥ 90% 请求带非空分类即排除；该维度不可用时退回按 ASN 验真；两者都不可用则不排除。
 
-写侧同理：写 Token 缺「Account Filter Lists」时不用 IP 名单（IP 封禁改用表达式规则），缺「Firewall Services」时不用 IP 访问规则兜底，计划与报错中说明原因；缺「DNS Read」时拒绝封 IP（源站护栏无法执行），除非显式 `--skip-origin-check`。
+写侧同理：写 Token 缺「Account Filter Lists」时不用 IP 名单（IP 封禁改用表达式规则），读不到 IP 访问规则（缺 Zone → WAF，老账号上为 Firewall Services）时不用 IP 访问规则兜底，计划与报错中说明原因；缺「DNS Read」时拒绝封 IP（源站护栏无法执行），除非显式 `--skip-origin-check`。
 
 ### 本地数据归档（弥补 CF 的保留期）
 
@@ -211,7 +211,8 @@
 
 - 归因查询只在本轮要发消息时执行（静默轮不额外耗查询）；单项归因查询失败不阻断告警，带着残缺证据报警好过不报。
 - 贵贱划分按 `cacheStatus`：`hit` / `stale` / `updating` / `revalidated` 为便宜，其余（`dynamic` / `miss` / `bypass` / `expired` 及未知值）为昂贵——未知值归昂贵，宁可高估成本。报告中昂贵部分再拆两档，共三档展示：**真实渲染（`dynamic`）单列在前**——这是值守真正盯的数；其余未命中缓存（miss / bypass / expired 等）另列。（v0.5.2 补订：用户反馈「昂贵量翻倍」而真实渲染只涨 38.8%、CPU 反降，混在一起会误导。）
-- 份额基数：总量上涨时为「本窗 − 基线」的增量，否则为本窗总量（CPU / 5xx 类异常）。单 IP ≥ 5% 列为封锁候选；可封 IP 中最大者 < 1% 判为「来源分散」。
+- 份额基数：「本窗 − 基线」的增量。**没有增量就没有封锁候选**（v0.8 补订，实测发现：总量 −3.9% 的 5xx 告警把当小时访问最多的三个正常 IP 列成了候选）——CPU、5xx、塌量类异常在流量持平时不提 IP 封锁。
+- 源站 5xx 异常追加「按路径的 5xx 分布」；八成以上集中在单一路径时，假设由「源站故障」改为「单一路由的应用缺陷」。单 IP ≥ 5% 列为封锁候选；可封 IP 中最大者 < 1% 判为「来源分散」。
 - **候选必须先过第 13 节护栏**（v0.5.2 补订，用户实测发现候选第一名是 Cloudflare 自家出口 IP）：Cloudflare 官方段、私有 / 保留段、`blocking.never_block` 中的 IP 不进候选，单列为「来源集中但不可封」并写明原因；Cloudflare 段明确解释为 **Worker 出口**（某个 Worker——自家或其他 zone 的——在调用本站），指引去找调用方。Cloudflare 自有 ASN 与 `never_block_asns` 不进 ASN 建议。源站 IP 需 DNS 权限，看守侧不检查，执行封锁时由 `block` 命令再查。
 - **冒充爬虫单独点名**：自称已知爬虫、但验真失败（有数据且通过比例 < 90%）的 UA 单列一行「冒充爬虫」，注明通过比例与验真方法——这是高价值情报，不能只是「没被排除」。
 - **新面孔首次出现**：归档覆盖不足 7 天时不逐个标注「首次出现」（第一天全是新面孔，纯噪声），改为一行说明归档深度与 `-backfill` 提示；「曾出现过」的记录照常注明。
@@ -263,11 +264,14 @@
 - **规则名**：读取规则集时同时取得规则描述，防火墙事件中的 ruleId 自动显示为描述（`rule_names` 配置仍可覆盖）。
 - **复检**：每轮日内看守读取规则集版本号（1 次 REST 调用）；版本变化即复检，有问题时单独推送一条 `kind: "audit"` 消息；首次见到的版本只记录不推送（由日报覆盖）。
 - **入口**：日报内嵌（无问题一行，有问题只展开需要关注的项）；`flarehound audit` 打印完整体检（含规则清单、全部覆盖结果、命中表），只用只读 Token。
-- **权限**：只读 Token 追加 Zone → WAF: Read（必需，读规则集）；Zone → Zone: Read（可选，额度对照）；Zone → Firewall Services: Read（可选，IP 访问规则放行项）。缺 WAF Read 时体检显示「不可用」并说明原因，不影响看守。
+- **权限**：只读 Token 追加 Zone → WAF: Read（必需，读规则集）；Zone → Zone: Read（可选，额度对照）。IP 访问规则放行项的检查由同一个 WAF Read 覆盖。缺 WAF Read 时体检显示「不可用」并说明原因，不影响看守。
 
 ## 11. 通知
 
-- **渠道**：v1 = 通用 Webhook（任意可接收 POST JSON 的端点，含各 IM 的桥接服务）+ Telegram Bot；后续 Slack、Discord、邮件（SMTP）、企业微信/飞书 Webhook 机器人（均为 Webhook 模板变体）。
+- **渠道**：通用 Webhook（任意可接收 POST JSON 的端点）、Telegram Bot、JSONL 文件；v0.8 补齐 Slack（Incoming Webhook）、Discord（Webhook）、企业微信群机器人、飞书自定义机器人（可选签名校验：`timestamp + "\n" + secret` 为键的 HMAC-SHA256）、邮件（SMTP：STARTTLS / 隐式 TLS / 仅本地中继可用的明文；明文连接拒绝发送账号密码）。
+  - 各渠道按自身上限自动分段并编号「(i/n)」：Discord 2,000 字符、企业微信 2,048 字节、飞书 4,000 字符、Slack 39,000 字符；超长单行按字符边界硬切，不切坏多字节字符。
+  - 企业微信 `errcode`、飞书 `code` 等「HTTP 200 + 包体错误码」按失败处理（进入重试与待发箱），不当作已送达。
+  - 机器人地址与密码一律经环境变量传入（`*_env` 配置项），加入日志脱敏；Discord 禁用 @ 提及解析，告警正文不会 @everyone。
 - **消息结构**（结论先行，与第 7 节的报警格式一致）：
   1. 一行结论：哪条线越了、涨多少（按塌量 / 5xx / 昂贵量 / 总量 / 新面孔的顺序取前 4 项）；
   2. 两窗对比数：总量、调用量、CPU P50、dynamic、源站 5xx；
@@ -284,8 +288,9 @@
   - Zone 级：Analytics Read（必需）；
   - Account 级：Account Analytics Read（可选，仅在配置了 `workers` 时需要——`workersInvocationsAdaptive` 是账户级数据集）。
   - （v0.5.2 依代码调用点复核后收窄：旧版列出的 Logs Read、Zone Read、Workers Scripts Read 无任何代码路径使用；Zone Read 只在写 Token 侧用于读取套餐。用户反馈 + 代码核对，最小 Token 的实测待补。）
-  - Zone 级（WAF 体检，第 10 节）：WAF Read（必需，读取自定义规则集）；Zone Read（可选，套餐额度对照）；Firewall Services Read（可选，IP 访问规则放行项）。
-- **写 Token**（封锁模块与执行模块，第 13 节；执行模块的缓存规则另需 Zone → Cache Rules: Edit）：Account 级 Account Filter Lists Edit（IP 名单）；Zone 级 WAF Edit（自定义规则，Rulesets API）、Firewall Services Edit（IP 访问规则兜底）、DNS Read（读取源站 IP 作护栏）、Zone Read（读取套餐以判断规则额度）。
+  - Zone 级（WAF 体检，第 10 节）：WAF Read（必需，读取自定义规则集与 IP 访问规则）；Zone Read（可选，套餐额度对照）。
+  - **权限名称**（2026-11-17 用户实测）：Cloudflare 现以 **Zone → WAF** 同时授权自定义规则（Rulesets API）与 IP 访问规则；旧文档中的 **Firewall Services** 是 IP 访问规则的旧权限名，新账号上已无法授予。文档与提示一律两个名字都列、优先写 Zone → WAF。
+- **写 Token**（封锁模块与执行模块，第 13 节；执行模块的缓存规则另需 Zone → Cache Rules: Edit）：Account 级 Account Filter Lists Edit（IP 名单）；Zone 级 WAF Edit（自定义规则与 IP 访问规则兜底；老账号上后者叫 Firewall Services Edit）、DNS Read（读取源站 IP 作护栏）、Zone Read（读取套餐以判断规则额度）。
   （以实际授权结果为准，README 中给出创建步骤与逐项说明。）
 - Token 只从环境变量（如 `CF_API_TOKEN`）读取；禁止写入配置文件与日志；日志中出现 Token 特征串必须脱敏。实现：全部日志经脱敏写入器，已加载的密钥值、`Bearer …` 串与 Telegram `/bot<token>` 段一律替换为 `[REDACTED]`。
 - Webhook URL 本身常含密钥（如 Slack / 飞书机器人地址），应经 `notify.webhook_url_env` 从环境变量读取；`webhook_url` 明文字段仅为兼容保留。
@@ -338,7 +343,7 @@
 
 适用于封锁名单之外的任意规则变更，是巡检的独立下游，与看守进程解耦，**默认不启用**。启用后，用户可将建议引擎产出的候选动作一键落地，但必须满足以下全部约束：
 
-- **独立写 Token**：与只读 Token 分开创建、分开存放（不同环境变量），权限仅限目标 zone 的 Firewall Services Write；看守进程永不读取该 Token。
+- **独立写 Token**：与只读 Token 分开创建、分开存放（不同环境变量），权限仅限目标 zone 的 WAF Edit（老账号：Firewall Services Write）；看守进程永不读取该 Token。
 - **逐项确认**：每条动作执行前展示完整变更（规则全文 / 表达式差异），用户逐项确认；不设「全部自动执行」模式。
 - **改前备份**：每次变更前自动导出当前规则集快照到本地（含时间戳），作为回滚依据。
 - **回读验证**：变更后立即回读规则集，逐字核对目标规则与位置，并观察一个短窗口的防火墙事件确认动作生效；验证失败立即告警并给出回滚方式。
@@ -370,7 +375,8 @@
 - `daily`：日报固定检查点 `paths[]` 与记账假象 `artifacts[]`（第 7.4 节）；
 - `known_faces`：已知模式库 `asns[]` / `user_agents[]`（第 7.3、17 节）；
 - `report.language`：`en` / `zh`；
-- `notify`：渠道与端点（敏感值只写环境变量名，不写明文）：`webhook_url_env`、`telegram_bot_token_env` + `telegram_chat_id`、`jsonl_file`；
+- `notify`：渠道与端点（敏感值只写环境变量名，不写明文）：`webhook_url_env`、`telegram_bot_token_env` + `telegram_chat_id`、`jsonl_file`、`slack_webhook_url_env`、`discord_webhook_url_env`、`wecom_webhook_url_env`、`feishu_webhook_url_env` + `feishu_secret_env`、`email`（`smtp_host`、`smtp_port`、`tls`、`username`、`password_env`、`from`、`to[]`）；配置了环境变量名但变量为空时启动即报错；
+- `schedule.max_parallel_zones`：同时巡检的 zone 数（默认 4，1–16）；
 - `rule_names`：防火墙规则 ID → 名称映射（第 11 节；有 WAF Read 时自动取规则描述，此项只做覆盖）；
 - `waf_audit`：`disabled`、`hosts`（探测用主机名，默认 zone 名）、`sensitive_paths`（追加的敏感路径模式）；
 - `state_file`：状态文件路径（Docker 形态下挂载到 /app/data）；多 zone 时自动派生每 zone 一个状态文件；通知待发箱 `outbox.json` 与其同目录；
@@ -390,7 +396,7 @@
 | v0.5 ✅ | 一键封锁（IP / 网段 / ASN / 国家 / UA：告警内直接封、CLI、TTL 临时封锁、护栏与审计） |
 | v0.6 ✅ | WAF 规则体检（覆盖缺口 / 顺序与冗余 / 命中统计 / 豁免面审计） |
 | v0.7 ✅ | 通用执行模块（任意规则变更：独立写 Token、逐项确认、改前备份、回读验证） |
-| v0.8 | 通知渠道补齐（Slack/Discord/邮件）；多 zone 并行 |
+| v0.8 ✅ | 通知渠道补齐（Slack/Discord/企业微信/飞书/邮件）；多 zone 并行 |
 | v1.0 | 口径校准工具（与面板数字对照）、文档站、首个正式版 |
 | 远期 | Cloudflare Workers 部署适配（Cron Triggers + D1 状态）评估；成本估算模块（按 Workers 计费口径估算异常烧掉的钱）；AI 解释层（可选，见第 17 节） |
 

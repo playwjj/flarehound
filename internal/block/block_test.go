@@ -301,7 +301,7 @@ func TestMissingPermissionsDegrade(t *testing.T) {
 		cf.UserRule("user", "true")
 	}
 	st, _ = m.Load(context.Background())
-	if _, err := st.PlanBlock(mustT(t, "asn", "64496"), block.Challenge); err == nil || !strings.Contains(err.Error(), "Firewall Services") {
+	if _, err := st.PlanBlock(mustT(t, "asn", "64496"), block.Challenge); err == nil || !strings.Contains(err.Error(), "Zone → WAF: Edit") {
 		t.Fatalf("full quota without access-rule permission: %v", err)
 	}
 }

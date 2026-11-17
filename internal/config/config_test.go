@@ -75,3 +75,27 @@ func TestExampleConfigLoads(t *testing.T) {
 		t.Fatalf("config.example.json must load: %v", err)
 	}
 }
+
+func TestChannelSecrets(t *testing.T) {
+	t.Setenv("CF_API_TOKEN", "tok")
+	t.Setenv("DISCORD_URL", "https://discord.example/api/webhooks/1/secret")
+	c, err := Load(write(t, `{"cloudflare":{"zones":[`+zone+`]},"notify":{"discord_webhook_url_env":"DISCORD_URL"}}`))
+	if err != nil || c.Chan.Discord == "" {
+		t.Fatalf("%v %+v", err, c)
+	}
+	found := false
+	for _, s := range c.Secrets() {
+		if s == c.Chan.Discord {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("channel URL must be redacted from logs")
+	}
+	if _, err := Load(write(t, `{"cloudflare":{"zones":[`+zone+`]},"notify":{"slack_webhook_url_env":"NOPE_UNSET"}}`)); err == nil {
+		t.Fatal("named but empty env var accepted")
+	}
+	if _, err := Load(write(t, `{"cloudflare":{"zones":[`+zone+`]},"notify":{"email":{"smtp_host":"h","from":"a@b","to":["c@d"],"username":"u"}}}`)); err == nil {
+		t.Fatal("email username without password accepted")
+	}
+}

@@ -108,13 +108,15 @@ func main() {
 		if err := disp.Flush(rctx); err != nil {
 			log.Printf("outbox: %v", err)
 		}
-		for _, zone := range cfg.Cloudflare.Zones {
-			if err := fn(rctx, zone); err != nil {
-				if check.IsAccessError(err) {
-					log.Printf("zone %s: %s: %v — the token cannot see this zone/account", zone.Name, kind, err)
-				} else {
-					log.Printf("zone %s: %s: %v", zone.Name, kind, err)
-				}
+		zones := cfg.Cloudflare.Zones
+		for i, err := range check.Parallel(rctx, zones, cfg.Schedule.MaxParallelZones, fn) {
+			if err == nil {
+				continue
+			}
+			if check.IsAccessError(err) {
+				log.Printf("zone %s: %s: %v — the token cannot see this zone/account", zones[i].Name, kind, err)
+			} else {
+				log.Printf("zone %s: %s: %v", zones[i].Name, kind, err)
 			}
 		}
 	}
@@ -181,6 +183,22 @@ func buildDispatcher(cfg *config.Config, dryRun bool) *notify.Dispatcher {
 	}
 	if cfg.Notify.JSONLFile != "" {
 		chans = append(chans, notify.File{Path: cfg.Notify.JSONLFile})
+	}
+	if u := cfg.Chan.Slack; u != "" {
+		chans = append(chans, notify.Slack{URL: u})
+	}
+	if u := cfg.Chan.Discord; u != "" {
+		chans = append(chans, notify.Discord{URL: u})
+	}
+	if u := cfg.Chan.WeCom; u != "" {
+		chans = append(chans, notify.WeCom{URL: u})
+	}
+	if u := cfg.Chan.Feishu; u != "" {
+		chans = append(chans, notify.Feishu{URL: u, Secret: cfg.Chan.FeishuSecret})
+	}
+	if e := cfg.Notify.Email; e != nil {
+		chans = append(chans, notify.Email{Host: e.Host, Port: e.Port, TLS: e.TLS, Username: e.Username,
+			Password: cfg.Chan.EmailPassword, From: e.From, To: e.To})
 	}
 	if len(chans) == 0 {
 		log.Printf("warning: no notification channel configured — findings will only appear in this log")

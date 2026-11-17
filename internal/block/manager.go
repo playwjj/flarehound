@@ -64,7 +64,7 @@ type State struct {
 	// Mechanisms the write token cannot use (missing permission); planning
 	// avoids them and says why.
 	NoLists  bool // Account Filter Lists
-	NoAccess bool // Firewall Services (IP Access Rules)
+	NoAccess bool // Zone → WAF (legacy name: Firewall Services) for IP Access Rules
 }
 
 // RulesUsed counts every rule in the custom-rules phase (the user's too:
@@ -292,7 +292,7 @@ func (s State) PlanBlock(t Target, a Action) (Plan, error) {
 		return p, nil
 	}
 	if _, _, err := AccessRuleTarget(t); err == nil && s.NoAccess {
-		return p, fmt.Errorf("custom-rule quota is full (%s) and the write token has no Firewall Services: Edit for the IP Access Rule fallback; free a rule first", quota)
+		return p, fmt.Errorf("custom-rule quota is full (%s) and the write token cannot manage IP Access Rules for the fallback (grant Zone → WAF: Edit; older accounts list it as Firewall Services: Edit); free a rule first", quota)
 	}
 	return p, fmt.Errorf("custom-rule quota is full (%s) and %s cannot use IP Access Rules; free a rule or merge existing ones first", quota, t)
 }

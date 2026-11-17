@@ -13,15 +13,16 @@ import (
 // are already firing. It is filled by the caller's follow-up queries,
 // only when a round has findings.
 type Attribution struct {
-	CacheCur     []cfapi.Face            `json:"cache_cur,omitempty"`
-	CacheBase    []cfapi.Face            `json:"cache_base,omitempty"`
-	DynamicPaths []PathDelta             `json:"dynamic_paths,omitempty"`
-	TopIPs       []cfapi.Face            `json:"top_ips,omitempty"`
-	FacePaths    map[string][]cfapi.Face `json:"face_paths,omitempty"` // finding Subject -> top paths
-	Firewall     []cfapi.Face            `json:"firewall,omitempty"`
-	FirewallNA   bool                    `json:"firewall_na,omitempty"` // dataset unavailable (plan/permission)
-	VerifiedBots []string                `json:"verified_bots,omitempty"`
-	Impostors    []Impostor              `json:"impostors,omitempty"`
+	CacheCur       []cfapi.Face            `json:"cache_cur,omitempty"`
+	CacheBase      []cfapi.Face            `json:"cache_base,omitempty"`
+	DynamicPaths   []PathDelta             `json:"dynamic_paths,omitempty"`
+	TopIPs         []cfapi.Face            `json:"top_ips,omitempty"`
+	FacePaths      map[string][]cfapi.Face `json:"face_paths,omitempty"` // finding Subject -> top paths
+	Firewall       []cfapi.Face            `json:"firewall,omitempty"`
+	FirewallNA     bool                    `json:"firewall_na,omitempty"` // dataset unavailable (plan/permission)
+	VerifiedBots   []string                `json:"verified_bots,omitempty"`
+	Origin5xxPaths []cfapi.Face            `json:"origin_5xx_paths,omitempty"` // where origin 5xx land
+	Impostors      []Impostor              `json:"impostors,omitempty"`
 	// ArchiveDays is how far back the local archive reaches; first-seen
 	// claims are only meaningful once it covers FaceHistoryMinDays.
 	ArchiveDays int            `json:"archive_days,omitempty"`
@@ -115,6 +116,7 @@ const (
 	HypCacheRegress  = "cache_regression"
 	HypSlowPath      = "slow_path"
 	HypOriginFailure = "origin_failure"
+	HypRouteBug      = "route_bug" // 5xx concentrated on one path
 	HypCollapse      = "collapse"
 	HypDiffuse       = "diffuse_growth"
 )
@@ -213,7 +215,16 @@ func Hypothesize(cur, base Metrics, fs []Finding, a Attribution) []Hypothesis {
 	}
 
 	if has(fs, RuleOrigin5xx) {
-		out = append(out, Hypothesis{ID: HypOriginFailure, Confidence: Medium})
+		var total int64
+		for _, p := range a.Origin5xxPaths {
+			total += p.Count
+		}
+		if total > 0 && float64(a.Origin5xxPaths[0].Count)/float64(total) >= 0.8 {
+			out = append(out, Hypothesis{ID: HypRouteBug, Confidence: Medium, Subject: a.Origin5xxPaths[0].Name,
+				Share: float64(a.Origin5xxPaths[0].Count) / float64(total)})
+		} else {
+			out = append(out, Hypothesis{ID: HypOriginFailure, Confidence: Medium})
+		}
 	}
 	if has(fs, RuleCollapseTotal) || has(fs, RuleCollapseWorker) {
 		out = append(out, Hypothesis{ID: HypCollapse, Confidence: Low})
@@ -257,19 +268,15 @@ const (
 	dispersedShare = 0.01 // top blockable IP below 1%: per-IP blocking is pointless
 )
 
-// Block derives block candidates from the current window's top IPs.
-// The share basis is the excess over baseline when traffic grew, else the
-// whole window (CPU / 5xx anomalies without volume growth). protect may
-// be nil (no guard rails known).
+// Block derives block candidates from the current window's top IPs, as
+// shares of the excess over baseline. Without excess traffic there is
+// nothing for a block to remove: CPU, 5xx or collapse anomalies on flat
+// volume produce no candidates — the busiest IP of a normal hour is not a
+// culprit (found live: a 5xx alert on -3.9% traffic named three IPs).
+// protect may be nil (no guard rails known).
 func Block(cur, base Metrics, a Attribution, protect Protector) BlockAdvice {
-	if len(a.TopIPs) == 0 {
-		return BlockAdvice{}
-	}
 	basis := cur.Total - base.Total
-	if basis <= 0 {
-		basis = cur.Total
-	}
-	if basis <= 0 {
+	if len(a.TopIPs) == 0 || basis <= 0 {
 		return BlockAdvice{}
 	}
 	var adv BlockAdvice

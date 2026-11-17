@@ -238,6 +238,10 @@ func (l lang) hypothesis(h analyze.Hypothesis) (claim, falsifier string) {
 	case analyze.HypOriginFailure:
 		return l.t("The origin is failing or overloaded.", "源站故障或过载。"),
 			l.t("the 5xx concentrate on a single route — then it is an application bug on that route.", "5xx 集中在单一路径——那是该路由的应用缺陷。")
+	case analyze.HypRouteBug:
+		return fmt.Sprintf(l.t("Application bug on one route: %s of the origin 5xx come from %s.", "单一路由的应用缺陷：%s 的源站 5xx 来自 %s。"), share(h.Share), clip(h.Subject, 60)),
+			l.t("the same route also fails for other methods or the 5xx spread to other paths — then it is an origin-wide problem.",
+				"5xx 扩散到其他路径——那就是源站整体问题。")
 	case analyze.HypCollapse:
 		return l.t("Traffic drop: upstream outage, DNS/routing change, or a blocking rule hitting real visitors.",
 				"流量塌陷：上游故障、DNS/路由变更，或拦截规则误伤真实访客。"),
@@ -353,6 +357,9 @@ func Intraday(language string, d IntradayData) string {
 	}
 	for _, im := range a.Impostors {
 		attr = append(attr, l.impostor(im))
+	}
+	if len(a.Origin5xxPaths) > 0 {
+		attr = append(attr, l.t("origin 5xx by path: ", "源站 5xx 按路径：")+faceList(a.Origin5xxPaths, 5))
 	}
 	if len(a.TopIPs) > 0 {
 		attr = append(attr, l.t("top client IPs: ", "客户端 IP Top：")+faceList(a.TopIPs, 5))

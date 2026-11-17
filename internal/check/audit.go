@@ -56,10 +56,12 @@ func (r *Runner) readRuleset(ctx context.Context, zone config.Zone) (cfapi.Rules
 			names[x.ID] = x.Description
 		}
 	}
+	r.mu.Lock()
 	if r.ruleNames == nil {
 		r.ruleNames = map[string]map[string]string{}
 	}
 	r.ruleNames[zone.ZoneID] = names
+	r.mu.Unlock()
 	return rs, nil
 }
 

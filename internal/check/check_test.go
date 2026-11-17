@@ -2,8 +2,11 @@ package check
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,6 +29,7 @@ type window struct {
 }
 
 type fakeAPI struct {
+	mu      sync.Mutex
 	windows map[time.Time]*window
 	reads   map[time.Time]int
 	caps    *cfapi.Caps
@@ -51,8 +55,11 @@ func (f *fakeAPI) Count(_ context.Context, _ string, from, _ time.Time, flt cfap
 	case flt.OriginStatusFrom == 500:
 		return w.o5xx, nil
 	case flt == cfapi.Filter{}:
+		f.mu.Lock()
 		f.reads[from]++
-		if f.reads[from] > 1 && w.totalAfterSettle > 0 {
+		n := f.reads[from]
+		f.mu.Unlock()
+		if n > 1 && w.totalAfterSettle > 0 {
 			return w.totalAfterSettle, nil
 		}
 		return w.total, nil
@@ -71,7 +78,9 @@ func (f *fakeAPI) Top(_ context.Context, _ string, from, _ time.Time, dim string
 		}
 		return []cfapi.Face{{Name: "", Count: 9000}}, nil
 	case cfapi.DimASN:
+		f.mu.Lock()
 		f.asnUsed = true
+		f.mu.Unlock()
 		if strings.Contains(flt.UserAgent, "Googlebot") {
 			return []cfapi.Face{{Name: "AS15169", ASN: 15169, Count: 9000}}, nil
 		}
@@ -613,5 +622,70 @@ func TestAuditWithoutPermission(t *testing.T) {
 	d, err := r.Audit(context.Background(), cfg.Cloudflare.Zones[0])
 	if err != nil || !strings.Contains(d.NA, "WAF: Read") {
 		t.Fatalf("%+v %v", d, err)
+	}
+}
+
+type lockedSink struct {
+	mu  sync.Mutex
+	got map[string]int
+}
+
+func (s *lockedSink) Send(_ context.Context, m notify.Message) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.got[m.Zone]++
+	return nil
+}
+
+// TestParallelZones runs six zones three at a time against one shared
+// runner (run with -race): every zone alerts exactly once, state files
+// stay separate, and one failing zone does not stop the others.
+func TestParallelZones(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Cloudflare.Zones = nil
+	for i := 0; i < 6; i++ {
+		cfg.Cloudflare.Zones = append(cfg.Cloudflare.Zones, config.Zone{ZoneID: fmt.Sprintf("%032d", i), Name: fmt.Sprintf("z%d.example", i), Workers: []string{"web"}})
+	}
+	api := &fakeAPI{windows: map[time.Time]*window{}, reads: map[time.Time]int{}}
+	from := time.Date(2026, 11, 17, 8, 0, 0, 0, time.UTC)
+	api.windows[from.Add(-24*time.Hour)] = normal()
+	api.windows[from] = surge()
+	out := &lockedSink{got: map[string]int{}}
+	r := &Runner{API: api, Cfg: cfg, Sender: out, Rules: &fakeRules{rs: auditRules("1")},
+		Now: func() time.Time { return from.Add(67 * time.Minute) }}
+	withStore(t, r)
+
+	var active, peak int32
+	var mu sync.Mutex
+	errs := Parallel(context.Background(), cfg.Cloudflare.Zones, 3, func(ctx context.Context, z config.Zone) error {
+		mu.Lock()
+		active++
+		if active > peak {
+			peak = active
+		}
+		mu.Unlock()
+		defer func() { mu.Lock(); active--; mu.Unlock() }()
+		if z.Name == "z5.example" {
+			return fmt.Errorf("boom")
+		}
+		return r.Intraday(ctx, z)
+	})
+	for i, err := range errs {
+		if (i == 5) != (err != nil) {
+			t.Fatalf("zone %d: %v", i, err)
+		}
+	}
+	if peak > 3 {
+		t.Fatalf("ran %d at once, limit 3", peak)
+	}
+	for i := 0; i < 5; i++ {
+		if out.got[fmt.Sprintf("z%d.example", i)] != 1 {
+			t.Fatalf("alerts per zone: %v", out.got)
+		}
+	}
+	for i := 0; i < 5; i++ {
+		if _, err := os.Stat(StatePath(cfg, cfg.Cloudflare.Zones[i])); err != nil {
+			t.Fatalf("state file for zone %d: %v", i, err)
+		}
 	}
 }

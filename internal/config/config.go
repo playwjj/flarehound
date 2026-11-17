@@ -99,6 +99,32 @@ type Notify struct {
 	// (for bridges and log shippers). Relative paths are relative to the
 	// working directory; in Docker use /app/data/….
 	JSONLFile string `json:"jsonl_file"`
+
+	// Chat bots (v0.8): each URL comes from the named environment
+	// variable — bot URLs are secrets.
+	SlackWebhookURLEnv   string `json:"slack_webhook_url_env"`
+	DiscordWebhookURLEnv string `json:"discord_webhook_url_env"`
+	WeComWebhookURLEnv   string `json:"wecom_webhook_url_env"`
+	FeishuWebhookURLEnv  string `json:"feishu_webhook_url_env"`
+	FeishuSecretEnv      string `json:"feishu_secret_env"`
+
+	Email *EmailConfig `json:"email,omitempty"`
+}
+
+// EmailConfig is the SMTP channel. The password comes from PasswordEnv.
+type EmailConfig struct {
+	Host        string   `json:"smtp_host"`
+	Port        int      `json:"smtp_port"`
+	TLS         string   `json:"tls"` // starttls (default) | tls | none
+	Username    string   `json:"username"`
+	PasswordEnv string   `json:"password_env"`
+	From        string   `json:"from"`
+	To          []string `json:"to"`
+}
+
+// Channels holds the resolved channel secrets.
+type Channels struct {
+	Slack, Discord, WeCom, Feishu, FeishuSecret, EmailPassword string
 }
 
 type Config struct {
@@ -113,6 +139,10 @@ type Config struct {
 		SettleDelay      string `json:"settle_delay"`
 		DailyReportAt    string `json:"daily_report_at"`
 		Timezone         string `json:"timezone"`
+		// MaxParallelZones bounds how many zones are checked at once
+		// (default 4): enough to finish quickly, few enough to stay well
+		// inside the GraphQL rate limit.
+		MaxParallelZones int `json:"max_parallel_zones"`
 	} `json:"schedule"`
 	Thresholds Thresholds `json:"thresholds"`
 	PathRules  []PathRule `json:"path_rules"`
@@ -150,16 +180,18 @@ type Config struct {
 	} `json:"archive"`
 
 	// Secrets resolved from the environment at load time; never persisted.
-	APIToken         string `json:"-"`
-	TelegramBotToken string `json:"-"`
-	WebhookURL       string `json:"-"`
+	APIToken         string   `json:"-"`
+	TelegramBotToken string   `json:"-"`
+	WebhookURL       string   `json:"-"`
+	Chan             Channels `json:"-"`
 
 	Location *time.Location `json:"-"`
 }
 
 // Secrets returns every secret value, for log redaction.
 func (c *Config) Secrets() []string {
-	return []string{c.APIToken, c.TelegramBotToken, c.WebhookURL}
+	return []string{c.APIToken, c.TelegramBotToken, c.WebhookURL,
+		c.Chan.Slack, c.Chan.Discord, c.Chan.WeCom, c.Chan.Feishu, c.Chan.FeishuSecret, c.Chan.EmailPassword}
 }
 
 var hhmm = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
@@ -204,6 +236,37 @@ func (c *Config) resolve() error {
 	if c.Notify.WebhookURLEnv != "" {
 		c.WebhookURL = os.Getenv(c.Notify.WebhookURLEnv)
 	}
+	env := func(name string) string {
+		if name == "" {
+			return ""
+		}
+		return os.Getenv(name)
+	}
+	n := c.Notify
+	c.Chan = Channels{Slack: env(n.SlackWebhookURLEnv), Discord: env(n.DiscordWebhookURLEnv), WeCom: env(n.WeComWebhookURLEnv),
+		Feishu: env(n.FeishuWebhookURLEnv), FeishuSecret: env(n.FeishuSecretEnv)}
+	for name, v := range map[string]string{"slack_webhook_url_env": n.SlackWebhookURLEnv, "discord_webhook_url_env": n.DiscordWebhookURLEnv,
+		"wecom_webhook_url_env": n.WeComWebhookURLEnv, "feishu_webhook_url_env": n.FeishuWebhookURLEnv} {
+		if v != "" && os.Getenv(v) == "" {
+			return fmt.Errorf("config: notify.%s names %s, but that environment variable is empty", name, v)
+		}
+	}
+	if e := n.Email; e != nil {
+		if e.Host == "" || e.From == "" || len(e.To) == 0 {
+			return fmt.Errorf("config: notify.email needs smtp_host, from and at least one to")
+		}
+		switch e.TLS {
+		case "", "starttls", "tls", "none":
+		default:
+			return fmt.Errorf("config: notify.email.tls must be starttls, tls or none")
+		}
+		if e.Username != "" {
+			c.Chan.EmailPassword = env(e.PasswordEnv)
+			if c.Chan.EmailPassword == "" {
+				return fmt.Errorf("config: notify.email.password_env must name a non-empty environment variable when username is set")
+			}
+		}
+	}
 
 	if len(c.Cloudflare.Zones) == 0 {
 		return fmt.Errorf("config: at least one zone is required")
@@ -241,6 +304,12 @@ func (c *Config) resolve() error {
 	}
 	if c.Schedule.DailyReportAt != "" && !hhmm.MatchString(c.Schedule.DailyReportAt) {
 		return fmt.Errorf("config: schedule.daily_report_at %q must be HH:MM (or empty to disable)", c.Schedule.DailyReportAt)
+	}
+	switch p := c.Schedule.MaxParallelZones; {
+	case p == 0:
+		c.Schedule.MaxParallelZones = 4
+	case p < 1 || p > 16:
+		return fmt.Errorf("config: schedule.max_parallel_zones must be within 1..16")
 	}
 	c.Location = time.Local
 	if c.Schedule.Timezone != "" {
@@ -316,7 +385,7 @@ func (c *Config) NeverBlock() []netip.Prefix {
 func (c *Config) WriteToken() (string, error) {
 	t := os.Getenv(c.Blocking.WriteTokenEnv)
 	if t == "" {
-		return "", fmt.Errorf("environment variable %s is empty: blocking needs a separate write token (Account → Account Filter Lists: Edit; Zone → WAF: Edit, Firewall Services: Edit, DNS: Read, Zone: Read)", c.Blocking.WriteTokenEnv)
+		return "", fmt.Errorf("environment variable %s is empty: blocking needs a separate write token (Account → Account Filter Lists: Edit; Zone → WAF: Edit (older accounts: Firewall Services: Edit), DNS: Read, Zone: Read)", c.Blocking.WriteTokenEnv)
 	}
 	return t, nil
 }

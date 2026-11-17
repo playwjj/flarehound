@@ -11,6 +11,7 @@ import (
 	"log"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/playwjj/flarehound/internal/analyze"
@@ -39,7 +40,7 @@ type API interface {
 }
 
 // RulesAPI is the read-only REST surface of the WAF audit (read token:
-// Zone → WAF: Read; optionally Zone: Read and Firewall Services: Read).
+// Zone → WAF: Read, which also covers IP Access Rules; optionally Zone: Read).
 type RulesAPI interface {
 	Entrypoint(ctx context.Context, zoneID string) (cfapi.Ruleset, bool, error)
 	AccessRules(ctx context.Context, zoneID, notesContains string) ([]cfapi.AccessRule, error)
@@ -58,11 +59,11 @@ type Runner struct {
 	Store  *store.Store // nil: archive disabled
 	Rules  RulesAPI     // nil: WAF audit disabled
 
-	caps        map[string]cfapi.Caps                            // per zone, probed once per process
-	archiveDays int                                              // depth of the archive at the last faceHistory lookup
-	ruleNames   map[string]map[string]string                     // zone → rule id → description, from the last ruleset read
-	Now         func() time.Time                                 // default time.Now
-	Sleep       func(ctx context.Context, d time.Duration) error // default: timer
+	caps      map[string]cfapi.Caps                            // per zone, probed once per process
+	mu        sync.Mutex                                       // guards caps and ruleNames: zones run in parallel
+	ruleNames map[string]map[string]string                     // zone → rule id → description, from the last ruleset read
+	Now       func() time.Time                                 // default time.Now
+	Sleep     func(ctx context.Context, d time.Duration) error // default: timer
 }
 
 const (
@@ -96,7 +97,10 @@ func (r *Runner) sleep(ctx context.Context, d time.Duration) error {
 // A failed probe assumes everything is available (the pre-probe
 // behaviour) and is retried next round.
 func (r *Runner) Caps(ctx context.Context, zone config.Zone) cfapi.Caps {
-	if c, ok := r.caps[zone.ZoneID]; ok {
+	r.mu.Lock()
+	c, ok := r.caps[zone.ZoneID]
+	r.mu.Unlock()
+	if ok {
 		return c
 	}
 	c, err := r.API.Capabilities(ctx, zone.ZoneID)
@@ -104,10 +108,12 @@ func (r *Runner) Caps(ctx context.Context, zone config.Zone) cfapi.Caps {
 		log.Printf("zone %s: capability probe failed, assuming full analytics: %v", zone.Name, err)
 		return cfapi.AllCaps()
 	}
+	r.mu.Lock()
 	if r.caps == nil {
 		r.caps = map[string]cfapi.Caps{}
 	}
 	r.caps[zone.ZoneID] = c
+	r.mu.Unlock()
 	var missing []string
 	for _, d := range []string{cfapi.DimASN, "clientASNDescription", cfapi.DimVerifiedBot} {
 		if !c.HasDim(d) {
@@ -347,6 +353,14 @@ func (r *Runner) attribute(ctx context.Context, zone config.Zone, w, bw schedule
 	logErr("top IPs", err)
 
 	for _, f := range fs {
+		if f.Rule == analyze.RuleOrigin5xx {
+			a.Origin5xxPaths, err = r.API.Top(ctx, z, w.From, w.To, cfapi.DimPath, 5, cfapi.Filter{OriginStatusFrom: 500, OriginStatusTo: 600})
+			logErr("origin 5xx paths", err)
+			break
+		}
+	}
+
+	for _, f := range fs {
 		var flt cfapi.Filter
 		switch f.Rule {
 		case analyze.RuleNewFaceUA:
@@ -394,9 +408,11 @@ func (r *Runner) attribute(ctx context.Context, zone config.Zone, w, bw schedule
 // "block firewallCustom:<name> (<id prefix>)"). The archive keeps raw IDs.
 func (r *Runner) labelRules(zone config.Zone, fs []cfapi.Face) []cfapi.Face {
 	names := map[string]string{}
+	r.mu.Lock()
 	for id, n := range r.ruleNames[zone.ZoneID] { // from the ruleset (WAF audit access)
 		names[id] = n
 	}
+	r.mu.Unlock()
 	for id, n := range r.Cfg.RuleNames { // config wins
 		names[id] = n
 	}
@@ -499,8 +515,7 @@ func (r *Runner) Intraday(ctx context.Context, zone config.Zone) error {
 	}
 	var attr analyze.Attribution
 	findings, attr.VerifiedBots, attr.Impostors = r.verifyBots(ctx, zone, w, findings)
-	attr.FaceHistory = r.faceHistory(zone, findings)
-	attr.ArchiveDays = r.archiveDays
+	attr.FaceHistory, attr.ArchiveDays = r.faceHistory(zone, findings)
 	findings, attr.Unsettled, err = r.settle(ctx, zone, w, &cur, findings)
 	if err != nil {
 		return err
@@ -745,14 +760,13 @@ func (r *Runner) longBaseline(zone config.Zone, w schedule.Window) (*analyze.Met
 
 // faceHistory looks up each new face in the archive, before this round
 // touches it, so "never seen before" stays true for genuinely new faces.
-func (r *Runner) faceHistory(zone config.Zone, fs []analyze.Finding) map[string]analyze.FaceSeen {
+func (r *Runner) faceHistory(zone config.Zone, fs []analyze.Finding) (map[string]analyze.FaceSeen, int) {
 	if r.Store == nil {
-		return nil
+		return nil, 0
 	}
+	days := 0
 	if st, err := r.Store.Stats(zone.ZoneID); err == nil && !st.Oldest.IsZero() {
-		r.archiveDays = int(r.now().Sub(st.Oldest).Hours() / 24)
-	} else {
-		r.archiveDays = 0
+		days = int(r.now().Sub(st.Oldest).Hours() / 24)
 	}
 	out := map[string]analyze.FaceSeen{}
 	for _, f := range fs {
@@ -774,7 +788,7 @@ func (r *Runner) faceHistory(zone config.Zone, fs []analyze.Finding) map[string]
 			out[f.Subject] = analyze.FaceSeen{First: rec.FirstSeen, Last: rec.LastSeen, MaxCount: rec.MaxCount}
 		}
 	}
-	return out
+	return out, days
 }
 
 // archiveRound stores this round's windows and faces and prunes old

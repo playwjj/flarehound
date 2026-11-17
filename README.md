@@ -4,7 +4,7 @@
 
 Cloudflare gives you data. FlareHound gives you the conclusion.
 
-> Status: **v0.7** — hourly watch, daily report, suggestion engine, local archive, one-click blocking, the WAF rule audit and the rule execution module are complete. The detection model, thresholds and alert discipline are ported from a real incident response (a residential-proxy crawler flood, 2026-11-17). Next up: one-click blocking (v0.5). See [SPEC.md](SPEC.md) (in Chinese) for the full design.
+> Status: **v0.8** — hourly watch, daily report, suggestion engine, local archive, one-click blocking, the WAF rule audit, the rule execution module, all notification channels and parallel multi-zone checks are complete. The detection model, thresholds and alert discipline are ported from a real incident response (a residential-proxy crawler flood, 2026-11-17). Next up: one-click blocking (v0.5). See [SPEC.md](SPEC.md) (in Chinese) for the full design.
 
 ## Why
 
@@ -38,6 +38,7 @@ export CF_API_TOKEN=...
 ```
 
 4. Point `notify.webhook_url_env` at an environment variable holding any endpoint that accepts a JSON POST (Telegram/Slack/Discord bridges included), or configure the Telegram bot.
+   Native channels (v0.8): **Slack**, **Discord**, **WeCom** (企业微信), **Feishu/Lark** (飞书, optional signing secret) and **email** (SMTP with STARTTLS or TLS) — set `notify.slack_webhook_url_env`, `discord_webhook_url_env`, `wecom_webhook_url_env`, `feishu_webhook_url_env` (+ `feishu_secret_env`), or a `notify.email` block; every URL and password comes from an environment variable. Long reports are split to each service's size limit, and bot errors returned inside an HTTP 200 count as failures (retried, then queued).
    To feed alerts into your own tooling instead, set `notify.jsonl_file` (e.g. `data/alerts.jsonl`): every message is appended as one JSON line with `kind`, `zone`, `decision`, the window, the fired `rules` and the `text`.
 5. Pick the report language: `"report": {"language": "en"}` or `"zh"` (Chinese).
 
@@ -94,8 +95,10 @@ Optional add-ons — grant only when you enable the feature:
 
 - **Worker metrics** (`workers` listed in the config): add **Account** → **Account Analytics: Read**.
 
-- **WAF rule audit** (v0.6): add **Zone** → **WAF: Read** to the same token (optionally **Zone: Read** for the quota check and **Firewall Services: Read** to see IP Access Rule allow-lists).
-- **One-click blocking** (v0.5) and **rule changes** (v0.7): create a *separate* write token — **Account** → **Account Filter Lists: Edit**; **Zone** → **WAF: Edit**, **Firewall Services: Edit**, **DNS: Read**, **Zone: Read** (+ **Cache Rules: Edit** for cache rules). Put it in `CF_WRITE_TOKEN`. Never merge it into the read token; the watchdog process never holds it.
+- **WAF rule audit** (v0.6): add **Zone** → **WAF: Read** to the same token — it covers the rulesets and the IP Access Rules allow-list check (optionally **Zone: Read** for the quota check).
+- **One-click blocking** (v0.5) and **rule changes** (v0.7): create a *separate* write token — **Account** → **Account Filter Lists: Edit**; **Zone** → **WAF: Edit** (custom rules and IP Access Rules; older accounts call the latter *Firewall Services: Edit*), **DNS: Read**, **Zone: Read** (+ **Cache Rules: Edit** for cache rules). Put it in `CF_WRITE_TOKEN`. Never merge it into the read token; the watchdog process never holds it.
+
+Permission names: Cloudflare now offers **Zone → WAF** for custom rules *and* IP Access Rules; older accounts show the IP Access Rules permission as **Firewall Services**, which newer accounts cannot grant — use Zone → WAF wherever it exists.
 
 The watchdog makes GraphQL Analytics calls only (`api.cloudflare.com/client/v4/graphql`), which is why Analytics: Read is enough; older versions of this README also asked for Logs, Zone and Workers Scripts read access, which no code path uses. (This minimum is derived from the code's call sites; a quick check with your own token: create one with only Zone → Analytics: Read and run `flarehound -once -dry-run`.) The audit will additionally read rulesets through the REST API on the same host. Your token never leaves your machine and is never written to disk or logs by the program.
 
@@ -183,7 +186,7 @@ The primary form factor is a single Go binary in a Docker container, running on 
 - ~~v0.5~~ — one-click blocking (IP / CIDR / ASN / country / user-agent — block from an alert or the CLI, expiring blocks, guard rails, audit log) ✅
 - ~~v0.6~~ — WAF rule audit (coverage gaps on sensitive paths, ordering/redundancy issues, per-rule hit stats, over-broad exemptions) ✅
 - ~~v0.7~~ — general action module (execute approved suggestions with a separate write token, pre-change backup, read-back verification) ✅
-- **v0.8** — more notification channels, multi-zone
+- ~~v0.8~~ — more notification channels (Slack, Discord, WeCom, Feishu, email), parallel multi-zone checks ✅
 - **v1.0** — calibration tooling against dashboard numbers, docs site
 
 Full specification: [SPEC.md](SPEC.md) (Chinese).

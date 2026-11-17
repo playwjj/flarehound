@@ -25,7 +25,7 @@ type CF struct {
 	FailCreateList bool
 	FailDNS        bool
 	DenyLists      bool // token lacks Account Filter Lists
-	DenyAccess     bool // token lacks Firewall Services
+	DenyAccess     bool // token cannot manage IP Access Rules
 	Limit          int  // custom-rule quota enforced on add
 	Calls          []string
 	seq            int

@@ -219,3 +219,23 @@ func TestBlockExcludesProtected(t *testing.T) {
 		t.Fatal("dispersion must be judged on blockable IPs only")
 	}
 }
+
+func TestNoCandidatesWithoutExcess(t *testing.T) {
+	// The live case: origin 5xx on -3.9% traffic must not name IPs.
+	adv := Block(Metrics{Total: 1290}, Metrics{Total: 1343}, Attribution{TopIPs: []cfapi.Face{{Name: "171.83.47.36", Count: 509}}}, nil)
+	if len(adv.Candidates) != 0 || adv.Dispersed {
+		t.Fatalf("%+v", adv)
+	}
+}
+
+func TestRouteBugHypothesis(t *testing.T) {
+	fs := []Finding{{Rule: RuleOrigin5xx, Cur: 52}}
+	hs := Hypothesize(Metrics{}, Metrics{}, fs, Attribution{Origin5xxPaths: []cfapi.Face{{Name: "/api/x", Count: 50}, {Name: "/", Count: 2}}})
+	if len(hs) != 1 || hs[0].ID != HypRouteBug || hs[0].Subject != "/api/x" {
+		t.Fatalf("%+v", hs)
+	}
+	hs = Hypothesize(Metrics{}, Metrics{}, fs, Attribution{Origin5xxPaths: []cfapi.Face{{Name: "/a", Count: 10}, {Name: "/b", Count: 9}}})
+	if hs[0].ID != HypOriginFailure {
+		t.Fatalf("%+v", hs)
+	}
+}

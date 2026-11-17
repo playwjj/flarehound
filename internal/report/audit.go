@@ -144,7 +144,7 @@ func (l lang) auditBody(b *strings.Builder, d AuditData, full bool) {
 			a.Configuration.Target, a.Configuration.Value, clip(a.Notes, 40)))
 	}
 	if r.AccessNA && full {
-		ex = append(ex, l.t("IP Access Rules not checked (token lacks Zone → Firewall Services: Read)", "未检查 IP 访问规则（Token 缺 Zone → Firewall Services: Read）"))
+		ex = append(ex, l.t("IP Access Rules not checked (token lacks Zone → WAF: Read; older accounts: Firewall Services: Read)", "未检查 IP 访问规则（Token 缺 Zone → WAF: Read；老账号上叫 Firewall Services: Read）"))
 	}
 	if len(ex) > 0 {
 		b.WriteString(l.t("Exemptions:\n", "豁免面：\n"))
