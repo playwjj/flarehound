@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -20,10 +21,20 @@ import (
 	"github.com/playwjj/flarehound/internal/state"
 )
 
+// version is stamped at release time via -ldflags "-X main.version=..."
+// (see .github/workflows/release.yml); local builds report "dev".
+var version = "dev"
+
 func main() {
 	cfgPath := flag.String("config", "config.json", "path to config file")
 	once := flag.Bool("once", false, "run one intraday check and exit")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("flarehound", version)
+		return
+	}
+	log.Printf("flarehound %s starting", version)
 
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {

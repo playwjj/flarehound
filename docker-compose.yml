@@ -1,7 +1,7 @@
 services:
   flarehound:
     build: .
-    image: flarehound:latest
+    image: passport888/flarehound:latest
     restart: unless-stopped
     environment:
       # Read-only Cloudflare API token. Never put it in config.json.

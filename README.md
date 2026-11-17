@@ -23,6 +23,8 @@ FlareHound watches the traffic itself:
 
 ## Quick start
 
+Releases are published to Docker Hub as multi-arch images (`linux/amd64`, `linux/arm64`) on every `v*` tag, e.g. `passport888/flarehound:0.1.0`. The `docker-compose.yml` in this repo pulls the published image (or builds it locally from source if you prefer).
+
 ```bash
 docker compose up -d
 ```

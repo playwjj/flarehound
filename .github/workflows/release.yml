@@ -1,0 +1,41 @@
+name: Release
+
+# Tag-based releases: push a v* tag (e.g. v0.1.0) and this workflow
+# publishes multi-arch images to Docker Hub as
+#   <user>/flarehound:<version>  (e.g. 0.1.0)
+#   <user>/flarehound:<major>.<minor>  (e.g. 0.1)
+#   <user>/flarehound:latest
+# Requires repo variable DOCKERHUB_USERNAME and secret DOCKERHUB_TOKEN.
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ vars.DOCKERHUB_USERNAME }}/flarehound
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
