@@ -20,6 +20,7 @@ type Attribution struct {
 	Firewall     []cfapi.Face            `json:"firewall,omitempty"`
 	FirewallNA   bool                    `json:"firewall_na,omitempty"` // dataset unavailable (plan/permission)
 	VerifiedBots []string                `json:"verified_bots,omitempty"`
+	ASNNames     map[int]string          `json:"asn_names,omitempty"` // registered ASN names, best-effort
 	Unsettled    []string                `json:"unsettled,omitempty"` // collapse rules held back: data still arriving
 }
 

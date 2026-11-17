@@ -4,7 +4,7 @@
 
 Cloudflare gives you data. FlareHound gives you the conclusion.
 
-> Status: **v0.3** — the hourly watch and the daily report are complete. The detection model, thresholds and alert discipline are ported from a real incident response (a residential-proxy crawler flood, 2026-11-17). Next up: the suggestion engine (v0.4). See [SPEC.md](SPEC.md) (in Chinese) for the full design.
+> Status: **v0.4** — hourly watch, daily report and suggestion engine are complete. The detection model, thresholds and alert discipline are ported from a real incident response (a residential-proxy crawler flood, 2026-11-17). Next up: one-click blocking (v0.5). See [SPEC.md](SPEC.md) (in Chinese) for the full design.
 
 ## Why
 
@@ -64,7 +64,18 @@ Hypotheses:
   Falsified if its path mix matches normal visitors and it comes from residential/mobile networks …
 
 Sources are dispersed (top IP < 1% of the excess): per-IP blocking will not help — act at ASN or path level (challenge).
+
+Suggestions (read-only — FlareHound never applies them; do it in the Cloudflare dashboard):
+1. Block AS207990 (EXAMPLE-HOSTING-AS, hosting network)
+   where: Security → WAF → Custom rules, action Block
+   expression: (ip.geoip.asnum in {207990}) and not cf.client.bot
+   why: 45,000 requests vs 0 yesterday, ~87% of the excess; a hosting network, where no human visitors are expected.
+   gain: ~45,000 fewer requests per window, of which ~20,723 expensive (estimate)
+   impact: anything legitimately running on that network (your own monitors, partner APIs, uptime checkers) is blocked too; …
+   rollback: disable or delete the rule (takes effect in seconds)
 ```
+
+**Suggestions** come with evidence, expected gain, blast radius, rollback and a paste-ready rule expression. Only cloud/datacenter ASNs are ever suggested for blocking; residential, mobile, backbone and unknown networks get a *challenge* suggestion instead. No suggestion is made when the evidence is thin, or when the surge is mostly cheap edge-cached traffic.
 
 ### Token permissions (read-only)
 
@@ -111,7 +122,7 @@ The primary form factor is a single Go binary in a Docker container, running on 
 
 - ~~v0.2~~ — daily digest (24 h comparison + fixed checkpoints) ✅
 - ~~v0.3~~ — full intraday watch (new-face detection, escalation/recovery state machine, attribution queries) ✅
-- **v0.4** — suggestion engine (block / challenge / rate-limit / cache candidates)
+- ~~v0.4~~ — suggestion engine (block / challenge / rate-limit / cache candidates) ✅
 - **v0.5** — one-click blocking (IP / CIDR / ASN / country / user-agent — block from an alert or the CLI, expiring blocks, guard rails, audit log)
 - **v0.6** — WAF rule audit (coverage gaps on sensitive paths, ordering/redundancy issues, per-rule hit stats, over-broad exemptions)
 - **v0.7** — general action module (execute approved suggestions with a separate write token, pre-change backup, read-back verification)

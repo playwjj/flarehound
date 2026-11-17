@@ -17,6 +17,7 @@ import (
 	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/schedule"
 	"github.com/playwjj/flarehound/internal/state"
+	"github.com/playwjj/flarehound/internal/suggest"
 )
 
 type lang string
@@ -256,16 +257,17 @@ func (l lang) confidence(c string) string {
 
 // IntradayData is everything one intraday round produced.
 type IntradayData struct {
-	Zone       string
-	Window     schedule.Window
-	Loc        *time.Location
-	Decision   state.Decision
-	Cur, Base  analyze.Metrics
-	Findings   []analyze.Finding
-	Attr       analyze.Attribution
-	Hypotheses []analyze.Hypothesis
-	Block      analyze.BlockAdvice
-	Since      time.Time // episode start
+	Zone        string
+	Window      schedule.Window
+	Loc         *time.Location
+	Decision    state.Decision
+	Cur, Base   analyze.Metrics
+	Findings    []analyze.Finding
+	Attr        analyze.Attribution
+	Hypotheses  []analyze.Hypothesis
+	Block       analyze.BlockAdvice
+	Suggestions []suggest.Suggestion
+	Since       time.Time // episode start
 }
 
 // Intraday renders an intraday alert / escalation / recovery message.
@@ -357,6 +359,7 @@ func Intraday(language string, d IntradayData) string {
 		b.WriteString("\n" + l.t("Sources are dispersed (top IP < 1% of the excess): per-IP blocking will not help — act at ASN or path level (challenge).\n",
 			"来源高度分散（单 IP 份额 < 1%）：逐 IP 封锁无效，应在 ASN 或路径层面处置（挑战）。\n"))
 	}
+	l.suggestions(&b, d.Suggestions)
 	return strings.TrimRight(b.String(), "\n")
 }
 
@@ -395,6 +398,7 @@ type DailyData struct {
 	FirewallNA        bool
 	Checkpoints       []Checkpoint
 	Artifacts         []ArtifactCount
+	Suggestions       []suggest.Suggestion
 	ActiveSince       time.Time
 	ActiveFingerprint string
 	Gaps              []string
@@ -468,6 +472,8 @@ func Daily(language string, d DailyData) string {
 	for _, a := range d.Artifacts {
 		fmt.Fprintf(&b, l.t("- %s: %s (accounting artifact, not visitor errors)\n", "- %s：%s（记账假象，非访客错误）\n"), a.Label, n(a.Count))
 	}
+
+	l.suggestions(&b, d.Suggestions)
 
 	if !d.ActiveSince.IsZero() {
 		fmt.Fprintf(&b, "\n"+l.t("Intraday anomaly still open since %s: %s\n", "日内异常仍在持续，始于 %s：%s\n"),

@@ -19,6 +19,7 @@ import (
 	"github.com/playwjj/flarehound/internal/report"
 	"github.com/playwjj/flarehound/internal/schedule"
 	"github.com/playwjj/flarehound/internal/state"
+	"github.com/playwjj/flarehound/internal/suggest"
 )
 
 // API is the subset of the Cloudflare client the runner needs.
@@ -26,6 +27,7 @@ type API interface {
 	Count(ctx context.Context, zoneID string, from, to time.Time, f cfapi.Filter) (int64, error)
 	Top(ctx context.Context, zoneID string, from, to time.Time, dim string, limit int, f cfapi.Filter) ([]cfapi.Face, error)
 	FirewallByRule(ctx context.Context, zoneID string, from, to time.Time, limit int) ([]cfapi.Face, error)
+	ASNNames(ctx context.Context, zoneID string, from, to time.Time, limit int) (map[int]string, error)
 	WorkerStats(ctx context.Context, accountID, script string, from, to time.Time) (int64, float64, error)
 }
 
@@ -268,6 +270,28 @@ func (r *Runner) attribute(ctx context.Context, zone config.Zone, w, bw schedule
 		a.FirewallNA = true
 		log.Printf("zone %s: firewall events unavailable: %v", zone.Name, err)
 	}
+
+	a.ASNNames, err = r.API.ASNNames(ctx, z, w.From, w.To, currentTop)
+	logErr("ASN names", err)
+}
+
+// sensitive collects every configured sensitive path pattern (path rules
+// and daily checkpoints), keyed by rule name / label.
+func sensitive(cfg *config.Config) map[string]string {
+	m := map[string]string{}
+	for _, p := range cfg.PathRules {
+		m[p.Name] = p.Path
+	}
+	for _, p := range cfg.Daily.Paths {
+		k := p.Label
+		if k == "" {
+			k = p.Path
+		}
+		if _, dup := m[k]; !dup {
+			m[k] = p.Path
+		}
+	}
+	return m
 }
 
 // pathDeltas returns the current window's top dynamic paths with their
@@ -346,12 +370,19 @@ func (r *Runner) Intraday(ctx context.Context, zone config.Zone) error {
 			r.attribute(ctx, zone, w, bw, findings, &attr)
 			firstAlert = st.FirstAlertAt
 		}
+		hyps := analyze.Hypothesize(cur, base, findings, attr)
+		block := analyze.Block(cur, base, attr)
+		var sugs []suggest.Suggestion
+		if decision != state.DecRecovered {
+			sugs = suggest.Suggest(suggest.Input{Cur: cur, Base: base, Findings: findings, Attr: attr,
+				Hypotheses: hyps, Block: block, ASNNames: attr.ASNNames,
+				Sensitive: sensitive(cfg), MinCount: th.MinCount})
+		}
 		text = report.Intraday(cfg.Report.Language, report.IntradayData{
 			Zone: zone.Name, Window: w, Loc: cfg.Location, Decision: decision,
 			Cur: cur, Base: base, Findings: findings, Attr: attr,
-			Hypotheses: analyze.Hypothesize(cur, base, findings, attr),
-			Block:      analyze.Block(cur, base, attr),
-			Since:      firstAlert,
+			Hypotheses: hyps, Block: block, Suggestions: sugs,
+			Since: firstAlert,
 		})
 	}
 
@@ -418,6 +449,17 @@ func (r *Runner) Daily(ctx context.Context, zone config.Zone) error {
 		d.FirewallNA = true
 		log.Printf("zone %s: firewall events unavailable: %v", zone.Name, err)
 	}
+
+	// Suggestions: the same engine as intraday, on the day's evidence.
+	// No per-IP data here, so rate-limit advice (which needs it) cannot fire.
+	attr := analyze.Attribution{CacheCur: cacheCur, CacheBase: cacheBase, DynamicPaths: d.DynamicPaths}
+	if len(d.Findings) > 0 {
+		attr.ASNNames, err = r.API.ASNNames(ctx, z, w.From, w.To, currentTop)
+		logErr("ASN names", err)
+	}
+	d.Suggestions = suggest.Suggest(suggest.Input{Cur: cur, Base: base, Findings: d.Findings, Attr: attr,
+		Hypotheses: analyze.Hypothesize(cur, base, d.Findings, attr), ASNNames: attr.ASNNames,
+		Sensitive: sensitive(cfg), MinCount: th.MinCount})
 
 	for _, p := range cfg.Daily.Paths {
 		rows, err := r.API.Top(ctx, z, w.From, w.To, cfapi.DimCacheStatus, 20, cfapi.Filter{PathLike: like(p.Path)})

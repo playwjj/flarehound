@@ -257,6 +257,28 @@ func faces(rows []row, dims ...string) []Face {
 	return out
 }
 
+// ASNNames returns the Top-N ASNs of the window with their registered
+// names (clientASNDescription), used to tell hosting networks from
+// eyeball networks. Name lookup is best-effort: callers must cope with
+// an error by falling back to the built-in ASN table.
+func (c *Client) ASNNames(ctx context.Context, zoneID string, from, to time.Time, limit int) (map[int]string, error) {
+	rows, err := c.zoneRows(ctx, zoneID, "httpRequestsAdaptiveGroups", "count dimensions{clientAsn clientASNDescription}", limit, true, Filter{}.render(from, to))
+	if err != nil {
+		return nil, err
+	}
+	out := map[int]string{}
+	for _, r := range rows {
+		n, ok := r.Dimensions[DimASN].(float64)
+		if !ok {
+			continue
+		}
+		if d, ok := r.Dimensions["clientASNDescription"].(string); ok {
+			out[int(n)] = d
+		}
+	}
+	return out, nil
+}
+
 // FirewallByRule returns firewall-event counts grouped by rule and action
 // ("<action> <source>:<ruleId>"). Not available on every plan: callers
 // must treat an error as "data unavailable", not as zero.

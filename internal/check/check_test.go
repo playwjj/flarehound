@@ -74,6 +74,10 @@ func (f *fakeAPI) FirewallByRule(context.Context, string, time.Time, time.Time, 
 	return nil, nil
 }
 
+func (f *fakeAPI) ASNNames(context.Context, string, time.Time, time.Time, int) (map[int]string, error) {
+	return map[int]string{207990: "EXAMPLE-HOSTING-AS", 4134: "CHINANET-BACKBONE"}, nil
+}
+
 func (f *fakeAPI) WorkerStats(_ context.Context, _, _ string, from, _ time.Time) (int64, float64, error) {
 	w := f.w(from)
 	return w.calls, w.cpu, nil
@@ -144,7 +148,8 @@ func TestIncidentReplay(t *testing.T) {
 	}
 	alert := out.msgs[0]
 	t.Logf("alert:\n%s", alert)
-	for _, want := range []string{"anomaly", "Worker web calls", "AS207990", "Hypotheses", "per-IP blocking will not help", "/rank"} {
+	for _, want := range []string{"anomaly", "Worker web calls", "AS207990", "Hypotheses", "per-IP blocking will not help", "/rank",
+		"Block AS207990 (EXAMPLE-HOSTING-AS, hosting network)", "(ip.geoip.asnum in {207990}) and not cf.client.bot", "Rate-limit /rank", "rollback:"} {
 		if !strings.Contains(alert, want) {
 			t.Errorf("alert lacks %q:\n%s", want, alert)
 		}
