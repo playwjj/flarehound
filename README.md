@@ -18,7 +18,7 @@ FlareHound watches the traffic itself:
 - **Attribution before conclusions** — every spike is split by path, ASN, user agent and cache status first, and "expensive" traffic (Worker renders, origin hits) is reported separately from cheap edge volume.
 - **New-face detection** — user agents and ASNs that suddenly enter your Top 10 and weren't in yesterday's Top 25.
 - **Quiet by design** — no anomaly, no message. The same anomaly never alerts twice unless it grows another 25%; two clean rounds earn a single "recovered" line.
-- **Suggestions, never actions** — the watchdog core is read-only. It may suggest blocking an ASN or challenging a path, with evidence and expected impact, but it never changes your Cloudflare configuration. (Blocking an IP or CIDR becomes a one-click, separately authorized action in v0.5; a general action module follows in v0.7 — both behind their own write token and per-action confirmation; the core stays read-only.)
+- **Suggestions, never actions** — the watchdog core is read-only. It may suggest blocking an ASN or challenging a path, with evidence and expected impact, but it never changes your Cloudflare configuration. (Blocking an IP, range, ASN, country or user-agent becomes a one-click, separately authorized action in v0.5; a general action module follows in v0.7 — both behind their own write token and per-action confirmation; the core stays read-only.)
 - **A memory Cloudflare doesn't keep** — Cloudflare retains only ~31 days of analytics, and raw logs are a metered add-on. FlareHound snapshots every check into a local SQLite archive, building the long memory the platform lacks: multi-week baselines, 90-day per-rule hit history, first-seen dates for ASNs and user agents.
 
 ## Quick start
@@ -71,7 +71,7 @@ The primary form factor is a single Go binary in a Docker container, running on 
 - **v0.2** — daily digest (24 h comparison + fixed checkpoints)
 - **v0.3** — full intraday watch (new-face detection, escalation/recovery state machine, attribution queries)
 - **v0.4** — suggestion engine (block / challenge / rate-limit / cache candidates)
-- **v0.5** — one-click IP / CIDR blocklist (block from an alert or the CLI, expiring blocks, guard rails, audit log)
+- **v0.5** — one-click blocking (IP / CIDR / ASN / country / user-agent — block from an alert or the CLI, expiring blocks, guard rails, audit log)
 - **v0.6** — WAF rule audit (coverage gaps on sensitive paths, ordering/redundancy issues, per-rule hit stats, over-broad exemptions)
 - **v0.7** — general action module (execute approved suggestions with a separate write token, pre-change backup, read-back verification)
 - **v0.8** — more notification channels, multi-zone
