@@ -23,6 +23,7 @@ var hostingASNs = map[int]bool{
 	45102: true, 37963: true, // Alibaba Cloud
 	132203: true, 45090: true, // Tencent Cloud
 	136907: true, 55990: true, // Huawei Cloud
+	150436: true, 396986: true, // BytePlus / ByteDance
 	31898: true,              // Oracle Cloud
 	14061: true,              // DigitalOcean
 	24940: true,              // Hetzner
@@ -58,7 +59,8 @@ var eyeballASNs = map[int]bool{
 }
 
 var hostingWords = []string{"hosting", "cloud", "datacenter", "data center", "data-center", "server", "vps", "colocation",
-	"amazon", "aws", "digitalocean", "hetzner", "ovh", "linode", "vultr", "contabo", "alibaba", "tencent", "oracle", "leaseweb", "m247"}
+	"amazon", "aws", "digitalocean", "hetzner", "ovh", "linode", "vultr", "contabo", "alibaba", "tencent", "oracle", "leaseweb", "m247",
+	"byteplus", "bytedance", "volcengine", "huawei cloud", "baidu cloud", "kingsoft", "ucloud", "akamai", "fastly", "datacamp", "choopa", "psychz"}
 
 var eyeballWords = []string{"telecom", "telekom", "mobile", "broadband", "cable", "wireless", "cellular", "fiber", "fibre", "dsl",
 	"unicom", "comcast", "verizon", "isp", "telco", "movil", "telefonica"}

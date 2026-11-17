@@ -648,3 +648,22 @@ func (c *Client) Sampling(ctx context.Context, zoneID string, from, to time.Time
 	}
 	return count, interval, nil
 }
+
+// Hourly returns adaptive counts per clock hour in [from, to) — the data
+// behind the charts. Hours with no row are absent from the map.
+func (c *Client) Hourly(ctx context.Context, zoneID string, from, to time.Time, f Filter) (map[time.Time]int64, error) {
+	rows, err := c.zoneRows(ctx, zoneID, "httpRequestsAdaptiveGroups", "count dimensions{datetimeHour}", 200, false, f.render(from, to))
+	if err != nil {
+		return nil, err
+	}
+	out := map[time.Time]int64{}
+	for _, r := range rows {
+		s, _ := r.Dimensions["datetimeHour"].(string)
+		t, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			continue
+		}
+		out[t.UTC()] += r.Count
+	}
+	return out, nil
+}

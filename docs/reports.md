@@ -40,6 +40,8 @@ The parts, in order:
 5. **Block candidates** — see below.
 6. **Suggestions** — see below. Recovery messages carry no suggestions.
 
+Email gets the same report as HTML with charts, and Telegram, Discord and WeCom get the charts as images — see [charts and HTML](channels.md#charts-and-html-reportvisuals-default-on).
+
 ### Severity: is it loud, or does it hurt?
 
 A flood that the edge absorbs — zone requests or Worker calls up, new faces, but **real rendering (`dynamic`) up less than 15%** and no dynamic, CPU, origin 5xx, collapse or path line crossed — is reported as its own verdict at **low severity**: *"edge-absorbed flood: the extra traffic is absorbed at the edge, real rendering +1.0%, CPU and origin errors unchanged — watch it, no action needed."* Anything expensive or broken makes it **high**. The JSONL record carries `severity: "low" | "high"`.

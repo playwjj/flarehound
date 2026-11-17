@@ -9,13 +9,16 @@ import (
 	"bytes"
 	"context"
 	"crypto/hmac"
+	"crypto/md5"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/smtp"
@@ -55,6 +58,50 @@ func postChecked(ctx context.Context, endpoint string, payload any, check func([
 		return check(body)
 	}
 	return nil
+}
+
+// postMultipart posts a form with one file. Errors never contain the URL.
+func postMultipart(ctx context.Context, endpoint string, fields map[string]string, fileField, fileName string, data []byte, check func([]byte) error) error {
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	for k, v := range fields {
+		_ = mw.WriteField(k, v)
+	}
+	fw, err := mw.CreateFormFile(fileField, fileName)
+	if err != nil {
+		return err
+	}
+	_, _ = fw.Write(data)
+	_ = mw.Close()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, &body)
+	if err != nil {
+		return errors.New("invalid endpoint URL")
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := client.Do(req)
+	if err != nil {
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			return fmt.Errorf("request failed: %v", ue.Err)
+		}
+		return errors.New("request failed")
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	if check != nil {
+		return check(b)
+	}
+	return nil
+}
+
+func clipRunes(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n])
+	}
+	return s
 }
 
 // Split cuts text into chunks of at most max units (measured by size),
@@ -126,6 +173,12 @@ func (d Discord) Send(ctx context.Context, m Message) error {
 			return err
 		}
 	}
+	for _, img := range m.Images {
+		payload, _ := json.Marshal(map[string]any{"content": clipRunes(img.Caption, 1900), "allowed_mentions": map[string]any{"parse": []string{}}})
+		if err := postMultipart(ctx, d.URL, map[string]string{"payload_json": string(payload)}, "files[0]", img.Name+".png", img.PNG, nil); err != nil {
+			return fmt.Errorf("image: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -134,20 +187,32 @@ func (d Discord) Send(ctx context.Context, m Message) error {
 type WeCom struct{ URL string }
 
 func (WeCom) Name() string { return "wecom" }
+func wecomCheck(b []byte) error {
+	var r struct {
+		ErrCode int    `json:"errcode"`
+		ErrMsg  string `json:"errmsg"`
+	}
+	if json.Unmarshal(b, &r) == nil && r.ErrCode != 0 {
+		return fmt.Errorf("wecom errcode %d: %s", r.ErrCode, r.ErrMsg)
+	}
+	return nil
+}
+
 func (w WeCom) Send(ctx context.Context, m Message) error {
 	for _, part := range Split(m.body(), 2048, bytesLen) {
-		err := postChecked(ctx, w.URL, map[string]any{"msgtype": "text", "text": map[string]string{"content": part}}, func(b []byte) error {
-			var r struct {
-				ErrCode int    `json:"errcode"`
-				ErrMsg  string `json:"errmsg"`
-			}
-			if json.Unmarshal(b, &r) == nil && r.ErrCode != 0 {
-				return fmt.Errorf("wecom errcode %d: %s", r.ErrCode, r.ErrMsg)
-			}
-			return nil
-		})
-		if err != nil {
+		if err := postChecked(ctx, w.URL, map[string]any{"msgtype": "text", "text": map[string]string{"content": part}}, wecomCheck); err != nil {
 			return err
+		}
+	}
+	for _, img := range m.Images {
+		if len(img.PNG) > 2<<20 { // the bot's image limit
+			continue
+		}
+		sum := md5.Sum(img.PNG)
+		if err := postChecked(ctx, w.URL, map[string]any{"msgtype": "image", "image": map[string]string{
+			"base64": base64.StdEncoding.EncodeToString(img.PNG), "md5": hex.EncodeToString(sum[:]),
+		}}, wecomCheck); err != nil {
+			return fmt.Errorf("image: %w", err)
 		}
 	}
 	return nil
@@ -233,24 +298,46 @@ func encodeHeader(s string) string {
 	return s
 }
 
-// BuildMail renders an RFC 5322 message (plain text, UTF-8, base64 body).
+func b64Lines(b *bytes.Buffer, data []byte) {
+	enc := base64.StdEncoding.EncodeToString(data)
+	for len(enc) > 76 {
+		b.WriteString(enc[:76] + "\r\n")
+		enc = enc[76:]
+	}
+	b.WriteString(enc + "\r\n")
+}
+
+// BuildMail renders an RFC 5322 message. With HTML it is
+// multipart/alternative (plain text for any client, HTML for the rest) and
+// the charts ride inline as multipart/related parts referenced by cid:.
 func (e Email) BuildMail(m Message, now time.Time) []byte {
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "From: %s\r\n", e.From)
 	fmt.Fprintf(&b, "To: %s\r\n", strings.Join(e.To, ", "))
 	fmt.Fprintf(&b, "Subject: %s\r\n", encodeHeader(subject(m)))
 	fmt.Fprintf(&b, "Date: %s\r\n", now.Format(time.RFC1123Z))
-	b.WriteString("MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n")
+	b.WriteString("MIME-Version: 1.0\r\n")
 	if m.Kind != "" {
 		fmt.Fprintf(&b, "X-FlareHound-Kind: %s\r\n", m.Kind)
 	}
-	b.WriteString("\r\n")
-	enc := base64.StdEncoding.EncodeToString([]byte(m.body()))
-	for len(enc) > 76 {
-		b.WriteString(enc[:76] + "\r\n")
-		enc = enc[76:]
+	if m.HTML == "" {
+		b.WriteString("Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n")
+		b64Lines(&b, []byte(m.body()))
+		return b.Bytes()
 	}
-	b.WriteString(enc + "\r\n")
+	alt, rel := "fh-alt-"+strconv.FormatInt(now.UnixNano(), 36), "fh-rel-"+strconv.FormatInt(now.UnixNano()+1, 36)
+	fmt.Fprintf(&b, "Content-Type: multipart/alternative; boundary=%q\r\n\r\n", alt)
+	fmt.Fprintf(&b, "--%s\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n", alt)
+	b64Lines(&b, []byte(m.body()))
+	fmt.Fprintf(&b, "--%s\r\nContent-Type: multipart/related; boundary=%q\r\n\r\n", alt, rel)
+	fmt.Fprintf(&b, "--%s\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n", rel)
+	b64Lines(&b, []byte(m.HTML))
+	for _, img := range m.Images {
+		fmt.Fprintf(&b, "--%s\r\nContent-Type: image/png\r\nContent-Transfer-Encoding: base64\r\nContent-ID: <%s>\r\nContent-Disposition: inline; filename=%q\r\n\r\n",
+			rel, img.Name, img.Name+".png")
+		b64Lines(&b, img.PNG)
+	}
+	fmt.Fprintf(&b, "--%s--\r\n--%s--\r\n", rel, alt)
 	return b.Bytes()
 }
 

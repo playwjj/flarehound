@@ -153,3 +153,14 @@ func TestFirewallFromRoundsUpToTheHour(t *testing.T) {
 		t.Fatal("unknown retention leaves the window alone")
 	}
 }
+
+func TestHourly(t *testing.T) {
+	var q string
+	c := server(t, `{"data":{"viewer":{"zones":[{"httpRequestsAdaptiveGroups":[
+		{"count":5,"dimensions":{"datetimeHour":"2026-11-17T08:00:00Z"}},
+		{"count":7,"dimensions":{"datetimeHour":"2026-11-17T09:00:00Z"}}]}]}}}`, &q)
+	got, err := c.Hourly(context.Background(), "zone", from, to, Filter{CacheStatus: "dynamic"})
+	if err != nil || got[from] != 5 || got[from.Add(time.Hour)] != 7 || !strings.Contains(q, "datetimeHour") {
+		t.Fatalf("%v %v %s", got, err, q)
+	}
+}

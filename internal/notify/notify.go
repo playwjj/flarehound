@@ -10,6 +10,7 @@ package notify
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,6 +35,17 @@ type Message struct {
 	Severity   string    `json:"severity,omitempty"` // intraday: "low" (edge-absorbed) | "high"
 	Delayed    bool      `json:"delayed,omitempty"`
 	Text       string    `json:"text"`
+	// Visuals (v1.2). Not serialized: the outbox and JSON payloads stay
+	// small; a delayed message is re-sent as text.
+	HTML   string  `json:"-"` // full HTML rendering (email)
+	Images []Image `json:"-"` // charts (Telegram, Discord, WeCom, email, JSONL)
+}
+
+// Image is one chart attached to a message.
+type Image struct {
+	Name    string // file-safe, e.g. "requests"
+	Caption string // shown under the image where the channel supports it
+	PNG     []byte
 }
 
 // Plain wraps bare text (tests, ad-hoc messages).
@@ -115,6 +127,12 @@ func (t Telegram) Send(ctx context.Context, m Message) error {
 			return err
 		}
 	}
+	for _, img := range m.Images {
+		if err := postMultipart(ctx, base+"/bot"+t.BotToken+"/sendPhoto",
+			map[string]string{"chat_id": t.ChatID, "caption": clipRunes(img.Caption, 1000)}, "photo", img.Name+".png", img.PNG, nil); err != nil {
+			return fmt.Errorf("photo: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -124,6 +142,25 @@ type Stdout struct{}
 func (Stdout) Name() string { return "stdout" }
 func (Stdout) Send(_ context.Context, m Message) error {
 	fmt.Println(m.body())
+	// Dry runs leave no trace in the data directory: previews go to the
+	// system temp directory.
+	if len(m.Images) > 0 || m.HTML != "" {
+		dir := filepath.Join(os.TempDir(), "flarehound-preview")
+		_ = os.MkdirAll(dir, 0o755)
+		stamp := time.Now().Format("150405")
+		for _, img := range m.Images {
+			p := filepath.Join(dir, fmt.Sprintf("%s-%s-%s.png", stamp, safeName(m.Zone), safeName(img.Name)))
+			if os.WriteFile(p, img.PNG, 0o644) == nil {
+				fmt.Printf("[chart: %s — %s]\n", img.Caption, p)
+			}
+		}
+		if m.HTML != "" {
+			p := filepath.Join(dir, fmt.Sprintf("%s-%s-%s.html", stamp, safeName(m.Zone), m.Kind))
+			if os.WriteFile(p, []byte(previewHTML(m)), 0o644) == nil {
+				fmt.Printf("[html: %s]\n", p)
+			}
+		}
+	}
 	fmt.Println(strings.Repeat("-", 40))
 	return nil
 }
@@ -140,7 +177,19 @@ func (f File) Send(_ context.Context, m Message) error {
 		TS     time.Time `json:"ts"`
 		Source string    `json:"source"`
 		Message
-	}{time.Now().UTC(), "flarehound", m}
+		ImagePaths []string `json:"images,omitempty"` // charts saved next to the file
+	}{TS: time.Now().UTC(), Source: "flarehound", Message: m}
+	if len(m.Images) > 0 {
+		dir := filepath.Join(filepath.Dir(f.Path), "charts")
+		if err := os.MkdirAll(dir, 0o755); err == nil {
+			for _, img := range m.Images {
+				p := filepath.Join(dir, fmt.Sprintf("%s-%s-%s.png", rec.TS.Format("20060102-150405"), safeName(m.Zone), safeName(img.Name)))
+				if os.WriteFile(p, img.PNG, 0o644) == nil {
+					rec.ImagePaths = append(rec.ImagePaths, p)
+				}
+			}
+		}
+	}
 	raw, err := json.Marshal(rec)
 	if err != nil {
 		return err
@@ -319,4 +368,28 @@ func (d *Dispatcher) save(q []pending) error {
 		return err
 	}
 	return os.Rename(tmp, d.Outbox)
+}
+
+// safeName keeps letters, digits, dots and dashes for file names.
+func safeName(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '-') {
+			b[i] = '-'
+		}
+	}
+	if len(b) == 0 {
+		return "x"
+	}
+	return string(b)
+}
+
+// previewHTML swaps cid: image references for data URIs, so a saved
+// email preview opens in a browser with its charts.
+func previewHTML(m Message) string {
+	h := m.HTML
+	for _, img := range m.Images {
+		h = strings.ReplaceAll(h, "cid:"+img.Name, "data:image/png;base64,"+base64.StdEncoding.EncodeToString(img.PNG))
+	}
+	return h
 }

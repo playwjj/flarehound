@@ -160,7 +160,7 @@ func TestClassify(t *testing.T) {
 		want Network
 	}{
 		{16509, "", Hosting}, {4134, "", Eyeball}, {1, "", Unknown},
-		{2, "COMCAST-7922", Eyeball}, {3, "Colombia Movil", Eyeball}, {4, "Some Cloud Hosting Ltd", Hosting},
+		{2, "COMCAST-7922", Eyeball}, {3, "Colombia Movil", Eyeball}, {4, "Some Cloud Hosting Ltd", Hosting}, {150436, "", Hosting}, {5, "Byteplus Pte. Ltd.", Hosting},
 	} {
 		if got := Classify(c.asn, c.name); got != c.want {
 			t.Errorf("Classify(%d,%q) = %s, want %s", c.asn, c.name, got, c.want)

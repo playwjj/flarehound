@@ -44,7 +44,7 @@
     "asns": [],
     "user_agents": []
   },
-  "report": { "language": "en" },
+  "report": { "language": "en", "visuals": true },
   "rule_names": {},
   "waf_audit": {
     "disabled": false,

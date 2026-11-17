@@ -160,6 +160,9 @@ type Config struct {
 	RuleNames map[string]string `json:"rule_names"`
 	Report    struct {
 		Language string `json:"language"` // "en" | "zh"
+		// Visuals attaches charts (Telegram, Discord, WeCom, email, JSONL)
+		// and sends email as HTML. Default true.
+		Visuals bool `json:"visuals"`
 	} `json:"report"`
 	Notify    Notify `json:"notify"`
 	StateFile string `json:"state_file"`
@@ -216,6 +219,7 @@ func Load(path string) (*Config, error) {
 	c.Schedule.SettleDelay = "3m"
 	c.Schedule.DailyReportAt = "08:00"
 	c.Report.Language = "en"
+	c.Report.Visuals = true
 	c.StateFile = "data/state.json"
 	if err := json.Unmarshal(raw, &c); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)

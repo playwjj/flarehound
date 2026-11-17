@@ -38,6 +38,7 @@ type API interface {
 	MitigatedIPs(ctx context.Context, zoneID string, from, to time.Time, limit int) ([]cfapi.Face, error)
 	RuleHits(ctx context.Context, zoneID string, from, to time.Time) (map[string]int64, error)
 	DashboardDay(ctx context.Context, zoneID string, date time.Time) (cfapi.Dashboard, error)
+	Hourly(ctx context.Context, zoneID string, from, to time.Time, f cfapi.Filter) (map[time.Time]int64, error)
 	Sampling(ctx context.Context, zoneID string, from, to time.Time) (int64, float64, error)
 	WorkerStats(ctx context.Context, accountID, script string, from, to time.Time) (int64, float64, error)
 }
@@ -549,7 +550,8 @@ func (r *Runner) Intraday(ctx context.Context, zone config.Zone) error {
 
 	ex := r.archiveRound(ctx, zone, w, bw, cur, base)
 
-	var text string
+	var text, htmlBody string
+	var imgs []notify.Image
 	var sev analyze.Severity
 	if decision.Notify() {
 		if decision != state.DecRecovered {
@@ -565,13 +567,28 @@ func (r *Runner) Intraday(ctx context.Context, zone config.Zone) error {
 				Sensitive: sensitive(cfg), MinCount: th.MinCount})
 		}
 		sev = analyze.Assess(cur, base, findings)
-		text = report.Intraday(cfg.Report.Language, report.IntradayData{
+		data := report.IntradayData{
 			Severity: sev, DashRatio: r.dashRatio(zone),
 			Zone: zone.Name, Window: w, Loc: cfg.Location, Decision: decision,
 			Cur: cur, Base: base, Findings: findings, Attr: attr,
 			Hypotheses: hyps, Block: advice, Suggestions: sugs,
 			Since: firstAlert, Long: long, LongN: longN,
-		})
+		}
+		text = report.Intraday(cfg.Report.Language, data)
+		// Real rendering gets its own chart when it is part of the story:
+		// it crossed a line, or the verdict is "absorbed at the edge" and
+		// the flat orange line is the proof.
+		withDyn := sev.Level == analyze.SevLow
+		for _, f := range findings {
+			if f.Rule == analyze.RuleDynamicUp || f.Rule == analyze.RuleCPUUp {
+				withDyn = true
+			}
+		}
+		var cs []report.Chart
+		imgs, cs = r.charts(ctx, zone, w.To, int(w.To.Sub(w.From)/time.Hour), withDyn)
+		if cfg.Report.Visuals {
+			htmlBody = report.IntradayHTML(cfg.Report.Language, data, text, cs)
+		}
 		if r.Store != nil && !r.DryRun {
 			if err := r.Store.RecordAlert(zone.ZoneID, w.To, decision.String(), st.Fingerprint, findings); err != nil {
 				log.Printf("zone %s: archive alert: %v", zone.Name, err)
@@ -594,7 +611,8 @@ func (r *Runner) Intraday(ctx context.Context, zone config.Zone) error {
 	}
 	log.Printf("zone %s: %s decision=%s findings=%d", zone.Name, w, decision, len(findings))
 	return r.Sender.Send(ctx, notify.Message{Kind: "intraday", Zone: zone.Name, Decision: decision.String(),
-		WindowFrom: w.From, WindowTo: w.To, Rules: keys(findings), Severity: sev.Level, Text: text})
+		WindowFrom: w.From, WindowTo: w.To, Rules: keys(findings), Severity: sev.Level, Text: text,
+		HTML: htmlBody, Images: imgs})
 }
 
 // Daily builds and sends the daily report (SPEC 7.1 / 7.4): the last
@@ -742,9 +760,14 @@ func (r *Runner) Daily(ctx context.Context, zone config.Zone) error {
 	}
 	d.Firewall = r.labelRules(zone, d.Firewall)
 	text := report.Daily(cfg.Report.Language, d)
+	imgs, cs := r.charts(ctx, zone, w.To, 0, true)
+	htmlBody := ""
+	if cfg.Report.Visuals {
+		htmlBody = report.DailyHTML(cfg.Report.Language, d, text, cs)
+	}
 	log.Printf("zone %s: daily report %s (findings=%d)", zone.Name, w, len(d.Findings))
 	return r.Sender.Send(ctx, notify.Message{Kind: "daily", Zone: zone.Name,
-		WindowFrom: w.From, WindowTo: w.To, Rules: keys(d.Findings), Text: text})
+		WindowFrom: w.From, WindowTo: w.To, Rules: keys(d.Findings), Text: text, HTML: htmlBody, Images: imgs})
 }
 
 // keys lists the distinct signal keys of findings, in order.

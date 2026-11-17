@@ -127,6 +127,14 @@ func (f *fakeAPI) RuleHits(_ context.Context, _ string, from, _ time.Time) (map[
 	return map[string]int64{"r-login": 10}, nil
 }
 
+func (f *fakeAPI) Hourly(_ context.Context, _ string, from, to time.Time, _ cfapi.Filter) (map[time.Time]int64, error) {
+	out := map[time.Time]int64{}
+	for h := from; h.Before(to); h = h.Add(time.Hour) {
+		out[h] = 100_000 + int64(h.Hour())*1000
+	}
+	return out, nil
+}
+
 func (f *fakeAPI) DashboardDay(context.Context, string, time.Time) (cfapi.Dashboard, error) {
 	return cfapi.Dashboard{Requests: 75_000, Cached: 50_000, Edge5xx: 10}, nil
 }
@@ -165,6 +173,7 @@ func testConfig(t *testing.T) *config.Config {
 	cfg.Schedule.IntradayInterval, cfg.Schedule.IntradayOffset, cfg.Schedule.SettleDelay = "1h", "7m", "3m"
 	cfg.Schedule.DailyReportAt = "08:00"
 	cfg.Report.Language = "en"
+	cfg.Report.Visuals = true
 	return cfg
 }
 
@@ -808,5 +817,34 @@ func TestFirstAlertLabelsRules(t *testing.T) {
 	}
 	if !strings.Contains(out.msgs[0], "firewallCustom:challenge login (r-login)") {
 		t.Fatalf("first alert not labelled:\n%s", out.msgs[0])
+	}
+}
+
+func TestMessagesCarryVisuals(t *testing.T) {
+	cfg := testConfig(t)
+	api := &fakeAPI{windows: map[time.Time]*window{}, reads: map[time.Time]int{}}
+	from := time.Date(2026, 11, 17, 8, 0, 0, 0, time.UTC)
+	api.windows[from.Add(-24*time.Hour)] = normal()
+	api.windows[from] = surge()
+	out := &sink{}
+	r := &Runner{API: api, Cfg: cfg, Sender: out, Now: func() time.Time { return from.Add(67 * time.Minute) }}
+	if err := r.Intraday(context.Background(), cfg.Cloudflare.Zones[0]); err != nil {
+		t.Fatal(err)
+	}
+	m := out.meta[0]
+	if len(m.Images) != 2 || m.Images[0].Name != "requests" || m.Images[1].Name != "dynamic" || len(m.Images[0].PNG) < 1000 {
+		t.Fatalf("images %d", len(m.Images))
+	}
+	if !strings.Contains(m.HTML, `src="cid:requests"`) || !strings.Contains(m.HTML, "Full report") {
+		t.Fatal("html missing chart or report")
+	}
+	cfg.Report.Visuals = false
+	out.meta = nil
+	cfg.StateFile = filepath.Join(t.TempDir(), "s.json")
+	if err := r.Intraday(context.Background(), cfg.Cloudflare.Zones[0]); err != nil {
+		t.Fatal(err)
+	}
+	if m := out.meta[0]; m.HTML != "" || len(m.Images) != 0 {
+		t.Fatal("visuals off must send text only")
 	}
 }

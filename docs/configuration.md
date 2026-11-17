@@ -94,6 +94,8 @@ Sources that never count as new faces.
 |---|---|---|---|
 | `report.language` | string | `"en"` | `"en"` or `"zh"` (Chinese). |
 
+`report.visuals` (bool, default `true`): attach charts and send email as HTML — see [charts and HTML](channels.md#charts-and-html-reportvisuals-default-on).
+
 ## notify
 
 All channels are optional and can be combined; with none configured, findings appear only in the log. Details per channel: [Notification channels](channels.md).

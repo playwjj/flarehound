@@ -85,6 +85,22 @@ Record fields:
 | `delayed` | `true` when re-sent from the outbox (omitted otherwise) |
 | `text` | The rendered message |
 
+### Charts and HTML (`report.visuals`, default on)
+
+Alerts and daily reports come with charts — requests per hour over the last 24 hours against the day before, with the alert's hour shaded, plus real rendering (`dynamic`) per hour when it is part of the story (a dynamic or CPU line crossed, or a low-severity edge-absorbed flood, where the flat line is the proof). Charts are drawn in Go on your machine; nothing is uploaded anywhere.
+
+| Channel | What it gets |
+|---|---|
+| Email | An HTML message (multipart with a plain-text alternative): verdict, metric tiles, inline charts, the cost split as a bar, top paths / ASNs / user agents, then the full text report. |
+| Telegram | The text, then each chart as a photo with a caption |
+| Discord | The text, then each chart as a file |
+| WeCom | The text, then each chart as an image message (≤ 2 MB) |
+| JSONL file | Charts saved next to the file in `charts/`, their paths in the record's `images` field |
+| Slack, Feishu, generic webhook | Text only (their webhook bots cannot post images) |
+| `-dry-run` | Charts and the HTML saved to the system temp directory (`flarehound-preview/`) with their paths printed |
+
+Messages re-sent from the outbox go out as text. Set `report.visuals: false` for text only everywhere.
+
 ### Heartbeat (dead-man switch)
 
 A dead watchdog and a quiet site look the same from outside. So every hourly round — anomaly or not — FlareHound proves it is alive:

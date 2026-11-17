@@ -2,6 +2,11 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.2.0 — 2026-11-17
+
+- **Charts and HTML email** (`report.visuals`, default on). Requests per hour, last 24 h vs the day before, with the alert's hour shaded; a real-rendering (`dynamic`) chart when it matters. Drawn in pure Go on your machine, nothing uploaded. Email becomes HTML (plain-text alternative, inline charts, metric tiles, cost bar, top lists); Telegram, Discord and WeCom receive the charts as images; the JSONL channel saves them as files; `-dry-run` writes previews to the temp directory.
+- ByteDance/BytePlus and other cloud providers recognised as hosting networks.
+
 ## v1.1.0 — 2026-11-17
 
 From the first days on a production Pro zone.
