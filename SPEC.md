@@ -1,8 +1,8 @@
 # FlareHound 规格说明书（SPEC）
 
-- 版本：0.6（v0.2 每日报告、v0.3 日内看守、v0.4 建议引擎与本地归档、v0.5 一键封锁、v0.6 WAF 规则体检落地）
+- 版本：0.7（v0.2 每日报告、v0.3 日内看守、v0.4 建议引擎与本地归档、v0.5 一键封锁、v0.6 WAF 规则体检、v0.7 通用执行模块落地）
 - 日期：2026-11-17
-- 状态：v0.6 已实现（Free zone 实测），v0.7 通用执行模块待开发
+- 状态：v0.7 已实现（Free zone 实测），v0.8 通知渠道补齐 / 多 zone 并行待开发
 - 许可证：MIT
 
 > 英文说明见 [README.md](README.md)。本文档是给贡献者与维护者看的完整规格，定义产品边界、数据口径、检测规则与路线图。实现与本文冲突时，先改本文再改代码。
@@ -285,7 +285,7 @@
   - Account 级：Account Analytics Read（可选，仅在配置了 `workers` 时需要——`workersInvocationsAdaptive` 是账户级数据集）。
   - （v0.5.2 依代码调用点复核后收窄：旧版列出的 Logs Read、Zone Read、Workers Scripts Read 无任何代码路径使用；Zone Read 只在写 Token 侧用于读取套餐。用户反馈 + 代码核对，最小 Token 的实测待补。）
   - Zone 级（WAF 体检，第 10 节）：WAF Read（必需，读取自定义规则集）；Zone Read（可选，套餐额度对照）；Firewall Services Read（可选，IP 访问规则放行项）。
-- **写 Token**（仅封锁模块，第 13 节）：Account 级 Account Filter Lists Edit（IP 名单）；Zone 级 WAF Edit（自定义规则，Rulesets API）、Firewall Services Edit（IP 访问规则兜底）、DNS Read（读取源站 IP 作护栏）、Zone Read（读取套餐以判断规则额度）。
+- **写 Token**（封锁模块与执行模块，第 13 节；执行模块的缓存规则另需 Zone → Cache Rules: Edit）：Account 级 Account Filter Lists Edit（IP 名单）；Zone 级 WAF Edit（自定义规则，Rulesets API）、Firewall Services Edit（IP 访问规则兜底）、DNS Read（读取源站 IP 作护栏）、Zone Read（读取套餐以判断规则额度）。
   （以实际授权结果为准，README 中给出创建步骤与逐项说明。）
 - Token 只从环境变量（如 `CF_API_TOKEN`）读取；禁止写入配置文件与日志；日志中出现 Token 特征串必须脱敏。实现：全部日志经脱敏写入器，已加载的密钥值、`Bearer …` 串与 Telegram `/bot<token>` 段一律替换为 `[REDACTED]`。
 - Webhook URL 本身常含密钥（如 Slack / 飞书机器人地址），应经 `notify.webhook_url_env` 从环境变量读取；`webhook_url` 明文字段仅为兼容保留。
@@ -347,6 +347,18 @@
 
 执行模块不改变第 3 节只读原则在巡检侧的效力：异常检测、归因与建议的产出过程始终只读。
 
+**v0.7 实现口径**：
+
+- **范围**：三个阶段——自定义规则（`http_request_firewall_custom`）、限速规则（`http_ratelimit`）、缓存规则（`http_request_cache_settings`）。操作：新增（可指定插在某条规则之前）、编辑（表达式 / 动作 / 描述 / 启用）、删除、移位、回滚。建议引擎的三类候选直接对应命令，告警中附带：挑战敏感路径 → `rules add`；限速 → `ratelimit add`（默认按 IP、20 次 / 10 秒、Managed Challenge）；缓存 → `cache add`（边缘 TTL 默认 1 天）。
+- **写 Token**：沿用封锁模块的独立写 Token（`CF_WRITE_TOKEN`，看守进程不读）。自定义 / 限速规则需 Zone → WAF: Edit；缓存规则另需 Zone → Cache Rules: Edit；读不到某阶段时报错并点名所缺权限。
+- **逐项确认**：每条变更先展示完整内容——新增展示全部字段与插入位置，编辑逐字段展示「旧 → 新」，删除展示被删规则全文，移位展示位次变化，回滚逐条列出将回来 / 被移除 / 被改回 / 换位的规则——再 y/N 确认。**不提供 `--yes`**（传入即拒绝），不设批量模式。
+- **护栏**：表达式提交前先经第 10 节的解析器校验，解析不了的不发往 Cloudflare；按套餐与阶段检查额度（自定义 5 / 20 / 100 / 1,000；限速 1 / 2 / 5 / 100；缓存 10 / 25 / 50 / 300），已满则拒绝；Free 套餐限速周期与封禁时长只能为 10 秒；FlareHound 封锁模块的自有规则（`flarehound-` 前缀）拒绝经执行模块修改，只能用 block / unblock。新增规则带 `fhx-` 前缀的 ref，用于回读定位。
+- **改前备份**：每次变更前把整个阶段的规则按 Cloudflare 原样返回的 JSON 存档——归档库一份（`rule_backups`）、数据目录 `backups/<zone>/<阶段>-<时间>-v<版本>.json` 一份（权限 0600，便于人工查看）。规则以原始 JSON 处理，编辑 / 回滚不丢失工具不认识的字段（skip 参数、限速参数、logging 等）。
+- **回读验证**：变更后重读该阶段，按 ref / id 定位，逐字段核对本次设置的字段（服务端追加的默认字段允许存在）与位次；删除核对已消失；回滚核对规则数、顺序与每条字段。不一致即报错，并给出 `flarehound rules restore <备份号>`。
+- **观察窗口**：`--observe 5m` 在变更后观察该规则的防火墙事件并报告次数；零次只提示「可能尚无匹配流量或尚未入库」，不判失败；无防火墙数据集时跳过并说明。
+- **审计日志**：`rule_changes` 表只追加，每次执行记录时间、阶段、操作、规则、变更前后 JSON、备份号、是否核对通过及详情（含 API 拒绝与回读失败）；`flarehound rules log` 查看。
+- **回滚**：`flarehound rules restore <备份号>` 以整阶段替换恢复到该快照（先为当前状态再做一次备份，故回滚本身可撤销），同样逐项确认与回读验证。已知代价：整阶段替换会为规则分配新 ID（ref 保留），按 ID 的命中历史从头计；确认前明示。
+
 ## 14. 配置设计
 
 配置文件为 JSON（标准库可解析，零依赖），示例见仓库 `config.example.json`。要点：
@@ -377,7 +389,7 @@
 | v0.4 ✅ | 建议引擎（封禁/挑战/限速/缓存四类候选）；本地 SQLite 归档（小时 / 日快照、长基线、新面孔历史、报警历史、回填） |
 | v0.5 ✅ | 一键封锁（IP / 网段 / ASN / 国家 / UA：告警内直接封、CLI、TTL 临时封锁、护栏与审计） |
 | v0.6 ✅ | WAF 规则体检（覆盖缺口 / 顺序与冗余 / 命中统计 / 豁免面审计） |
-| v0.7 | 通用执行模块（任意规则变更：独立写 Token、逐项确认、改前备份、回读验证） |
+| v0.7 ✅ | 通用执行模块（任意规则变更：独立写 Token、逐项确认、改前备份、回读验证） |
 | v0.8 | 通知渠道补齐（Slack/Discord/邮件）；多 zone 并行 |
 | v1.0 | 口径校准工具（与面板数字对照）、文档站、首个正式版 |
 | 远期 | Cloudflare Workers 部署适配（Cron Triggers + D1 状态）评估；成本估算模块（按 Workers 计费口径估算异常烧掉的钱）；AI 解释层（可选，见第 17 节） |

@@ -254,6 +254,9 @@ func Command(t Target, a Action, ttl, reason string) string {
 	return s
 }
 
+// ShellQuote quotes s for a POSIX shell when needed.
+func ShellQuote(s string) string { return quoteArg(s) }
+
 func quoteArg(s string) string {
 	if s == "" || strings.ContainsAny(s, " \t\"'$`\\;&|<>()*?![]{}#~") {
 		return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"

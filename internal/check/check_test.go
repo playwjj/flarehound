@@ -195,7 +195,8 @@ func TestIncidentReplay(t *testing.T) {
 	t.Logf("alert:\n%s", alert)
 	for _, want := range []string{"anomaly", "Worker web calls", "AS207990", "Hypotheses", "per-IP blocking will not help", "/rank",
 		"Block AS207990 (EXAMPLE-HOSTING-AS, hosting network)", "(ip.geoip.asnum in {207990}) and not cf.client.bot", "Rate-limit /rank", "rollback:",
-		"one-click: flarehound block asn 207990 --action block --for 24h"} {
+		"one-click: flarehound block asn 207990 --action block --for 24h",
+		"one-click: flarehound ratelimit add --path /rank --requests 20 --period 10"} {
 		if !strings.Contains(alert, want) {
 			t.Errorf("alert lacks %q:\n%s", want, alert)
 		}

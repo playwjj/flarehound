@@ -417,3 +417,92 @@ func (c *REST) DeleteAccessRule(ctx context.Context, zoneID, id string) error {
 	_, err := c.do(ctx, http.MethodDelete, fmt.Sprintf("/zones/%s/firewall/access_rules/rules/%s", url.PathEscape(zoneID), url.PathEscape(id)), nil, nil)
 	return err
 }
+
+// ---- raw rulesets (general execution module, SPEC 13.2) ----
+//
+// The execution module works on rules as raw JSON objects so that a
+// backup → restore round trip preserves every field Cloudflare returns
+// (action parameters, rate-limit settings, logging …), including fields
+// this program does not know about.
+
+// Phase entrypoints the execution module manages.
+const (
+	PhaseRateLimit = "http_ratelimit"
+	PhaseCache     = "http_request_cache_settings"
+)
+
+// RawRuleset is a phase entrypoint with its rules as raw objects.
+type RawRuleset struct {
+	ID      string           `json:"id"`
+	Version string           `json:"version"`
+	Rules   []map[string]any `json:"rules"`
+}
+
+// Writable strips the server-managed fields from a rule for a write.
+func Writable(rule map[string]any) map[string]any {
+	out := make(map[string]any, len(rule))
+	for k, v := range rule {
+		switch k {
+		case "id", "version", "last_updated", "position":
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+func phasePath(zoneID, phase string) string {
+	return "/zones/" + url.PathEscape(zoneID) + "/rulesets/phases/" + url.PathEscape(phase) + "/entrypoint"
+}
+
+// PhaseRuleset reads a phase entrypoint; found is false if there is none.
+func (c *REST) PhaseRuleset(ctx context.Context, zoneID, phase string) (rs RawRuleset, found bool, err error) {
+	_, err = c.do(ctx, http.MethodGet, phasePath(zoneID, phase), nil, &rs)
+	if IsNotFound(err) {
+		return RawRuleset{}, false, nil
+	}
+	return rs, err == nil, err
+}
+
+// PutPhaseRules replaces a phase entrypoint's rules (creating the
+// entrypoint if needed). Used to create a first rule and to restore a
+// backup — never to edit one rule among the user's.
+func (c *REST) PutPhaseRules(ctx context.Context, zoneID, phase string, rules []map[string]any) (RawRuleset, error) {
+	ws := make([]map[string]any, len(rules))
+	for i, r := range rules {
+		ws[i] = Writable(r)
+	}
+	var rs RawRuleset
+	_, err := c.do(ctx, http.MethodPut, phasePath(zoneID, phase), map[string]any{"rules": ws}, &rs)
+	return rs, err
+}
+
+// AddRuleRaw adds one rule; position may be nil (append) or e.g.
+// {"before": "<rule id>"}.
+func (c *REST) AddRuleRaw(ctx context.Context, zoneID, rulesetID string, rule map[string]any, position map[string]any) (RawRuleset, error) {
+	body := Writable(rule)
+	if position != nil {
+		body["position"] = position
+	}
+	var rs RawRuleset
+	_, err := c.do(ctx, http.MethodPost, fmt.Sprintf("/zones/%s/rulesets/%s/rules", url.PathEscape(zoneID), url.PathEscape(rulesetID)), body, &rs)
+	return rs, err
+}
+
+// UpdateRuleRaw replaces one rule in place, optionally moving it.
+func (c *REST) UpdateRuleRaw(ctx context.Context, zoneID, rulesetID, ruleID string, rule map[string]any, position map[string]any) (RawRuleset, error) {
+	body := Writable(rule)
+	if position != nil {
+		body["position"] = position
+	}
+	var rs RawRuleset
+	_, err := c.do(ctx, http.MethodPatch, fmt.Sprintf("/zones/%s/rulesets/%s/rules/%s", url.PathEscape(zoneID), url.PathEscape(rulesetID), url.PathEscape(ruleID)), body, &rs)
+	return rs, err
+}
+
+// DeleteRuleRaw deletes one rule.
+func (c *REST) DeleteRuleRaw(ctx context.Context, zoneID, rulesetID, ruleID string) (RawRuleset, error) {
+	var rs RawRuleset
+	_, err := c.do(ctx, http.MethodDelete, fmt.Sprintf("/zones/%s/rulesets/%s/rules/%s", url.PathEscape(zoneID), url.PathEscape(rulesetID), url.PathEscape(ruleID)), nil, &rs)
+	return rs, err
+}

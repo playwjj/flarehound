@@ -4,7 +4,7 @@
 
 Cloudflare gives you data. FlareHound gives you the conclusion.
 
-> Status: **v0.6** — hourly watch, daily report, suggestion engine, local archive, one-click blocking and the WAF rule audit are complete. The detection model, thresholds and alert discipline are ported from a real incident response (a residential-proxy crawler flood, 2026-11-17). Next up: one-click blocking (v0.5). See [SPEC.md](SPEC.md) (in Chinese) for the full design.
+> Status: **v0.7** — hourly watch, daily report, suggestion engine, local archive, one-click blocking, the WAF rule audit and the rule execution module are complete. The detection model, thresholds and alert discipline are ported from a real incident response (a residential-proxy crawler flood, 2026-11-17). Next up: one-click blocking (v0.5). See [SPEC.md](SPEC.md) (in Chinese) for the full design.
 
 ## Why
 
@@ -95,7 +95,7 @@ Optional add-ons — grant only when you enable the feature:
 - **Worker metrics** (`workers` listed in the config): add **Account** → **Account Analytics: Read**.
 
 - **WAF rule audit** (v0.6): add **Zone** → **WAF: Read** to the same token (optionally **Zone: Read** for the quota check and **Firewall Services: Read** to see IP Access Rule allow-lists).
-- **One-click blocking** (v0.5): create a *separate* write token — **Account** → **Account Filter Lists: Edit**; **Zone** → **WAF: Edit**, **Firewall Services: Edit**, **DNS: Read**, **Zone: Read**. Put it in `CF_WRITE_TOKEN`. Never merge it into the read token; the watchdog process never holds it.
+- **One-click blocking** (v0.5) and **rule changes** (v0.7): create a *separate* write token — **Account** → **Account Filter Lists: Edit**; **Zone** → **WAF: Edit**, **Firewall Services: Edit**, **DNS: Read**, **Zone: Read** (+ **Cache Rules: Edit** for cache rules). Put it in `CF_WRITE_TOKEN`. Never merge it into the read token; the watchdog process never holds it.
 
 The watchdog makes GraphQL Analytics calls only (`api.cloudflare.com/client/v4/graphql`), which is why Analytics: Read is enough; older versions of this README also asked for Logs, Zone and Workers Scripts read access, which no code path uses. (This minimum is derived from the code's call sites; a quick check with your own token: create one with only Zone → Analytics: Read and run `flarehound -once -dry-run`.) The audit will additionally read rulesets through the REST API on the same host. Your token never leaves your machine and is never written to disk or logs by the program.
 
@@ -116,6 +116,25 @@ flarehound enforce           # long-running: lifts blocks whose --for has passed
 Before anything changes you see the exact plan — the rule it edits and the expression afterwards, the custom-rule quota, the target's measured share of the last hour's excess, and every warning — and confirm once. FlareHound only ever edits its own objects (rules named `flarehound-…`, the IP list `flarehound_block`), merges each target type into one rule so your quota is barely touched, keeps verified search bots allowed on ASN and country rules, and reads the result back to verify. It refuses to block Cloudflare's ranges, your origin IPs (from DNS), private ranges and anything on your `blocking.never_block` list. Blocking a residential/backbone ASN or a whole country requires retyping the ASN or country code. Every action lands in an append-only audit log, and the daily report lists each block's attempts — lift a block when the attempts stop, not when it gets quiet.
 
 In Docker: `docker compose --profile admin up -d` starts the enforcer with the write token, and `docker compose run --rm flarehound-admin block …` runs commands.
+
+## Applying rule changes
+
+Suggestions that are rule changes come with the command that applies them, and you can manage custom, rate-limit and cache rules directly:
+
+```bash
+flarehound rules list [--phase custom|ratelimit|cache]
+flarehound rules add --action managed_challenge --expr 'starts_with(http.request.uri.path, "/login")' --desc "challenge login" [--before 1]
+flarehound rules edit 3 --enabled false
+flarehound rules move 3 --before 1        # or --last
+flarehound rules delete 3
+flarehound ratelimit add --path '/rank' --requests 20 --period 10
+flarehound cache add --path '/assets/*' --ttl 1d
+flarehound rules backups                   # snapshots taken before each change
+flarehound rules restore 12                # put a phase back as it was
+flarehound rules log                       # who changed what, verified or not
+```
+
+Every change is shown in full (field-by-field old → new for edits), confirmed by you — there is deliberately no `--yes` — backed up first (to the archive and to `data/backups/<zone>/*.json`), read back and compared field by field and by position, and appended to an audit log. Expressions are syntax-checked locally before they are sent; quotas are checked per plan; rules owned by the blocking module are off limits. Cache rules additionally need **Zone → Cache Rules: Edit** on the write token.
 
 ## WAF rule audit
 
@@ -163,7 +182,7 @@ The primary form factor is a single Go binary in a Docker container, running on 
 - ~~v0.4~~ — suggestion engine (block / challenge / rate-limit / cache candidates) + local SQLite archive ✅
 - ~~v0.5~~ — one-click blocking (IP / CIDR / ASN / country / user-agent — block from an alert or the CLI, expiring blocks, guard rails, audit log) ✅
 - ~~v0.6~~ — WAF rule audit (coverage gaps on sensitive paths, ordering/redundancy issues, per-rule hit stats, over-broad exemptions) ✅
-- **v0.7** — general action module (execute approved suggestions with a separate write token, pre-change backup, read-back verification)
+- ~~v0.7~~ — general action module (execute approved suggestions with a separate write token, pre-change backup, read-back verification) ✅
 - **v0.8** — more notification channels, multi-zone
 - **v1.0** — calibration tooling against dashboard numbers, docs site
 

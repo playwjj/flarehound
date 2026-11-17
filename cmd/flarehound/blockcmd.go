@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/playwjj/flarehound/internal/config"
 	"github.com/playwjj/flarehound/internal/logx"
 	"github.com/playwjj/flarehound/internal/report"
+	"github.com/playwjj/flarehound/internal/ruleexec"
 	"github.com/playwjj/flarehound/internal/store"
 )
 
@@ -36,7 +38,8 @@ Common flags: -config PATH, --zone NAME|ID (required when several zones are conf
 `
 
 // subcommands lists the verbs main dispatches here.
-var subcommands = map[string]bool{"audit": true, "block": true, "unblock": true, "blocks": true, "enforce": true, "help": true}
+var subcommands = map[string]bool{"audit": true, "block": true, "unblock": true, "blocks": true, "enforce": true, "help": true,
+	"rules": true, "ratelimit": true, "cache": true}
 
 // splitArgs separates leading positionals from flags so flags may follow
 // the positionals ("block asn 207990 --for 24h").
@@ -86,7 +89,7 @@ func pickZone(cfg *config.Config, want string) (config.Zone, error) {
 
 func runSubcommand(ctx context.Context, cfgPath, verb string, args []string, redactor *logx.Redactor) int {
 	if verb == "help" {
-		fmt.Print(blockUsage)
+		fmt.Print(blockUsage + rulesUsage)
 		return 0
 	}
 	pos, rest := splitArgs(args)
@@ -100,6 +103,20 @@ func runSubcommand(ctx context.Context, cfgPath, verb string, args []string, red
 	confirm := fs.String("confirm", "", "pre-typed confirmation value for blocks that can hit real users")
 	skipOrigin := fs.Bool("skip-origin-check", false, "block an IP even if the DNS origin check cannot run")
 	days := fs.Int("days", 7, "attempt window for `blocks`")
+	var rf rulesFlags
+	fs.StringVar(&rf.phase, "phase", "", "rules: custom (default), ratelimit or cache")
+	fs.StringVar(&rf.expr, "expr", "", "rules: rule expression (Cloudflare rules language)")
+	fs.StringVar(&rf.desc, "desc", "", "rules: rule description")
+	fs.StringVar(&rf.before, "before", "", "rules: place before rule N|ID")
+	fs.BoolVar(&rf.last, "last", false, "rules move: move to the end")
+	fs.BoolVar(&rf.disabled, "disabled", false, "rules add: create disabled")
+	fs.StringVar(&rf.enabled, "enabled", "", "rules edit: true or false")
+	fs.StringVar(&rf.path, "path", "", "ratelimit/cache add: path pattern (* wildcard)")
+	fs.StringVar(&rf.ttl, "ttl", "", "cache add: edge TTL (e.g. 4h, 1d)")
+	fs.IntVar(&rf.requests, "requests", 20, "ratelimit add: requests per period per IP")
+	fs.IntVar(&rf.period, "period", 10, "ratelimit add: period in seconds")
+	fs.IntVar(&rf.timeout, "timeout", 10, "ratelimit add: mitigation timeout in seconds")
+	fs.DurationVar(&rf.observe, "observe", 0, "rules: watch the changed rule's firewall events for this long")
 	once := fs.Bool("once", false, "enforce: one pass, then exit")
 	interval := fs.Duration("interval", 5*time.Minute, "enforce: time between passes")
 	if err := fs.Parse(rest); err != nil {
@@ -172,6 +189,30 @@ func runSubcommand(ctx context.Context, cfgPath, verb string, args []string, red
 	}
 
 	switch verb {
+	case "rules", "ratelimit", "cache":
+		if *yes {
+			return fail(errors.New("rule changes have no --yes: every change is confirmed after you have seen it (SPEC 13.2)"))
+		}
+		if st == nil {
+			return fail(errors.New("the execution module needs the archive (backups and the audit log live there)"))
+		}
+		z, err := pickZone(cfg, *zoneArg)
+		if err != nil {
+			return fail(err)
+		}
+		rf.action = *action
+		x := &ruleexec.Executor{API: cfapi.NewREST(wt), Store: st, ZoneID: z.ZoneID, ZoneName: z.Name,
+			BackupDir: filepath.Join(cfg.DataDir(), "backups"), Actor: "cli"}
+		runner := &check.Runner{API: cfapi.New(cfg.APIToken), Cfg: cfg}
+		if err := rulesCommand(ctx, cfg, x, runner, z, verb, pos, rf, os.Stdin, os.Stdout); err != nil {
+			if errors.Is(err, errAborted) {
+				fmt.Println(err)
+				return 1
+			}
+			return fail(err)
+		}
+		return 0
+
 	case "block", "unblock":
 		if len(pos) != 2 {
 			fmt.Fprint(os.Stderr, blockUsage)

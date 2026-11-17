@@ -93,6 +93,30 @@ CREATE TABLE IF NOT EXISTS block_events (
 	actor      TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS block_events_target ON block_events (zone, type, value, id);
+CREATE TABLE IF NOT EXISTS rule_backups (
+	id       INTEGER PRIMARY KEY AUTOINCREMENT,
+	at       INTEGER NOT NULL,
+	zone     TEXT    NOT NULL,
+	phase    TEXT    NOT NULL,
+	version  TEXT    NOT NULL,
+	reason   TEXT    NOT NULL,
+	data     TEXT    NOT NULL, -- the phase's rules as Cloudflare returned them (JSON array)
+	file     TEXT    NOT NULL  -- the same snapshot as a JSON file, for humans
+);
+CREATE TABLE IF NOT EXISTS rule_changes (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	at         INTEGER NOT NULL,
+	zone       TEXT    NOT NULL,
+	phase      TEXT    NOT NULL,
+	op         TEXT    NOT NULL, -- add | edit | delete | move | restore
+	rule       TEXT    NOT NULL, -- rule id or ref
+	before     TEXT    NOT NULL, -- JSON
+	after      TEXT    NOT NULL, -- JSON
+	backup_id  INTEGER NOT NULL,
+	verified   INTEGER NOT NULL, -- 1: read-back matched
+	detail     TEXT    NOT NULL,
+	actor      TEXT    NOT NULL
+);
 `
 
 // Open opens (creating if needed) the archive at path.
@@ -381,4 +405,110 @@ func (s *Store) BlockHistory(zone string) ([]BlockEvent, error) {
 		return nil, err
 	}
 	return scanEvents(rows)
+}
+
+// RuleBackup is one pre-change snapshot of a phase ruleset (SPEC 13.2).
+type RuleBackup struct {
+	ID      int64
+	At      time.Time
+	Zone    string
+	Phase   string
+	Version string
+	Reason  string
+	Data    string // JSON array of raw rules
+	File    string
+}
+
+// AddRuleBackup stores a snapshot and returns its id.
+func (s *Store) AddRuleBackup(b RuleBackup) (int64, error) {
+	res, err := s.db.Exec(`INSERT INTO rule_backups (at, zone, phase, version, reason, data, file) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		b.At.Unix(), b.Zone, b.Phase, b.Version, b.Reason, b.Data, b.File)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// RuleBackup loads one snapshot.
+func (s *Store) RuleBackup(id int64) (RuleBackup, bool, error) {
+	var b RuleBackup
+	var at int64
+	err := s.db.QueryRow(`SELECT id, at, zone, phase, version, reason, data, file FROM rule_backups WHERE id = ?`, id).
+		Scan(&b.ID, &at, &b.Zone, &b.Phase, &b.Version, &b.Reason, &b.Data, &b.File)
+	if errors.Is(err, sql.ErrNoRows) {
+		return b, false, nil
+	}
+	b.At = time.Unix(at, 0).UTC()
+	return b, err == nil, err
+}
+
+// RuleBackups lists a zone's snapshots, newest first (data omitted).
+func (s *Store) RuleBackups(zone, phase string, limit int) ([]RuleBackup, error) {
+	rows, err := s.db.Query(`SELECT id, at, zone, phase, version, reason, file FROM rule_backups
+		WHERE zone = ? AND (? = '' OR phase = ?) ORDER BY id DESC LIMIT ?`, zone, phase, phase, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RuleBackup
+	for rows.Next() {
+		var b RuleBackup
+		var at int64
+		if err := rows.Scan(&b.ID, &at, &b.Zone, &b.Phase, &b.Version, &b.Reason, &b.File); err != nil {
+			return nil, err
+		}
+		b.At = time.Unix(at, 0).UTC()
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// RuleChange is one append-only execution record (SPEC 13.2).
+type RuleChange struct {
+	ID       int64
+	At       time.Time
+	Zone     string
+	Phase    string
+	Op       string
+	Rule     string
+	Before   string
+	After    string
+	BackupID int64
+	Verified bool
+	Detail   string
+	Actor    string
+}
+
+// AddRuleChange appends an execution record. There is no update.
+func (s *Store) AddRuleChange(c RuleChange) error {
+	v := 0
+	if c.Verified {
+		v = 1
+	}
+	_, err := s.db.Exec(`INSERT INTO rule_changes (at, zone, phase, op, rule, before, after, backup_id, verified, detail, actor)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		c.At.Unix(), c.Zone, c.Phase, c.Op, c.Rule, c.Before, c.After, c.BackupID, v, c.Detail, c.Actor)
+	return err
+}
+
+// RuleChanges returns a zone's execution log, newest first.
+func (s *Store) RuleChanges(zone string, limit int) ([]RuleChange, error) {
+	rows, err := s.db.Query(`SELECT id, at, zone, phase, op, rule, before, after, backup_id, verified, detail, actor
+		FROM rule_changes WHERE zone = ? ORDER BY id DESC LIMIT ?`, zone, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RuleChange
+	for rows.Next() {
+		var c RuleChange
+		var at int64
+		var v int
+		if err := rows.Scan(&c.ID, &at, &c.Zone, &c.Phase, &c.Op, &c.Rule, &c.Before, &c.After, &c.BackupID, &v, &c.Detail, &c.Actor); err != nil {
+			return nil, err
+		}
+		c.At, c.Verified = time.Unix(at, 0).UTC(), v == 1
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }

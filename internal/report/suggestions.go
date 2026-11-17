@@ -46,11 +46,19 @@ func (l lang) suggestions(b *strings.Builder, ss []suggest.Suggestion) {
 // which the attempts in the daily report decide whether to renew.
 func runCommand(s suggest.Suggestion) string {
 	t := block.Target{Type: block.ASN, Value: strconv.Itoa(s.ASN)}
+	q := block.ShellQuote
 	switch s.Kind {
 	case suggest.BlockASN:
 		return block.Command(t, block.Block, "24h", "")
 	case suggest.ChallengeASN:
 		return block.Command(t, block.Challenge, "24h", "")
+	case suggest.ChallengePath:
+		return fmt.Sprintf("flarehound rules add --action managed_challenge --expr %s --desc %s",
+			q(s.Expression), q("FlareHound: challenge "+s.Target))
+	case suggest.RateLimit:
+		return fmt.Sprintf("flarehound ratelimit add --path %s --requests %d --period %d", q(s.Target), s.RLRequests, s.RLPeriodSec)
+	case suggest.Cache:
+		return fmt.Sprintf("flarehound cache add --path %s --ttl 1d", q(s.Target))
 	}
 	return ""
 }
