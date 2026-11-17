@@ -120,7 +120,7 @@ func (l lang) finding(f analyze.Finding) string {
 		return fmt.Sprintf(l.t("Path rule %q ", "路径规则 %q "), f.Subject) + l.change(cur, base)
 	case analyze.RuleNewFaceUA:
 		return fmt.Sprintf(l.t("New user agent in Top 10: %q, %s requests (not in yesterday's Top 25)", "新面孔 UA 进入 Top 10：%q，%s 次（不在昨日 Top 25）"),
-			clip(f.Subject, 80), n(cur))
+			l.uaName(f.Subject, 80), n(cur))
 	case analyze.RuleNewFaceASN:
 		return fmt.Sprintf(l.t("New ASN in Top 10: %s, %s requests (not in yesterday's Top 25)", "新面孔 ASN 进入 Top 10：%s，%s 次（不在昨日 Top 25）"),
 			f.Subject, n(cur))
@@ -199,10 +199,12 @@ func (l lang) twoWindows(b *strings.Builder, cur, base analyze.Metrics, baseLabe
 }
 
 func (l lang) costLine(c analyze.Cost) string {
-	ex, ch := c.ExpCur-c.ExpBase, c.CheapCur-c.CheapBase
-	return fmt.Sprintf(l.t("expensive (Worker/origin) %s → %s (%s); cheap (edge cache) %s → %s (%s)",
-		"昂贵部分（Worker/回源）%s → %s（%s）；便宜部分（边缘缓存）%s → %s（%s）"),
-		n(c.ExpBase), n(c.ExpCur), signed(ex), n(c.CheapBase), n(c.CheapCur), signed(ch))
+	oc, ob := c.ExpCur-c.DynCur, c.ExpBase-c.DynBase
+	return fmt.Sprintf(l.t("real rendering (dynamic) %s → %s (%s); other cache misses (miss/bypass/expired…) %s → %s (%s); edge cache hits %s → %s (%s)",
+		"真实渲染（dynamic）%s → %s（%s）；其他未命中缓存（miss/bypass/expired 等）%s → %s（%s）；边缘缓存命中 %s → %s（%s）"),
+		n(c.DynBase), n(c.DynCur), l.pct(analyze.PctChange(float64(c.DynCur), float64(c.DynBase))),
+		n(ob), n(oc), l.pct(analyze.PctChange(float64(oc), float64(ob))),
+		n(c.CheapBase), n(c.CheapCur), l.pct(analyze.PctChange(float64(c.CheapCur), float64(c.CheapBase))))
 }
 
 func faceList(fs []cfapi.Face, max int) string {
@@ -330,17 +332,27 @@ func Intraday(language string, d IntradayData) string {
 		attr = append(attr, fmt.Sprintf(l.t("%s hits: %s", "%s 主要路径：%s"), clip(k, 60), faceList(a.FacePaths[k], 3)))
 	}
 	if a.FaceHistory != nil {
+		young := a.ArchiveDays < analyze.FaceHistoryMinDays
+		hasNew := false
 		for _, f := range d.Findings {
 			if f.Rule != analyze.RuleNewFaceUA && f.Rule != analyze.RuleNewFaceASN {
 				continue
 			}
+			hasNew = true
 			if h, ok := a.FaceHistory[f.Subject]; ok {
 				attr = append(attr, fmt.Sprintf(l.t("%s seen before: first %s, last %s, peak %s/window", "%s 曾出现过：首次 %s，最近 %s，峰值 %s/窗"),
 					clip(f.Subject, 60), h.First.In(locOr(d.Loc)).Format("2006-01-02 15:04"), h.Last.In(locOr(d.Loc)).Format("01-02 15:04"), n(h.MaxCount)))
-			} else {
+			} else if !young {
 				attr = append(attr, fmt.Sprintf(l.t("%s: never seen before in the archive", "%s：归档中首次出现"), clip(f.Subject, 60)))
 			}
 		}
+		if young && hasNew {
+			attr = append(attr, fmt.Sprintf(l.t("first-seen not judged: the archive covers only %d day(s) (needs %d; run -backfill 28 to fill it now)",
+				"不判断「首次出现」：归档仅覆盖 %d 天（需 %d 天；可用 -backfill 28 立即补齐）"), a.ArchiveDays, analyze.FaceHistoryMinDays))
+		}
+	}
+	for _, im := range a.Impostors {
+		attr = append(attr, l.impostor(im))
 	}
 	if len(a.TopIPs) > 0 {
 		attr = append(attr, l.t("top client IPs: ", "客户端 IP Top：")+faceList(a.TopIPs, 5))
@@ -349,7 +361,7 @@ func Intraday(language string, d IntradayData) string {
 		attr = append(attr, l.t("firewall events: ", "防火墙事件：")+faceList(a.Firewall, 5))
 	}
 	if len(a.VerifiedBots) > 0 {
-		attr = append(attr, l.t("verified crawlers excluded from new faces (UA matched ASN): ", "已验明正身的爬虫（UA 与 ASN 吻合），不计新面孔：")+strings.Join(a.VerifiedBots, ", "))
+		attr = append(attr, l.t("verified crawlers excluded from new faces: ", "已验明正身的爬虫，不计新面孔：")+strings.Join(a.VerifiedBots, ", "))
 	}
 	if len(a.Unsettled) > 0 {
 		attr = append(attr, l.t("withheld, data still arriving: ", "数据未落定、暂不报：")+strings.Join(a.Unsettled, ", "))
@@ -383,8 +395,21 @@ func Intraday(language string, d IntradayData) string {
 			}
 		}
 	} else if d.Block.Dispersed {
-		b.WriteString("\n" + l.t("Sources are dispersed (top IP < 1% of the excess): per-IP blocking will not help — act at ASN or path level (challenge).\n",
-			"来源高度分散（单 IP 份额 < 1%）：逐 IP 封锁无效，应在 ASN 或路径层面处置（挑战）。\n"))
+		b.WriteString("\n" + l.t("Sources are dispersed (top blockable IP < 1% of the excess): per-IP blocking will not help — act at ASN or path level (challenge).\n",
+			"来源高度分散（可封 IP 中最大份额 < 1%）：逐 IP 封锁无效，应在 ASN 或路径层面处置（挑战）。\n"))
+	}
+	if len(d.Block.Excluded) > 0 {
+		b.WriteString("\n" + l.t("Concentrated but NOT blockable:\n", "来源集中但不可封：\n"))
+		for _, c := range d.Block.Excluded {
+			if c.Cloudflare {
+				fmt.Fprintf(&b, l.t("- IP %s: %s requests, ~%s of the excess — Cloudflare's own address (%s). This is Worker egress: a Worker (yours, or another zone's) fetching this site. Find the calling Worker; blocking would cut off your own services.\n",
+					"- IP %s：%s 次，约占增量 %s——Cloudflare 自有地址（%s）。这是 Worker 出口：某个 Worker（你自己的或其他 zone 的）在调用本站。应去找调用方 Worker；封它会切断自家服务。\n"),
+					c.IP, n(c.Count), share(c.Share), c.Protected)
+			} else {
+				fmt.Fprintf(&b, l.t("- IP %s: %s requests, ~%s of the excess — protected: %s\n", "- IP %s：%s 次，约占增量 %s——受保护：%s\n"),
+					c.IP, n(c.Count), share(c.Share), c.Protected)
+			}
+		}
 	}
 	l.suggestions(&b, d.Suggestions)
 	return strings.TrimRight(b.String(), "\n")
@@ -436,11 +461,13 @@ type DailyData struct {
 	Cur, Base         analyze.Metrics
 	Findings          []analyze.Finding
 	VerifiedBots      []string
+	Impostors         []analyze.Impostor
 	Cost              *analyze.Cost
 	DynamicPaths      []analyze.PathDelta
 	Firewall          []cfapi.Face
 	FirewallNA        bool
 	NoASN             bool // plan exposes no ASN dimension
+	MitigatedIPs      []cfapi.Face
 	Checkpoints       []Checkpoint
 	Artifacts         []ArtifactCount
 	Suggestions       []suggest.Suggestion
@@ -495,10 +522,13 @@ func Daily(language string, d DailyData) string {
 		b.WriteString("\n" + l.t("ASN breakdown: not available on this plan (no clientAsn in analytics); new-ASN detection is off.\n",
 			"ASN 拆分：本套餐分析数据不提供 clientAsn，新面孔 ASN 检测已关闭。\n"))
 	}
-	l.faces(&b, l.t("Top ASNs", "ASN Top"), d.Cur.TopASN, d.Base.TopASN)
-	l.faces(&b, l.t("Top user agents", "UA Top"), d.Cur.TopUA, d.Base.TopUA)
+	l.faces(&b, l.t("Top ASNs", "ASN Top"), d.Cur.TopASN, d.Base.TopASN, false)
+	l.faces(&b, l.t("Top user agents", "UA Top"), d.Cur.TopUA, d.Base.TopUA, true)
 	if len(d.VerifiedBots) > 0 {
-		fmt.Fprintf(&b, "- %s%s\n", l.t("verified crawlers (UA matched ASN): ", "已验明正身的爬虫："), strings.Join(d.VerifiedBots, ", "))
+		fmt.Fprintf(&b, "- %s%s\n", l.t("verified crawlers: ", "已验明正身的爬虫："), strings.Join(d.VerifiedBots, ", "))
+	}
+	for _, im := range d.Impostors {
+		fmt.Fprintf(&b, "- %s\n", l.impostor(im))
 	}
 
 	b.WriteString("\n" + l.t("Checkpoints:\n", "固定检查点：\n"))
@@ -510,6 +540,13 @@ func Daily(language string, d DailyData) string {
 	default:
 		b.WriteString(l.t("- firewall events by rule (attempts — the basis for lifting a block):\n", "- 按规则的防火墙事件（尝试量——解封以尝试量为准）：\n"))
 		for _, f := range d.Firewall {
+			fmt.Fprintf(&b, "  %s: %s\n", f.Name, n(f.Count))
+		}
+	}
+	if len(d.MitigatedIPs) > 0 {
+		b.WriteString(l.t("- IPs most often blocked/challenged (all rules; are blocked IPs still knocking?):\n",
+			"- 被拦截 / 挑战最多的 IP（所有规则；被封的 IP 还在敲门吗）：\n"))
+		for _, f := range d.MitigatedIPs {
 			fmt.Fprintf(&b, "  %s: %s\n", f.Name, n(f.Count))
 		}
 	}
@@ -565,7 +602,27 @@ func Daily(language string, d DailyData) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func (l lang) faces(b *strings.Builder, title string, cur, base []cfapi.Face) {
+// impostor renders a failed crawler claim as its own line.
+func (l lang) impostor(im analyze.Impostor) string {
+	how := l.t("Cloudflare's verified-bot check", "Cloudflare 已验证机器人分类")
+	if im.Method == "asn" {
+		how = fmt.Sprintf(l.t("%s's own ASNs", "%s 官方 ASN"), im.Crawler)
+	}
+	return fmt.Sprintf(l.t("IMPOSTOR: %q claims to be %s, but only %s of its %s requests pass %s — a disguised scraper",
+		"冒充爬虫：%q 自称 %s，但其 %[4]s 次请求中仅 %[3]s 通过%[5]s——伪装的抓取器"),
+		clip(im.UA, 70), im.Crawler, share(im.Verified), n(im.Count), how)
+}
+
+// uaName renders a user agent; the empty UA (often the biggest bucket:
+// scripts and health checks) gets an explicit label instead of a blank.
+func (l lang) uaName(ua string, max int) string {
+	if ua == "" {
+		return l.t("(empty UA)", "(空 UA)")
+	}
+	return clip(ua, max)
+}
+
+func (l lang) faces(b *strings.Builder, title string, cur, base []cfapi.Face, ua bool) {
 	if len(cur) == 0 {
 		return
 	}
@@ -582,6 +639,10 @@ func (l lang) faces(b *strings.Builder, title string, cur, base []cfapi.Face) {
 		if !old[f.Name] {
 			tag = l.t(" [new]", " [新]")
 		}
-		fmt.Fprintf(b, "- %s %s%s\n", clip(f.Name, 70), n(f.Count), tag)
+		name := clip(f.Name, 70)
+		if ua {
+			name = l.uaName(f.Name, 70)
+		}
+		fmt.Fprintf(b, "- %s %s%s\n", name, n(f.Count), tag)
 	}
 }

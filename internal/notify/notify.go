@@ -22,8 +22,31 @@ import (
 	"time"
 )
 
+// Message is one notification: the rendered text plus the structured
+// facts a machine consumer (bridge, log pipeline) can route on.
+type Message struct {
+	Kind       string    `json:"kind"`               // "intraday" | "daily"
+	Zone       string    `json:"zone"`               // zone name
+	Decision   string    `json:"decision,omitempty"` // intraday: alert | changed | escalate | recovered
+	WindowFrom time.Time `json:"window_from"`
+	WindowTo   time.Time `json:"window_to"`
+	Rules      []string  `json:"rules,omitempty"` // signal keys that fired
+	Delayed    bool      `json:"delayed,omitempty"`
+	Text       string    `json:"text"`
+}
+
+// Plain wraps bare text (tests, ad-hoc messages).
+func Plain(text string) Message { return Message{Text: text} }
+
+func (m Message) body() string {
+	if m.Delayed {
+		return "[delayed] " + m.Text
+	}
+	return m.Text
+}
+
 type Notifier interface {
-	Send(ctx context.Context, text string) error
+	Send(ctx context.Context, m Message) error
 	Name() string
 }
 
@@ -56,12 +79,16 @@ func postJSON(ctx context.Context, endpoint string, payload any) error {
 	return nil
 }
 
-// Webhook posts {"text": "..."} to any endpoint that accepts JSON POSTs.
+// Webhook posts {"text": "...", "kind": ..., "zone": ..., ...} to any
+// endpoint that accepts JSON POSTs. "text" stays the primary field, so
+// receivers that only read it keep working.
 type Webhook struct{ URL string }
 
 func (w Webhook) Name() string { return "webhook" }
-func (w Webhook) Send(ctx context.Context, text string) error {
-	return postJSON(ctx, w.URL, map[string]string{"text": text})
+func (w Webhook) Send(ctx context.Context, m Message) error {
+	payload := m
+	payload.Text = m.body()
+	return postJSON(ctx, w.URL, payload)
 }
 
 // Telegram sends via a Bot API token (from the environment) and chat ID.
@@ -72,7 +99,8 @@ type Telegram struct {
 }
 
 func (t Telegram) Name() string { return "telegram" }
-func (t Telegram) Send(ctx context.Context, text string) error {
+func (t Telegram) Send(ctx context.Context, m Message) error {
+	text := m.body()
 	base := t.APIBase
 	if base == "" {
 		base = "https://api.telegram.org"
@@ -90,10 +118,41 @@ func (t Telegram) Send(ctx context.Context, text string) error {
 type Stdout struct{}
 
 func (Stdout) Name() string { return "stdout" }
-func (Stdout) Send(_ context.Context, text string) error {
-	fmt.Println(text)
+func (Stdout) Send(_ context.Context, m Message) error {
+	fmt.Println(m.body())
 	fmt.Println(strings.Repeat("-", 40))
 	return nil
+}
+
+// File appends one JSON object per message to a local JSONL file — the
+// channel for consumers that live next to FlareHound (a bridge that
+// tails the file into a chat, a log shipper). Lines are appended with
+// O_APPEND in a single write, so a reader never sees half a record.
+type File struct{ Path string }
+
+func (f File) Name() string { return "file" }
+func (f File) Send(_ context.Context, m Message) error {
+	rec := struct {
+		TS     time.Time `json:"ts"`
+		Source string    `json:"source"`
+		Message
+	}{time.Now().UTC(), "flarehound", m}
+	raw, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(f.Path), 0o755); err != nil {
+		return err
+	}
+	fh, err := os.OpenFile(f.Path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := fh.Write(append(raw, '\n')); err != nil {
+		fh.Close()
+		return err
+	}
+	return fh.Close()
 }
 
 // Retry wraps a notifier with bounded retries and backoff.
@@ -104,11 +163,11 @@ type Retry struct {
 }
 
 func (r Retry) Name() string { return r.N.Name() }
-func (r Retry) Send(ctx context.Context, text string) error {
+func (r Retry) Send(ctx context.Context, m Message) error {
 	attempts := max(r.Attempts, 1)
 	var err error
 	for i := 0; i < attempts; i++ {
-		if err = r.N.Send(ctx, text); err == nil {
+		if err = r.N.Send(ctx, m); err == nil {
 			return nil
 		}
 		if i < attempts-1 {
@@ -124,7 +183,8 @@ func (r Retry) Send(ctx context.Context, text string) error {
 
 type pending struct {
 	Channel string    `json:"channel"`
-	Text    string    `json:"text"`
+	Message Message   `json:"message"`
+	Text    string    `json:"text,omitempty"` // outbox files written before structured messages
 	Queued  time.Time `json:"queued"`
 }
 
@@ -147,15 +207,15 @@ func NewDispatcher(outbox string, channels ...Notifier) *Dispatcher {
 	return d
 }
 
-// Send delivers text everywhere; failures are queued, and the returned
-// error lists them.
-func (d *Dispatcher) Send(ctx context.Context, text string) error {
+// Send delivers a message everywhere; failures are queued, and the
+// returned error lists them.
+func (d *Dispatcher) Send(ctx context.Context, m Message) error {
 	var errs []error
 	var failed []pending
 	for _, c := range d.Channels {
-		if err := c.Send(ctx, text); err != nil {
+		if err := c.Send(ctx, m); err != nil {
 			errs = append(errs, err)
-			failed = append(failed, pending{Channel: c.Name(), Text: text, Queued: time.Now()})
+			failed = append(failed, pending{Channel: c.Name(), Message: m, Queued: time.Now()})
 		}
 	}
 	if len(failed) > 0 {
@@ -193,7 +253,12 @@ func (d *Dispatcher) Flush(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("%s: dropped undeliverable message queued at %s", p.Channel, p.Queued.Format(time.RFC3339)))
 			continue
 		}
-		if err := c.Send(ctx, "[delayed] "+p.Text); err != nil {
+		m := p.Message
+		if m.Text == "" {
+			m.Text = p.Text
+		}
+		m.Delayed = true
+		if err := c.Send(ctx, m); err != nil {
 			keep = append(keep, p)
 			errs = append(errs, err)
 		}

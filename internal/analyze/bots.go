@@ -40,48 +40,54 @@ func ClaimedBot(ua string) (name string, asns []int, ok bool) {
 // that must come from its own ASNs for the claim to be accepted.
 const VerifiedShare = 0.9
 
-// VerifiedByCategory reports whether a UA claiming to be a known crawler
-// is backed by Cloudflare's own verified-bot classification: at least
-// VerifiedShare of its requests carry a non-empty verifiedBotCategory.
-func VerifiedByCategory(ua string, cats []cfapi.Face) (string, bool) {
-	name, _, ok := ClaimedBot(ua)
-	if !ok {
-		return "", false
-	}
-	var total, good int64
-	for _, f := range cats {
-		total += f.Count
-		if f.Name != "" && f.Name != "<nil>" {
-			good += f.Count
-		}
-	}
-	if total == 0 {
-		return name, false
-	}
-	return name, float64(good)/float64(total) >= VerifiedShare
+// Verdict is the outcome of checking a crawler claim.
+type Verdict struct {
+	Crawler  string  // claimed crawler ("Googlebot"); empty: no claim
+	Share    float64 // share of the UA's requests that passed the check
+	Verified bool    // Share >= VerifiedShare
+	Known    bool    // there was data to judge on
 }
 
-// VerifiedBot reports whether a UA claiming to be a known crawler is
-// backed by its ASN breakdown (the Top ASNs of requests with that UA).
-// An impostor — Googlebot UA from a residential proxy network — fails.
-func VerifiedBot(ua string, asnBreakdown []cfapi.Face) (string, bool) {
-	name, asns, ok := ClaimedBot(ua)
+// Impostor is a conclusive failed claim: the UA says it is a known
+// crawler, but its traffic does not come from that crawler — high-value
+// intelligence on its own (SPEC 7.3).
+func (v Verdict) Impostor() bool { return v.Crawler != "" && v.Known && !v.Verified }
+
+func verdict(ua string, rows []cfapi.Face, good func(cfapi.Face) bool) Verdict {
+	name, _, ok := ClaimedBot(ua)
 	if !ok {
-		return "", false
+		return Verdict{}
 	}
+	var total, g int64
+	for _, f := range rows {
+		total += f.Count
+		if good(f) {
+			g += f.Count
+		}
+	}
+	v := Verdict{Crawler: name}
+	if total > 0 {
+		v.Known = true
+		v.Share = float64(g) / float64(total)
+		v.Verified = v.Share >= VerifiedShare
+	}
+	return v
+}
+
+// VerifiedByCategory checks a crawler claim against Cloudflare's own
+// verified-bot classification (verifiedBotCategory breakdown of the UA).
+func VerifiedByCategory(ua string, cats []cfapi.Face) Verdict {
+	return verdict(ua, cats, func(f cfapi.Face) bool { return f.Name != "" && f.Name != "<nil>" })
+}
+
+// VerifiedBot checks a crawler claim against the crawler's own ASNs
+// (the Top ASNs of requests with that UA). An impostor — Googlebot UA
+// from a residential proxy network — fails.
+func VerifiedBot(ua string, asnBreakdown []cfapi.Face) Verdict {
+	_, asns, _ := ClaimedBot(ua)
 	allowed := map[int]bool{}
 	for _, a := range asns {
 		allowed[a] = true
 	}
-	var total, good int64
-	for _, f := range asnBreakdown {
-		total += f.Count
-		if allowed[f.ASN] {
-			good += f.Count
-		}
-	}
-	if total == 0 {
-		return name, false
-	}
-	return name, float64(good)/float64(total) >= VerifiedShare
+	return verdict(ua, asnBreakdown, func(f cfapi.Face) bool { return allowed[f.ASN] })
 }

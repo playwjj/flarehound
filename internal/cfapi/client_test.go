@@ -99,3 +99,15 @@ func TestFirewallByRule(t *testing.T) {
 		t.Fatalf("got %+v %v", got, err)
 	}
 }
+
+func TestMitigatedIPs(t *testing.T) {
+	c := server(t, `{"data":{"viewer":{"zones":[{"firewallEventsAdaptiveGroups":[
+		{"count":50,"dimensions":{"clientIP":"45.13.7.7","action":"block"}},
+		{"count":30,"dimensions":{"clientIP":"45.13.7.7","action":"managed_challenge"}},
+		{"count":900,"dimensions":{"clientIP":"66.249.66.1","action":"skip"}},
+		{"count":60,"dimensions":{"clientIP":"45.13.7.9","action":"block"}}]}]}}}`, nil)
+	got, err := c.MitigatedIPs(context.Background(), "zone", from, to, 10)
+	if err != nil || len(got) != 2 || got[0].Name != "45.13.7.7" || got[0].Count != 80 || got[1].Count != 60 {
+		t.Fatalf("got %+v %v", got, err)
+	}
+}

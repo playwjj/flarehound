@@ -291,6 +291,42 @@ func (c *Client) ASNNames(ctx context.Context, zoneID string, from, to time.Time
 	return out, nil
 }
 
+// nonMitigating firewall actions: the request went through.
+var nonMitigating = map[string]bool{"allow": true, "skip": true, "log": true, "bypass": true}
+
+// MitigatedIPs returns the client IPs most often blocked or challenged in
+// the window, across every rule (the user's own and FlareHound's) — "is
+// the blocked IP still knocking". Requires the firewall dataset.
+func (c *Client) MitigatedIPs(ctx context.Context, zoneID string, from, to time.Time, limit int) ([]Face, error) {
+	rows, err := c.zoneRows(ctx, zoneID, "firewallEventsAdaptiveGroups", "count dimensions{clientIP action}", 1000, true, Filter{}.render(from, to))
+	if err != nil {
+		return nil, err
+	}
+	sum := map[string]int64{}
+	for _, r := range rows {
+		action, _ := r.Dimensions["action"].(string)
+		ip, _ := r.Dimensions["clientIP"].(string)
+		if ip == "" || nonMitigating[action] {
+			continue
+		}
+		sum[ip] += r.Count
+	}
+	out := make([]Face, 0, len(sum))
+	for ip, n := range sum {
+		out = append(out, Face{Name: ip, Count: n})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].Name < out[j].Name
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 // ASNName returns one ASN's registered name ("" if unknown).
 func (c *Client) ASNName(ctx context.Context, zoneID string, from, to time.Time, asn int) (string, error) {
 	rows, err := c.zoneRows(ctx, zoneID, "httpRequestsAdaptiveGroups", "count dimensions{clientAsn clientASNDescription}", 1, true, Filter{ASN: asn}.render(from, to))

@@ -124,14 +124,21 @@ func TestNewFaceUAKeyIsShared(t *testing.T) {
 
 func TestVerifiedBot(t *testing.T) {
 	ua := "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
-	if _, ok := VerifiedBot(ua, []cfapi.Face{{ASN: 15169, Count: 990}, {ASN: 7922, Count: 10}}); !ok {
-		t.Fatal("real Googlebot rejected")
+	if v := VerifiedBot(ua, []cfapi.Face{{ASN: 15169, Count: 990}, {ASN: 7922, Count: 10}}); !v.Verified || v.Impostor() {
+		t.Fatalf("real Googlebot rejected: %+v", v)
 	}
-	if _, ok := VerifiedBot(ua, []cfapi.Face{{ASN: 15169, Count: 100}, {ASN: 7922, Count: 900}}); ok {
-		t.Fatal("impostor Googlebot from residential ASN accepted")
+	v := VerifiedBot(ua, []cfapi.Face{{ASN: 15169, Count: 100}, {ASN: 7922, Count: 900}})
+	if v.Verified || !v.Impostor() || v.Crawler != "Googlebot" || v.Share != 0.1 {
+		t.Fatalf("impostor Googlebot from residential ASN: %+v", v)
 	}
-	if _, ok := VerifiedBot("curl/8.0", []cfapi.Face{{ASN: 15169, Count: 1}}); ok {
-		t.Fatal("non-crawler UA verified")
+	if v := VerifiedBot("curl/8.0", []cfapi.Face{{ASN: 15169, Count: 1}}); v.Verified || v.Impostor() {
+		t.Fatal("non-crawler UA judged")
+	}
+	if v := VerifiedByCategory(ua, nil); v.Impostor() {
+		t.Fatal("no data must not brand an impostor")
+	}
+	if v := VerifiedByCategory(ua, []cfapi.Face{{Name: "", Count: 95}, {Name: "Search Engine Crawler", Count: 5}}); !v.Impostor() {
+		t.Fatal("unverified by Cloudflare must be an impostor")
 	}
 }
 
@@ -176,11 +183,11 @@ func TestHypothesizeSlowPath(t *testing.T) {
 
 func TestBlockAdvice(t *testing.T) {
 	cur, base := Metrics{Total: 150_000}, Metrics{Total: 100_000}
-	adv := Block(cur, base, Attribution{TopIPs: []cfapi.Face{{Name: "203.0.113.7", Count: 20_000}, {Name: "198.51.100.1", Count: 100}}})
+	adv := Block(cur, base, Attribution{TopIPs: []cfapi.Face{{Name: "203.0.113.7", Count: 20_000}, {Name: "198.51.100.1", Count: 100}}}, nil)
 	if len(adv.Candidates) != 1 || adv.Candidates[0].IP != "203.0.113.7" || adv.Dispersed {
 		t.Fatalf("concentrated: %+v", adv)
 	}
-	adv = Block(cur, base, Attribution{TopIPs: []cfapi.Face{{Name: "a", Count: 300}, {Name: "b", Count: 200}}})
+	adv = Block(cur, base, Attribution{TopIPs: []cfapi.Face{{Name: "a", Count: 300}, {Name: "b", Count: 200}}}, nil)
 	if len(adv.Candidates) != 0 || !adv.Dispersed {
 		t.Fatalf("dispersed: %+v", adv)
 	}
@@ -189,5 +196,26 @@ func TestBlockAdvice(t *testing.T) {
 func TestPctChange(t *testing.T) {
 	if PctChange(0, 0) != 0 || PctChange(5, 0) != 999 || PctChange(150, 100) != 50 {
 		t.Fatal("PctChange")
+	}
+}
+
+func TestBlockExcludesProtected(t *testing.T) {
+	cur, base := Metrics{Total: 150_000}, Metrics{Total: 100_000}
+	protect := func(ip string) (string, bool) {
+		if ip == "2a06:98c0:3600::103" {
+			return "Cloudflare range 2a06:98c0::/29", true
+		}
+		return "", false
+	}
+	adv := Block(cur, base, Attribution{TopIPs: []cfapi.Face{
+		{Name: "2a06:98c0:3600::103", Count: 39_500}, {Name: "45.13.7.9", Count: 3_000}, {Name: "45.13.7.10", Count: 200}}}, protect)
+	if len(adv.Excluded) != 1 || !adv.Excluded[0].Cloudflare || adv.Excluded[0].Share < 0.78 {
+		t.Fatalf("excluded %+v", adv.Excluded)
+	}
+	if len(adv.Candidates) != 1 || adv.Candidates[0].IP != "45.13.7.9" {
+		t.Fatalf("candidates %+v", adv.Candidates)
+	}
+	if adv.Dispersed {
+		t.Fatal("dispersion must be judged on blockable IPs only")
 	}
 }

@@ -62,6 +62,9 @@ type Input struct {
 	// pattern listed is a sensitive path (login, signup, ranking …).
 	Sensitive map[string]string
 	MinCount  int64
+	// Protected reports ASNs that must never be blocked or challenged
+	// (Cloudflare's own, user allowlist). Nil: none.
+	Protected func(asn int) bool
 }
 
 // Tunables (SPEC 9; documented there).
@@ -149,7 +152,7 @@ func asnSuggestions(in Input) []Suggestion {
 	frac := expensiveFraction(in)
 	var out []Suggestion
 	for _, f := range in.Cur.TopASN {
-		if f.ASN == 0 {
+		if f.ASN == 0 || (in.Protected != nil && in.Protected(f.ASN)) {
 			continue
 		}
 		diff := f.Count - base[f.ASN]

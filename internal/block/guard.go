@@ -3,6 +3,7 @@ package block
 import (
 	"fmt"
 	"net/netip"
+	"strconv"
 )
 
 // Fallback copy of Cloudflare's published ranges (https://www.cloudflare.com/ips/),
@@ -88,6 +89,33 @@ func (p Protected) Check(t Target) error {
 		}
 	}
 	return nil
+}
+
+// IPProtector adapts Check for the read side (block candidates in
+// alerts): it returns why an IP must not be blocked, and whether it is
+// one of Cloudflare's own addresses.
+func (p Protected) IPProtector() func(ip string) (string, bool) {
+	return func(ip string) (string, bool) {
+		t, err := Parse("ip", ip)
+		if err != nil {
+			return "", false
+		}
+		pf, _ := t.Prefix()
+		for _, r := range p.Cloudflare {
+			if r.Overlaps(pf) {
+				return "Cloudflare range " + r.String(), true
+			}
+		}
+		if err := p.Check(t); err != nil {
+			return err.Error(), false
+		}
+		return "", false
+	}
+}
+
+// ASNProtected reports whether an ASN must never be blocked.
+func (p Protected) ASNProtected(asn int) bool {
+	return p.Check(Target{Type: ASN, Value: strconv.Itoa(asn)}) != nil
 }
 
 // AccessRuleTarget maps a target to an IP Access Rule configuration, or

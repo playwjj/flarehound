@@ -179,6 +179,9 @@ func buildDispatcher(cfg *config.Config, dryRun bool) *notify.Dispatcher {
 	if cfg.TelegramBotToken != "" && cfg.Notify.TelegramChatID != "" {
 		chans = append(chans, notify.Telegram{BotToken: cfg.TelegramBotToken, ChatID: cfg.Notify.TelegramChatID})
 	}
+	if cfg.Notify.JSONLFile != "" {
+		chans = append(chans, notify.File{Path: cfg.Notify.JSONLFile})
+	}
 	if len(chans) == 0 {
 		log.Printf("warning: no notification channel configured — findings will only appear in this log")
 	}

@@ -31,7 +31,7 @@
     "recovery_clean_rounds": 2
   },
   "path_rules": [
-    { "name": "login", "path": "/login*", "up_pct": 100, "min_count": 20 }
+    { "name": "login", "path": "/login*", "up_pct": 100, "min_count": 20, "dynamic_only": false }
   ],
   "daily": {
     "paths": [
@@ -44,10 +44,12 @@
     "user_agents": []
   },
   "report": { "language": "en" },
+  "rule_names": {},
   "notify": {
     "webhook_url_env": "FLAREHOUND_WEBHOOK_URL",
     "telegram_bot_token_env": "",
-    "telegram_chat_id": ""
+    "telegram_chat_id": "",
+    "jsonl_file": ""
   },
   "state_file": "data/state.json",
   "blocking": {

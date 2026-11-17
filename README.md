@@ -38,6 +38,7 @@ export CF_API_TOKEN=...
 ```
 
 4. Point `notify.webhook_url_env` at an environment variable holding any endpoint that accepts a JSON POST (Telegram/Slack/Discord bridges included), or configure the Telegram bot.
+   To feed alerts into your own tooling instead, set `notify.jsonl_file` (e.g. `data/alerts.jsonl`): every message is appended as one JSON line with `kind`, `zone`, `decision`, the window, the fired `rules` and the `text`.
 5. Pick the report language: `"report": {"language": "en"}` or `"zh"` (Chinese).
 
 Optionally fill the local archive with the last four weeks right away (Cloudflare keeps ~31 days), so the 4-week baseline works from day one instead of week five. It is paced to ~1 query/second and takes about an hour per zone:
@@ -87,15 +88,16 @@ Suggestions (read-only — FlareHound never applies them; do it in the Cloudflar
 
 Create the token at *Cloudflare Dashboard → My Profile → API Tokens → Create Token → Custom token*:
 
-- **Zone** → **Analytics: Read**, **Logs: Read**, **Zone: Read** (for each zone you monitor)
-- **Account** → **Workers Scripts: Read**, **Account Analytics: Read**
+- **Zone** → **Analytics: Read** (for each zone you monitor) — the only permission the watchdog needs.
 
 Optional add-ons — grant only when you enable the feature:
+
+- **Worker metrics** (`workers` listed in the config): add **Account** → **Account Analytics: Read**.
 
 - **WAF rule audit** (v0.6): add **Zone** → **WAF: Read** and **Firewall Services: Read** to the same token.
 - **One-click blocking** (v0.5): create a *separate* write token — **Account** → **Account Filter Lists: Edit**; **Zone** → **WAF: Edit**, **Firewall Services: Edit**, **DNS: Read**, **Zone: Read**. Put it in `CF_WRITE_TOKEN`. Never merge it into the read token; the watchdog process never holds it.
 
-The watchdog's analytics run through `api.cloudflare.com/client/v4/graphql`; the audit additionally reads rulesets through the REST API on the same host. Your token never leaves your machine and is never written to disk or logs by the program.
+The watchdog makes GraphQL Analytics calls only (`api.cloudflare.com/client/v4/graphql`), which is why Analytics: Read is enough; older versions of this README also asked for Logs, Zone and Workers Scripts read access, which no code path uses. (This minimum is derived from the code's call sites; a quick check with your own token: create one with only Zone → Analytics: Read and run `flarehound -once -dry-run`.) The audit will additionally read rulesets through the REST API on the same host. Your token never leaves your machine and is never written to disk or logs by the program.
 
 ## One-click blocking
 

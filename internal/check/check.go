@@ -17,6 +17,7 @@ import (
 	"github.com/playwjj/flarehound/internal/block"
 	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/config"
+	"github.com/playwjj/flarehound/internal/notify"
 	"github.com/playwjj/flarehound/internal/report"
 	"github.com/playwjj/flarehound/internal/schedule"
 	"github.com/playwjj/flarehound/internal/state"
@@ -32,12 +33,13 @@ type API interface {
 	ASNNames(ctx context.Context, zoneID string, from, to time.Time, limit int) (map[int]string, error)
 	FirewallTop(ctx context.Context, zoneID string, from, to time.Time, ruleID, dim string, limit int) ([]cfapi.Face, error)
 	Capabilities(ctx context.Context, zoneID string) (cfapi.Caps, error)
+	MitigatedIPs(ctx context.Context, zoneID string, from, to time.Time, limit int) ([]cfapi.Face, error)
 	WorkerStats(ctx context.Context, accountID, script string, from, to time.Time) (int64, float64, error)
 }
 
 // Sender delivers a rendered message.
 type Sender interface {
-	Send(ctx context.Context, text string) error
+	Send(ctx context.Context, m notify.Message) error
 }
 
 type Runner struct {
@@ -46,9 +48,10 @@ type Runner struct {
 	Sender Sender
 	Store  *store.Store // nil: archive disabled
 
-	caps  map[string]cfapi.Caps                            // per zone, probed once per process
-	Now   func() time.Time                                 // default time.Now
-	Sleep func(ctx context.Context, d time.Duration) error // default: timer
+	caps        map[string]cfapi.Caps                            // per zone, probed once per process
+	archiveDays int                                              // depth of the archive at the last faceHistory lookup
+	Now         func() time.Time                                 // default time.Now
+	Sleep       func(ctx context.Context, d time.Duration) error // default: timer
 }
 
 const (
@@ -107,6 +110,18 @@ func (r *Runner) Caps(ctx context.Context, zone config.Zone) cfapi.Caps {
 		log.Printf("zone %s: not available on this plan, degraded: %s", zone.Name, strings.Join(missing, ", "))
 	}
 	return c
+}
+
+// guard is the never-block set the read side knows without a write
+// token: Cloudflare's ranges and ASNs, private/reserved space and the
+// user's allowlists (origin IPs need DNS access; the block command checks
+// those again before acting).
+func (r *Runner) guard() block.Protected {
+	p := block.Protected{Cloudflare: block.CloudflareFallback(), Allow: r.Cfg.NeverBlock(), AllowASNs: map[int]bool{}}
+	for _, a := range r.Cfg.Blocking.NeverBlockASNs {
+		p.AllowASNs[a] = true
+	}
+	return p
 }
 
 // Thresholds converts config thresholds into the engine's form.
@@ -189,7 +204,11 @@ func (r *Runner) fetch(ctx context.Context, zone config.Zone, w schedule.Window,
 		m.Workers = append(m.Workers, analyze.WorkerMetrics{Name: name, Calls: calls, CPUP50ms: cpu})
 	}
 	for _, p := range r.Cfg.PathRules {
-		n, err := r.API.Count(ctx, z, from, to, cfapi.Filter{PathLike: like(p.Path)})
+		f := cfapi.Filter{PathLike: like(p.Path)}
+		if p.DynamicOnly {
+			f.CacheStatus = "dynamic"
+		}
+		n, err := r.API.Count(ctx, z, from, to, f)
 		if err != nil {
 			return m, fmt.Errorf("path %s: %w", p.Name, err)
 		}
@@ -203,27 +222,32 @@ func (r *Runner) fetch(ctx context.Context, zone config.Zone, w schedule.Window,
 
 // verifyBots drops new-face UA findings whose crawler claim is backed by
 // the crawler's own ASNs (SPEC 7.3), returning what it verified.
-func (r *Runner) verifyBots(ctx context.Context, zone config.Zone, w schedule.Window, fs []analyze.Finding) ([]analyze.Finding, []string) {
+func (r *Runner) verifyBots(ctx context.Context, zone config.Zone, w schedule.Window, fs []analyze.Finding) ([]analyze.Finding, []string, []analyze.Impostor) {
 	var out []analyze.Finding
 	var verified []string
+	var impostors []analyze.Impostor
 	for _, f := range fs {
 		if f.Rule == analyze.RuleNewFaceUA {
 			if _, _, claims := analyze.ClaimedBot(f.Subject); claims {
-				if name, ok := r.verifyBot(ctx, zone, w, f.Subject); ok {
-					verified = append(verified, name)
+				v, method := r.verifyBot(ctx, zone, w, f.Subject)
+				if v.Verified {
+					verified = append(verified, v.Crawler)
 					continue
+				}
+				if v.Impostor() {
+					impostors = append(impostors, analyze.Impostor{UA: f.Subject, Crawler: v.Crawler, Count: int64(f.Cur), Verified: v.Share, Method: method})
 				}
 			}
 		}
 		out = append(out, f)
 	}
-	return out, verified
+	return out, verified, impostors
 }
 
 // verifyBot checks a crawler claim. Cloudflare's own verified-bot
 // classification is preferred (available on every plan); the crawler's
 // ASNs are the fallback where that dimension is missing.
-func (r *Runner) verifyBot(ctx context.Context, zone config.Zone, w schedule.Window, ua string) (string, bool) {
+func (r *Runner) verifyBot(ctx context.Context, zone config.Zone, w schedule.Window, ua string) (analyze.Verdict, string) {
 	caps := r.Caps(ctx, zone)
 	flt := cfapi.Filter{UserAgent: ua}
 	switch {
@@ -231,18 +255,18 @@ func (r *Runner) verifyBot(ctx context.Context, zone config.Zone, w schedule.Win
 		cats, err := r.API.Top(ctx, zone.ZoneID, w.From, w.To, cfapi.DimVerifiedBot, 5, flt)
 		if err != nil {
 			log.Printf("zone %s: verify bot: %v", zone.Name, err)
-			return "", false
+			return analyze.Verdict{}, ""
 		}
-		return analyze.VerifiedByCategory(ua, cats)
+		return analyze.VerifiedByCategory(ua, cats), "verifiedBotCategory"
 	case caps.HasDim(cfapi.DimASN):
 		asns, err := r.API.Top(ctx, zone.ZoneID, w.From, w.To, cfapi.DimASN, 5, flt)
 		if err != nil {
 			log.Printf("zone %s: verify bot: %v", zone.Name, err)
-			return "", false
+			return analyze.Verdict{}, ""
 		}
-		return analyze.VerifiedBot(ua, asns)
+		return analyze.VerifiedBot(ua, asns), "asn"
 	}
-	return "", false
+	return analyze.Verdict{}, ""
 }
 
 // settle re-reads windows that look collapsed. If the count is still
@@ -351,6 +375,33 @@ func (r *Runner) attribute(ctx context.Context, zone config.Zone, w, bw schedule
 		a.ASNNames, err = r.API.ASNNames(ctx, z, w.From, w.To, currentTop)
 		logErr("ASN names", err)
 	}
+	a.Firewall = r.labelRules(a.Firewall)
+}
+
+// labelRules returns a copy of firewall-event rows with configured rule
+// names in place of bare rule IDs ("block firewallCustom:<id>" →
+// "block firewallCustom:<name> (<id prefix>)"). The archive keeps raw IDs.
+func (r *Runner) labelRules(fs []cfapi.Face) []cfapi.Face {
+	if len(r.Cfg.RuleNames) == 0 || len(fs) == 0 {
+		return fs
+	}
+	out := make([]cfapi.Face, len(fs))
+	for i, f := range fs {
+		out[i] = f
+		j := strings.LastIndex(f.Name, ":")
+		if j < 0 {
+			continue
+		}
+		id := f.Name[j+1:]
+		if name, ok := r.Cfg.RuleNames[id]; ok {
+			short := id
+			if len(short) > 8 {
+				short = short[:8]
+			}
+			out[i].Name = fmt.Sprintf("%s%s (%s)", f.Name[:j+1], name, short)
+		}
+	}
+	return out
 }
 
 // sensitive collects every configured sensitive path pattern (path rules
@@ -429,8 +480,9 @@ func (r *Runner) Intraday(ctx context.Context, zone config.Zone) error {
 		findings = analyze.CrossCheck(findings, analyze.Evaluate(cur, *long, th, known(cfg)))
 	}
 	var attr analyze.Attribution
-	findings, attr.VerifiedBots = r.verifyBots(ctx, zone, w, findings)
+	findings, attr.VerifiedBots, attr.Impostors = r.verifyBots(ctx, zone, w, findings)
 	attr.FaceHistory = r.faceHistory(zone, findings)
+	attr.ArchiveDays = r.archiveDays
 	findings, attr.Unsettled, err = r.settle(ctx, zone, w, &cur, findings)
 	if err != nil {
 		return err
@@ -456,17 +508,17 @@ func (r *Runner) Intraday(ctx context.Context, zone config.Zone) error {
 			firstAlert = st.FirstAlertAt
 		}
 		hyps := analyze.Hypothesize(cur, base, findings, attr)
-		block := analyze.Block(cur, base, attr)
+		advice := analyze.Block(cur, base, attr, r.guard().IPProtector())
 		var sugs []suggest.Suggestion
 		if decision != state.DecRecovered {
 			sugs = suggest.Suggest(suggest.Input{Cur: cur, Base: base, Findings: findings, Attr: attr,
-				Hypotheses: hyps, Block: block, ASNNames: attr.ASNNames,
+				Hypotheses: hyps, Block: advice, ASNNames: attr.ASNNames, Protected: r.guard().ASNProtected,
 				Sensitive: sensitive(cfg), MinCount: th.MinCount})
 		}
 		text = report.Intraday(cfg.Report.Language, report.IntradayData{
 			Zone: zone.Name, Window: w, Loc: cfg.Location, Decision: decision,
 			Cur: cur, Base: base, Findings: findings, Attr: attr,
-			Hypotheses: hyps, Block: block, Suggestions: sugs,
+			Hypotheses: hyps, Block: advice, Suggestions: sugs,
 			Since: firstAlert, Long: long, LongN: longN,
 		})
 		if r.Store != nil {
@@ -486,7 +538,8 @@ func (r *Runner) Intraday(ctx context.Context, zone config.Zone) error {
 		return nil
 	}
 	log.Printf("zone %s: %s decision=%s findings=%d", zone.Name, w, decision, len(findings))
-	return r.Sender.Send(ctx, text)
+	return r.Sender.Send(ctx, notify.Message{Kind: "intraday", Zone: zone.Name, Decision: decision.String(),
+		WindowFrom: w.From, WindowTo: w.To, Rules: keys(findings), Text: text})
 }
 
 // Daily builds and sends the daily report (SPEC 7.1 / 7.4): the last
@@ -513,7 +566,7 @@ func (r *Runner) Daily(ctx context.Context, zone config.Zone) error {
 	th := Thresholds(cfg)
 	d := report.DailyData{Zone: zone.Name, Window: w, Loc: cfg.Location, Cur: cur, Base: base}
 	d.Findings = analyze.Evaluate(cur, base, th, known(cfg))
-	d.Findings, d.VerifiedBots = r.verifyBots(ctx, zone, w, d.Findings)
+	d.Findings, d.VerifiedBots, d.Impostors = r.verifyBots(ctx, zone, w, d.Findings)
 	// A full day is settled data; collapse needs no settle re-read here.
 
 	logErr := func(what string, err error) {
@@ -540,6 +593,9 @@ func (r *Runner) Daily(ctx context.Context, zone config.Zone) error {
 		if err != nil {
 			d.FirewallNA = true
 			log.Printf("zone %s: firewall events unavailable: %v", zone.Name, err)
+		} else {
+			d.MitigatedIPs, err = r.API.MitigatedIPs(ctx, z, w.From, w.To, 10)
+			logErr("mitigated IPs", err)
 		}
 	} else {
 		d.FirewallNA = true
@@ -615,9 +671,24 @@ func (r *Runner) Daily(ctx context.Context, zone config.Zone) error {
 		d.ActiveFingerprint = st.Fingerprint
 	}
 
+	d.Firewall = r.labelRules(d.Firewall)
 	text := report.Daily(cfg.Report.Language, d)
 	log.Printf("zone %s: daily report %s (findings=%d)", zone.Name, w, len(d.Findings))
-	return r.Sender.Send(ctx, text)
+	return r.Sender.Send(ctx, notify.Message{Kind: "daily", Zone: zone.Name,
+		WindowFrom: w.From, WindowTo: w.To, Rules: keys(d.Findings), Text: text})
+}
+
+// keys lists the distinct signal keys of findings, in order.
+func keys(fs []analyze.Finding) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, f := range fs {
+		if k := f.Key(); !seen[k] {
+			seen[k] = true
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // IsAccessError reports whether err is a token-permission problem, which
@@ -649,6 +720,11 @@ func (r *Runner) longBaseline(zone config.Zone, w schedule.Window) (*analyze.Met
 func (r *Runner) faceHistory(zone config.Zone, fs []analyze.Finding) map[string]analyze.FaceSeen {
 	if r.Store == nil {
 		return nil
+	}
+	if st, err := r.Store.Stats(zone.ZoneID); err == nil && !st.Oldest.IsZero() {
+		r.archiveDays = int(r.now().Sub(st.Oldest).Hours() / 24)
+	} else {
+		r.archiveDays = 0
 	}
 	out := map[string]analyze.FaceSeen{}
 	for _, f := range fs {

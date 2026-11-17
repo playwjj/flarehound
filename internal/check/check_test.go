@@ -10,6 +10,8 @@ import (
 	"github.com/playwjj/flarehound/internal/analyze"
 	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/config"
+	"github.com/playwjj/flarehound/internal/notify"
+	"github.com/playwjj/flarehound/internal/schedule"
 	"github.com/playwjj/flarehound/internal/store"
 )
 
@@ -40,6 +42,10 @@ func (f *fakeAPI) w(from time.Time) *window {
 func (f *fakeAPI) Count(_ context.Context, _ string, from, _ time.Time, flt cfapi.Filter) (int64, error) {
 	w := f.w(from)
 	switch {
+	case flt.CacheStatus == "dynamic" && flt.PathLike != "":
+		return w.dynamic / 10, nil
+	case flt.PathLike != "":
+		return w.total / 10, nil
 	case flt.CacheStatus == "dynamic":
 		return w.dynamic, nil
 	case flt.OriginStatusFrom == 500:
@@ -73,7 +79,7 @@ func (f *fakeAPI) Top(_ context.Context, _ string, from, _ time.Time, dim string
 	case cfapi.DimCacheStatus:
 		return []cfapi.Face{{Name: "dynamic", Count: w.dynamic}, {Name: "hit", Count: w.total - w.dynamic}}, nil
 	case cfapi.DimClientIP:
-		return []cfapi.Face{{Name: "203.0.113.7", Count: 300}, {Name: "198.51.100.9", Count: 200}}, nil
+		return []cfapi.Face{{Name: "45.13.7.7", Count: 300}, {Name: "45.13.7.9", Count: 200}}, nil
 	case cfapi.DimPath:
 		return []cfapi.Face{{Name: "/rank", Count: w.dynamic / 2}}, nil
 	}
@@ -95,6 +101,10 @@ func (f *fakeAPI) FirewallTop(_ context.Context, _ string, _, _ time.Time, ruleI
 	return nil, nil
 }
 
+func (f *fakeAPI) MitigatedIPs(context.Context, string, time.Time, time.Time, int) ([]cfapi.Face, error) {
+	return []cfapi.Face{{Name: "45.13.7.7", Count: 812}, {Name: "45.13.7.9", Count: 40}}, nil
+}
+
 func (f *fakeAPI) Capabilities(context.Context, string) (cfapi.Caps, error) {
 	if f.caps != nil {
 		return *f.caps, nil
@@ -107,9 +117,16 @@ func (f *fakeAPI) WorkerStats(_ context.Context, _, _ string, from, _ time.Time)
 	return w.calls, w.cpu, nil
 }
 
-type sink struct{ msgs []string }
+type sink struct {
+	msgs []string
+	meta []notify.Message
+}
 
-func (s *sink) Send(_ context.Context, text string) error { s.msgs = append(s.msgs, text); return nil }
+func (s *sink) Send(_ context.Context, m notify.Message) error {
+	s.msgs = append(s.msgs, m.Text)
+	s.meta = append(s.meta, m)
+	return nil
+}
 
 func testConfig(t *testing.T) *config.Config {
 	cfg := &config.Config{Thresholds: config.DefaultThresholds(), StateFile: filepath.Join(t.TempDir(), "state.json"), Location: time.UTC}
@@ -178,6 +195,10 @@ func TestIncidentReplay(t *testing.T) {
 		if !strings.Contains(alert, want) {
 			t.Errorf("alert lacks %q:\n%s", want, alert)
 		}
+	}
+
+	if m := out.meta[0]; m.Kind != "intraday" || m.Decision != "alert" || m.Zone != "example.com" || len(m.Rules) != 5 || !m.WindowTo.Equal(hour(9)) {
+		t.Errorf("structured message: %+v", m)
 	}
 
 	run(9)  // same window again (restart): skipped
@@ -352,7 +373,7 @@ func TestArchiveAnnotatesAndRecords(t *testing.T) {
 	if err := r.Intraday(context.Background(), zone); err != nil {
 		t.Fatal(err)
 	}
-	if len(out.msgs) != 1 || !strings.Contains(out.msgs[0], "AS207990: never seen before in the archive") {
+	if len(out.msgs) != 1 || !strings.Contains(out.msgs[0], "first-seen not judged") {
 		t.Fatalf("got %v", out.msgs)
 	}
 	as, _ := st.Alerts(zone.ZoneID, from, from.Add(2*time.Hour))
@@ -404,7 +425,8 @@ func TestDailyShowsBlocks(t *testing.T) {
 	if err := r.Daily(context.Background(), zone); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.msgs[0], "AS207990 (challenge): 120") || !strings.Contains(out.msgs[0], "expires 11-18 03:00") {
+	if !strings.Contains(out.msgs[0], "AS207990 (challenge): 120") || !strings.Contains(out.msgs[0], "expires 11-18 03:00") ||
+		!strings.Contains(out.msgs[0], "45.13.7.7: 812") {
 		t.Fatalf("daily lacks block checkpoint:\n%s", out.msgs[0])
 	}
 }
@@ -441,5 +463,66 @@ func TestFreePlanDegrades(t *testing.T) {
 	}
 	if !strings.Contains(out.msgs[0], "not available on this plan") || !strings.Contains(out.msgs[0], "unavailable (plan or token permission)") {
 		t.Fatalf("daily:\n%s", out.msgs[0])
+	}
+}
+
+// TestImpostorAndYoungArchive: a "Googlebot" Cloudflare does not verify is
+// named as an impostor; with a one-day archive, new faces are not
+// labelled "never seen before".
+func TestImpostorAndYoungArchive(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Cloudflare.Zones[0].Workers = nil
+	caps := cfapi.Caps{Probed: true, HTTPFields: map[string]bool{
+		"dimensions_userAgent": true, "dimensions_clientIP": true, "dimensions_cacheStatus": true,
+		"dimensions_clientRequestPath": true, "dimensions_verifiedBotCategory": true}}
+	api := &fakeAPI{windows: map[time.Time]*window{}, reads: map[time.Time]int{}, caps: &caps}
+	out := &sink{}
+	from := time.Date(2026, 11, 17, 8, 0, 0, 0, time.UTC)
+	r := &Runner{API: api, Cfg: cfg, Sender: out, Now: func() time.Time { return from.Add(67 * time.Minute) }}
+	withStore(t, r)
+	api.windows[from.Add(-24*time.Hour)] = normal()
+	cur := surge()
+	cur.ua = append(cur.ua, cfapi.Face{Name: "Mozilla/5.0 (compatible; Bingbot/2.0)", Count: 30_000})
+	api.windows[from] = cur
+	if err := r.Intraday(context.Background(), cfg.Cloudflare.Zones[0]); err != nil {
+		t.Fatal(err)
+	}
+	msg := out.msgs[0]
+	if !strings.Contains(msg, "IMPOSTOR") || !strings.Contains(msg, "claims to be Bingbot") {
+		t.Errorf("impostor not named:\n%s", msg)
+	}
+	if strings.Contains(msg, "never seen before") || !strings.Contains(msg, "first-seen not judged") {
+		t.Errorf("young archive still claims first-seen:\n%s", msg)
+	}
+}
+
+func TestLabelRules(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.RuleNames = map[string]string{"a3c36f59e1d2": "WordPress probes"}
+	r := &Runner{Cfg: cfg}
+	in := []cfapi.Face{{Name: "block firewallCustom:a3c36f59e1d2", Count: 9}, {Name: "block firewallCustom:other", Count: 1}}
+	got := r.labelRules(in)
+	if got[0].Name != "block firewallCustom:WordPress probes (a3c36f59)" || got[1].Name != in[1].Name {
+		t.Fatalf("got %+v", got)
+	}
+	if in[0].Name != "block firewallCustom:a3c36f59e1d2" {
+		t.Fatal("input mutated (the archive must keep raw IDs)")
+	}
+}
+
+func TestPathRuleDynamicOnly(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Cloudflare.Zones[0].Workers = nil
+	cfg.PathRules = []config.PathRule{{Name: "all", Path: "/v1/social-account/*"}, {Name: "dyn", Path: "/v1/social-account/*", DynamicOnly: true}}
+	api := &fakeAPI{windows: map[time.Time]*window{}, reads: map[time.Time]int{}}
+	r := &Runner{API: api, Cfg: cfg}
+	w := normal()
+	api.windows[time.Time{}] = w
+	m, err := r.fetch(context.Background(), cfg.Cloudflare.Zones[0], schedule.Window{}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Paths["all"] != w.total/10 || m.Paths["dyn"] != w.dynamic/10 {
+		t.Fatalf("paths %+v", m.Paths)
 	}
 }

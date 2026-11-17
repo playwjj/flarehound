@@ -176,7 +176,7 @@
 
 最小量是 v0.3 补订：小站点上 10 → 40 次请求即 +300%，没有这道底线，静默纪律无从谈起。
 
-除 zone 级阈值外，阈值支持**路径级覆盖**（`path_rules`）：为敏感低量路径（如登录、支付回调）单独设线，避免其异常被 zone 总量淹没。路径模式以 `*` 为通配（如 `/login*`），默认 +100% 且本窗 ≥ 20 次。
+除 zone 级阈值外，阈值支持**路径级覆盖**（`path_rules`）：为敏感低量路径（如登录、支付回调）单独设线，避免其异常被 zone 总量淹没。路径模式以 `*` 为通配（如 `/login*`），默认 +100% 且本窗 ≥ 20 次。`dynamic_only: true` 时只计未缓存（`dynamic`）请求，即该路径的真实渲染量。
 
 ### 7.3 去重、升级与恢复（状态机）
 
@@ -191,6 +191,7 @@
 ### 7.4 每日报告的固定检查点（示例，随站点配置）
 
 - 昨日被拦截名单（IP / ASN）的尝试量（为「何时可以解封」提供依据：以尝试量而非安静时长为准）。按「动作 + 来源 + ruleId」聚合的防火墙事件 Top 10；数据集不可用（Free 套餐或缺权限）时明说不可用，不报 0；v0.5 起另列每个 FlareHound 封锁项的尝试量、起始时间与到期时间；
+- 被拦截 / 挑战最多的 IP Top 10（所有规则，含用户自建规则；放行 / 跳过 / 仅记录不计）——「被封的 IP 还在不在敲门」，解封判断的依据。需防火墙数据集。
 - 重点路径的源站到达量（如登录、注册、榜单类页面应为 0 或低量）。配置 `daily.paths`（路径模式 + 上限），到达量 = 该路径昂贵类缓存状态（见第 8 节）的请求数，超限标 ⚠；
 - 已知记账假象的单列说明（如缓存读未命中被记为 504 的条目，与真实访客错误率分开报）。配置 `daily.artifacts`（标签 + 路径模式 + 边缘状态码），单列计数。
 
@@ -209,8 +210,11 @@
 **v0.3 实现口径**：
 
 - 归因查询只在本轮要发消息时执行（静默轮不额外耗查询）；单项归因查询失败不阻断告警，带着残缺证据报警好过不报。
-- 贵贱划分按 `cacheStatus`：`hit` / `stale` / `updating` / `revalidated` 为便宜，其余（`dynamic` / `miss` / `bypass` / `expired` 及未知值）为昂贵——未知值归昂贵，宁可高估成本。
-- 份额基数：总量上涨时为「本窗 − 基线」的增量，否则为本窗总量（CPU / 5xx 类异常）。单 IP ≥ 5% 列为封锁候选；Top 1 IP < 1% 判为「来源分散」。
+- 贵贱划分按 `cacheStatus`：`hit` / `stale` / `updating` / `revalidated` 为便宜，其余（`dynamic` / `miss` / `bypass` / `expired` 及未知值）为昂贵——未知值归昂贵，宁可高估成本。报告中昂贵部分再拆两档，共三档展示：**真实渲染（`dynamic`）单列在前**——这是值守真正盯的数；其余未命中缓存（miss / bypass / expired 等）另列。（v0.5.2 补订：用户反馈「昂贵量翻倍」而真实渲染只涨 38.8%、CPU 反降，混在一起会误导。）
+- 份额基数：总量上涨时为「本窗 − 基线」的增量，否则为本窗总量（CPU / 5xx 类异常）。单 IP ≥ 5% 列为封锁候选；可封 IP 中最大者 < 1% 判为「来源分散」。
+- **候选必须先过第 13 节护栏**（v0.5.2 补订，用户实测发现候选第一名是 Cloudflare 自家出口 IP）：Cloudflare 官方段、私有 / 保留段、`blocking.never_block` 中的 IP 不进候选，单列为「来源集中但不可封」并写明原因；Cloudflare 段明确解释为 **Worker 出口**（某个 Worker——自家或其他 zone 的——在调用本站），指引去找调用方。Cloudflare 自有 ASN 与 `never_block_asns` 不进 ASN 建议。源站 IP 需 DNS 权限，看守侧不检查，执行封锁时由 `block` 命令再查。
+- **冒充爬虫单独点名**：自称已知爬虫、但验真失败（有数据且通过比例 < 90%）的 UA 单列一行「冒充爬虫」，注明通过比例与验真方法——这是高价值情报，不能只是「没被排除」。
+- **新面孔首次出现**：归档覆盖不足 7 天时不逐个标注「首次出现」（第一天全是新面孔，纯噪声），改为一行说明归档深度与 `-backfill` 提示；「曾出现过」的记录照常注明。
 - 机制假设由确定性规则产出（新面孔承载增量 ≥ 80% 高置信、≥ 50% 中置信；增量 ≥ 70% 落在便宜部分时提示「便宜量，实际成本影响小」；dynamic 涨而总量未涨提示缓存可缓存性下降；CPU 涨而调用量未涨提示部署 / 慢路径；源站 5xx；塌量；其余增长判为「无集中驱动、证据不足」）。每条假设附证伪点；无任何假设时报告明说「证据不足，只报数」。
 
 ## 9. 建议引擎（v0.4 起）
@@ -256,13 +260,17 @@
   2. 两窗对比数：总量、调用量、CPU P50、dynamic、源站 5xx；
   3. 归因摘要、机制假设（置信度 + 证伪点）与封锁候选（如有）。
 - **语言**：`report.language` 取 `en` 或 `zh`。
+- **结构化消息**（v0.5.2）：每条消息除正文外携带 `kind`（intraday / daily）、`zone`、`decision`、窗口起止、命中信号键 `rules`、`delayed`。Webhook 在 `text` 之外附带这些字段（只读 `text` 的接收端不受影响）。
+- **JSONL 文件通道**（`notify.jsonl_file`）：每条消息追加为一行 JSON（另含 `ts` 与 `source: "flarehound"`），单次 `O_APPEND` 写入、文件权限 0600——给与 FlareHound 同机运行的桥接器 / 日志采集器消费（tail 即可），是接入既有值守流程的通用出口。
+- **规则名映射**（`rule_names`，ruleId → 名称）：防火墙事件中以名称 + ID 前缀展示规则；归档仍存原始 ID。v0.6 读取规则集后可自动获得名称。
 - **静默纪律**：无异常不发消息；恢复只发一行；同一异常不重复打扰（见 7.3）。通知频率本身是产品质量指标。
 
 ## 12. 安全模型
 
-- **Token 权限**：只读。已知够用的最小集：
-  - Zone 级：Analytics Read、Logs Read、Zone Read（能力探测读取套餐与配额）；
-  - Account 级：Workers Scripts Read（读取 Worker 调用量指标）、Account Analytics Read。
+- **Token 权限**：只读。看守侧只发 GraphQL Analytics 查询（含能力探测的 `settings` 节点），不调用任何 REST 接口，因此最小集为：
+  - Zone 级：Analytics Read（必需）；
+  - Account 级：Account Analytics Read（可选，仅在配置了 `workers` 时需要——`workersInvocationsAdaptive` 是账户级数据集）。
+  - （v0.5.2 依代码调用点复核后收窄：旧版列出的 Logs Read、Zone Read、Workers Scripts Read 无任何代码路径使用；Zone Read 只在写 Token 侧用于读取套餐。用户反馈 + 代码核对，最小 Token 的实测待补。）
   - Zone 级（启用 WAF 体检时追加）：WAF Read（读取自定义规则集，Rulesets API 的权限名）与 Firewall Services Read（IP 访问规则）。
 - **写 Token**（仅封锁模块，第 13 节）：Account 级 Account Filter Lists Edit（IP 名单）；Zone 级 WAF Edit（自定义规则，Rulesets API）、Firewall Services Edit（IP 访问规则兜底）、DNS Read（读取源站 IP 作护栏）、Zone Read（读取套餐以判断规则额度）。
   （以实际授权结果为准，README 中给出创建步骤与逐项说明。）
@@ -337,7 +345,8 @@
 - `daily`：日报固定检查点 `paths[]` 与记账假象 `artifacts[]`（第 7.4 节）；
 - `known_faces`：已知模式库 `asns[]` / `user_agents[]`（第 7.3、17 节）；
 - `report.language`：`en` / `zh`；
-- `notify`：渠道与端点（敏感值只写环境变量名，不写明文）；
+- `notify`：渠道与端点（敏感值只写环境变量名，不写明文）：`webhook_url_env`、`telegram_bot_token_env` + `telegram_chat_id`、`jsonl_file`；
+- `rule_names`：防火墙规则 ID → 名称映射（第 11 节）；
 - `state_file`：状态文件路径（Docker 形态下挂载到 /app/data）；多 zone 时自动派生每 zone 一个状态文件；通知待发箱 `outbox.json` 与其同目录；
 - `archive`：`disabled`（默认 false）、`file`（默认与状态文件同目录的 `archive.db`）、`hourly_retention_days`（默认 400）；
 - `blocking`：`write_token_env`（默认 `CF_WRITE_TOKEN`，不得与只读 Token 同名）、`never_block`（IP / CIDR）、`never_block_asns`。

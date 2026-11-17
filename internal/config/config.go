@@ -62,6 +62,9 @@ type PathRule struct {
 	Path     string  `json:"path"`
 	UpPct    float64 `json:"up_pct"`
 	MinCount int64   `json:"min_count"`
+	// DynamicOnly counts only uncached (cacheStatus "dynamic") requests:
+	// the real rendering load of the path, not every edge hit.
+	DynamicOnly bool `json:"dynamic_only"`
 }
 
 // PathCheckpoint is a daily fixed checkpoint (SPEC 7.4): the origin
@@ -92,6 +95,10 @@ type Notify struct {
 	WebhookURLEnv       string `json:"webhook_url_env"`
 	TelegramBotTokenEnv string `json:"telegram_bot_token_env"`
 	TelegramChatID      string `json:"telegram_chat_id"`
+	// JSONLFile appends every message as one JSON line to a local file
+	// (for bridges and log shippers). Relative paths are relative to the
+	// working directory; in Docker use /app/data/….
+	JSONLFile string `json:"jsonl_file"`
 }
 
 type Config struct {
@@ -114,7 +121,10 @@ type Config struct {
 		Artifacts []Artifact       `json:"artifacts"`
 	} `json:"daily"`
 	KnownFaces KnownFaces `json:"known_faces"`
-	Report     struct {
+	// RuleNames labels firewall rule IDs in reports ("<ruleId>": "name")
+	// until the WAF audit (v0.6) reads names from the rulesets itself.
+	RuleNames map[string]string `json:"rule_names"`
+	Report    struct {
 		Language string `json:"language"` // "en" | "zh"
 	} `json:"report"`
 	Notify    Notify `json:"notify"`

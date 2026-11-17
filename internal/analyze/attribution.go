@@ -21,12 +21,29 @@ type Attribution struct {
 	Firewall     []cfapi.Face            `json:"firewall,omitempty"`
 	FirewallNA   bool                    `json:"firewall_na,omitempty"` // dataset unavailable (plan/permission)
 	VerifiedBots []string                `json:"verified_bots,omitempty"`
-	ASNNames     map[int]string          `json:"asn_names,omitempty"` // registered ASN names, best-effort
+	Impostors    []Impostor              `json:"impostors,omitempty"`
+	// ArchiveDays is how far back the local archive reaches; first-seen
+	// claims are only meaningful once it covers FaceHistoryMinDays.
+	ArchiveDays int            `json:"archive_days,omitempty"`
+	ASNNames    map[int]string `json:"asn_names,omitempty"` // registered ASN names, best-effort
 	// FaceHistory is the archive's memory of each new face (finding
 	// Subject): when it was first and last seen in any Top list. A face
 	// absent from the map has never been seen before.
 	FaceHistory map[string]FaceSeen `json:"face_history,omitempty"`
 	Unsettled   []string            `json:"unsettled,omitempty"` // collapse rules held back: data still arriving
+}
+
+// FaceHistoryMinDays is the archive depth below which "never seen
+// before" is noise (on day one every face is new).
+const FaceHistoryMinDays = 7
+
+// Impostor is a UA that claims to be a known crawler and fails the check.
+type Impostor struct {
+	UA       string  `json:"ua"`
+	Crawler  string  `json:"crawler"`
+	Count    int64   `json:"count"`
+	Verified float64 `json:"verified_share"` // share that did pass
+	Method   string  `json:"method"`         // "verifiedBotCategory" | "asn"
 }
 
 // FaceSeen is a face's archived history.
@@ -54,9 +71,13 @@ func IsExpensive(cacheStatus string) bool {
 	return true
 }
 
-// Cost is the expensive/cheap split of two windows.
+// Cost is the expensive/cheap split of two windows. Dyn is the part of
+// Exp that is cacheStatus "dynamic" — real rendering by a Worker or the
+// origin, the number an on-call human actually watches; the rest of Exp
+// is other cache misses (miss / bypass / expired …).
 type Cost struct {
 	ExpCur, ExpBase     int64
+	DynCur, DynBase     int64
 	CheapCur, CheapBase int64
 }
 
@@ -64,6 +85,9 @@ type Cost struct {
 func SplitCost(cur, base []cfapi.Face) Cost {
 	var c Cost
 	for _, f := range cur {
+		if strings.EqualFold(f.Name, "dynamic") {
+			c.DynCur += f.Count
+		}
 		if IsExpensive(f.Name) {
 			c.ExpCur += f.Count
 		} else {
@@ -71,6 +95,9 @@ func SplitCost(cur, base []cfapi.Face) Cost {
 		}
 	}
 	for _, f := range base {
+		if strings.EqualFold(f.Name, "dynamic") {
+			c.DynBase += f.Count
+		}
 		if IsExpensive(f.Name) {
 			c.ExpBase += f.Count
 		} else {
@@ -203,25 +230,38 @@ type IPShare struct {
 	IP    string  `json:"ip"`
 	Count int64   `json:"count"`
 	Share float64 `json:"share"`
+	// Protected is why the IP must never be blocked (Cloudflare's own
+	// range, origin, allowlist …); empty for real candidates.
+	Protected string `json:"protected,omitempty"`
+	// Cloudflare marks a Cloudflare-owned address: almost always Worker
+	// egress — a Worker (yours or another zone's) fetching this zone.
+	Cloudflare bool `json:"cloudflare,omitempty"`
 }
 
 // BlockAdvice surfaces block candidates (SPEC 8.5): concentrated sources
 // are named with their share; dispersed sources are called out as
-// "per-IP blocking will not help".
+// "per-IP blocking will not help". Concentrated sources that must never
+// be blocked (SPEC 13.1 guard rails) are reported separately, with why.
 type BlockAdvice struct {
 	Candidates []IPShare `json:"candidates,omitempty"`
+	Excluded   []IPShare `json:"excluded,omitempty"`
 	Dispersed  bool      `json:"dispersed,omitempty"`
 }
 
+// Protector tells whether an IP must never be blocked, and why.
+// cloudflare reports a Cloudflare-owned range specifically.
+type Protector func(ip string) (reason string, cloudflare bool)
+
 const (
 	candidateShare = 0.05 // an IP must carry >= 5% of the excess to be named
-	dispersedShare = 0.01 // top IP below 1%: per-IP blocking is pointless
+	dispersedShare = 0.01 // top blockable IP below 1%: per-IP blocking is pointless
 )
 
 // Block derives block candidates from the current window's top IPs.
 // The share basis is the excess over baseline when traffic grew, else the
-// whole window (CPU / 5xx anomalies without volume growth).
-func Block(cur, base Metrics, a Attribution) BlockAdvice {
+// whole window (CPU / 5xx anomalies without volume growth). protect may
+// be nil (no guard rails known).
+func Block(cur, base Metrics, a Attribution, protect Protector) BlockAdvice {
 	if len(a.TopIPs) == 0 {
 		return BlockAdvice{}
 	}
@@ -233,13 +273,28 @@ func Block(cur, base Metrics, a Attribution) BlockAdvice {
 		return BlockAdvice{}
 	}
 	var adv BlockAdvice
+	topBlockable := int64(-1)
 	for _, ip := range a.TopIPs {
 		share := min(float64(ip.Count)/float64(basis), 1)
+		var reason string
+		var cf bool
+		if protect != nil {
+			reason, cf = protect(ip.Name)
+		}
+		if reason != "" {
+			if share >= candidateShare {
+				adv.Excluded = append(adv.Excluded, IPShare{IP: ip.Name, Count: ip.Count, Share: share, Protected: reason, Cloudflare: cf})
+			}
+			continue
+		}
+		if topBlockable < 0 {
+			topBlockable = ip.Count
+		}
 		if share >= candidateShare {
 			adv.Candidates = append(adv.Candidates, IPShare{IP: ip.Name, Count: ip.Count, Share: share})
 		}
 	}
-	if float64(a.TopIPs[0].Count)/float64(basis) < dispersedShare {
+	if topBlockable >= 0 && float64(topBlockable)/float64(basis) < dispersedShare {
 		adv.Dispersed = true
 	}
 	return adv
