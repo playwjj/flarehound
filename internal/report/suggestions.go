@@ -2,8 +2,10 @@ package report
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
+	"github.com/playwjj/flarehound/internal/block"
 	"github.com/playwjj/flarehound/internal/suggest"
 )
 
@@ -33,7 +35,24 @@ func (l lang) suggestions(b *strings.Builder, ss []suggest.Suggestion) {
 		if rollback != "" {
 			fmt.Fprintf(b, "   %s %s\n", l.t("rollback:", "回滚："), rollback)
 		}
+		if cmd := runCommand(s); cmd != "" {
+			fmt.Fprintf(b, "   %s %s\n", l.t("one-click:", "一键执行："), cmd)
+		}
 	}
+}
+
+// runCommand is the `flarehound block` line for suggestions the blocking
+// module can apply (SPEC 13.1 entry ①). Temporary by default: 24h, after
+// which the attempts in the daily report decide whether to renew.
+func runCommand(s suggest.Suggestion) string {
+	t := block.Target{Type: block.ASN, Value: strconv.Itoa(s.ASN)}
+	switch s.Kind {
+	case suggest.BlockASN:
+		return block.Command(t, block.Block, "24h", "")
+	case suggest.ChallengeASN:
+		return block.Command(t, block.Challenge, "24h", "")
+	}
+	return ""
 }
 
 func (l lang) asnLabel(s suggest.Suggestion) string {

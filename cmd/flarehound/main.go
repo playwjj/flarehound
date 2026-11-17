@@ -36,12 +36,30 @@ func main() {
 	dryRun := flag.Bool("dry-run", false, "print messages to stdout instead of sending them")
 	backfill := flag.Int("backfill", 0, "archive the last N days (1-30) of hourly windows from Cloudflare, then exit")
 	showVersion := flag.Bool("version", false, "print version and exit")
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: flarehound [flags]            run the watchdog\n       flarehound <command> [args]   see `flarehound help`\n\nFlags:\n")
+		flag.PrintDefaults()
+	}
 	flag.Parse()
 	if *showVersion {
 		fmt.Println("flarehound", version)
 		return
 	}
 	redactor := logx.Install(os.Stderr)
+
+	// Blocking commands: they alone may read the write token.
+	if flag.NArg() > 0 {
+		verb := flag.Arg(0)
+		if !subcommands[verb] {
+			fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", verb, blockUsage)
+			os.Exit(2)
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		code := runSubcommand(ctx, *cfgPath, verb, flag.Args()[1:], redactor)
+		stop()
+		os.Exit(code)
+	}
+
 	log.Printf("flarehound %s starting", version)
 
 	cfg, err := config.Load(*cfgPath)

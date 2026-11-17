@@ -50,6 +50,11 @@
     "telegram_chat_id": ""
   },
   "state_file": "data/state.json",
+  "blocking": {
+    "write_token_env": "CF_WRITE_TOKEN",
+    "never_block": [],
+    "never_block_asns": []
+  },
   "archive": {
     "disabled": false,
     "file": "data/archive.db",

@@ -8,6 +8,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -118,7 +119,12 @@ type Config struct {
 	} `json:"report"`
 	Notify    Notify `json:"notify"`
 	StateFile string `json:"state_file"`
-	Archive   struct {
+	Blocking  struct {
+		WriteTokenEnv  string   `json:"write_token_env"`  // default CF_WRITE_TOKEN; read only by block/unblock/enforce
+		NeverBlock     []string `json:"never_block"`      // CIDRs / IPs that are never blocked
+		NeverBlockASNs []int    `json:"never_block_asns"` // ASNs that are never blocked
+	} `json:"blocking"`
+	Archive struct {
 		Disabled            bool   `json:"disabled"`
 		File                string `json:"file"`                  // default: <data dir>/archive.db
 		HourlyRetentionDays int    `json:"hourly_retention_days"` // default 400 (~13 months)
@@ -248,6 +254,19 @@ func (c *Config) resolve() error {
 	if c.StateFile == "" {
 		c.StateFile = "data/state.json"
 	}
+	if c.Blocking.WriteTokenEnv == "" {
+		c.Blocking.WriteTokenEnv = "CF_WRITE_TOKEN"
+	}
+	if c.Blocking.WriteTokenEnv == c.Cloudflare.APITokenEnv {
+		return fmt.Errorf("config: blocking.write_token_env must differ from cloudflare.api_token_env — the write token is kept separate from the read-only one")
+	}
+	for i, s := range c.Blocking.NeverBlock {
+		if _, err := netip.ParsePrefix(s); err != nil {
+			if _, err := netip.ParseAddr(s); err != nil {
+				return fmt.Errorf("config: blocking.never_block[%d] %q is not an IP or CIDR", i, s)
+			}
+		}
+	}
 	if c.Archive.File == "" {
 		c.Archive.File = filepath.Join(c.DataDir(), "archive.db")
 	}
@@ -258,6 +277,29 @@ func (c *Config) resolve() error {
 		return fmt.Errorf("config: archive.hourly_retention_days must be >= 30 (the long baseline needs 28 days)")
 	}
 	return nil
+}
+
+// NeverBlock returns the user allowlist as prefixes.
+func (c *Config) NeverBlock() []netip.Prefix {
+	var out []netip.Prefix
+	for _, s := range c.Blocking.NeverBlock {
+		if p, err := netip.ParsePrefix(s); err == nil {
+			out = append(out, p.Masked())
+		} else if a, err := netip.ParseAddr(s); err == nil {
+			out = append(out, netip.PrefixFrom(a, a.BitLen()))
+		}
+	}
+	return out
+}
+
+// WriteToken reads the separate write token (SPEC 13.1). Only the
+// blocking commands call this; the watch process never does.
+func (c *Config) WriteToken() (string, error) {
+	t := os.Getenv(c.Blocking.WriteTokenEnv)
+	if t == "" {
+		return "", fmt.Errorf("environment variable %s is empty: blocking needs a separate write token (Account → Account Filter Lists: Edit; Zone → WAF: Edit, Firewall Services: Edit, DNS: Read, Zone: Read)", c.Blocking.WriteTokenEnv)
+	}
+	return t, nil
 }
 
 // IntradayInterval parses the configured interval, defaulting to 1h.

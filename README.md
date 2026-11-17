@@ -4,7 +4,7 @@
 
 Cloudflare gives you data. FlareHound gives you the conclusion.
 
-> Status: **v0.4** — hourly watch, daily report, suggestion engine and local archive are complete. The detection model, thresholds and alert discipline are ported from a real incident response (a residential-proxy crawler flood, 2026-11-17). Next up: one-click blocking (v0.5). See [SPEC.md](SPEC.md) (in Chinese) for the full design.
+> Status: **v0.5** — hourly watch, daily report, suggestion engine, local archive and one-click blocking are complete. The detection model, thresholds and alert discipline are ported from a real incident response (a residential-proxy crawler flood, 2026-11-17). Next up: one-click blocking (v0.5). See [SPEC.md](SPEC.md) (in Chinese) for the full design.
 
 ## Why
 
@@ -92,10 +92,28 @@ Create the token at *Cloudflare Dashboard → My Profile → API Tokens → Crea
 
 Optional add-ons — grant only when you enable the feature:
 
-- **WAF rule audit** (v0.6): add **Zone** → **Firewall Services: Read** to the same token.
-- **One-click blocking** (v0.5): create a *separate* write token — **Account** → **IP Lists: Edit**, **Zone** → **Firewall Services: Edit**. Never merge it into the read token; the watchdog process never holds it.
+- **WAF rule audit** (v0.6): add **Zone** → **WAF: Read** and **Firewall Services: Read** to the same token.
+- **One-click blocking** (v0.5): create a *separate* write token — **Account** → **Account Filter Lists: Edit**; **Zone** → **WAF: Edit**, **Firewall Services: Edit**, **DNS: Read**, **Zone: Read**. Put it in `CF_WRITE_TOKEN`. Never merge it into the read token; the watchdog process never holds it.
 
 The watchdog's analytics run through `api.cloudflare.com/client/v4/graphql`; the audit additionally reads rulesets through the REST API on the same host. Your token never leaves your machine and is never written to disk or logs by the program.
+
+## One-click blocking
+
+Alerts name the culprit and print the command that blocks it:
+
+```bash
+flarehound block asn 207990 --action block --for 24h
+flarehound block ip 45.13.7.9
+flarehound block country XX --action challenge
+flarehound block ua "BadBot/1.0" --for 7d --reason "scraper, 11-17 incident"
+flarehound unblock asn 207990
+flarehound blocks            # everything blocked, with 7-day attempts and expiry
+flarehound enforce           # long-running: lifts blocks whose --for has passed
+```
+
+Before anything changes you see the exact plan — the rule it edits and the expression afterwards, the custom-rule quota, the target's measured share of the last hour's excess, and every warning — and confirm once. FlareHound only ever edits its own objects (rules named `flarehound-…`, the IP list `flarehound_block`), merges each target type into one rule so your quota is barely touched, keeps verified search bots allowed on ASN and country rules, and reads the result back to verify. It refuses to block Cloudflare's ranges, your origin IPs (from DNS), private ranges and anything on your `blocking.never_block` list. Blocking a residential/backbone ASN or a whole country requires retyping the ASN or country code. Every action lands in an append-only audit log, and the daily report lists each block's attempts — lift a block when the attempts stop, not when it gets quiet.
+
+In Docker: `docker compose --profile admin up -d` starts the enforcer with the write token, and `docker compose run --rm flarehound-admin block …` runs commands.
 
 ## How it decides
 
@@ -129,7 +147,7 @@ The primary form factor is a single Go binary in a Docker container, running on 
 - ~~v0.2~~ — daily digest (24 h comparison + fixed checkpoints) ✅
 - ~~v0.3~~ — full intraday watch (new-face detection, escalation/recovery state machine, attribution queries) ✅
 - ~~v0.4~~ — suggestion engine (block / challenge / rate-limit / cache candidates) + local SQLite archive ✅
-- **v0.5** — one-click blocking (IP / CIDR / ASN / country / user-agent — block from an alert or the CLI, expiring blocks, guard rails, audit log)
+- ~~v0.5~~ — one-click blocking (IP / CIDR / ASN / country / user-agent — block from an alert or the CLI, expiring blocks, guard rails, audit log) ✅
 - **v0.6** — WAF rule audit (coverage gaps on sensitive paths, ordering/redundancy issues, per-rule hit stats, over-broad exemptions)
 - **v0.7** — general action module (execute approved suggestions with a separate write token, pre-change backup, read-back verification)
 - **v0.8** — more notification channels, multi-zone

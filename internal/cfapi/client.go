@@ -69,6 +69,9 @@ type Filter struct {
 	WorkerScript      string // workers dataset only
 	FirewallAction    string // firewall dataset only
 	FirewallNotAction string // firewall dataset only
+	FirewallRuleID    string // firewall dataset only
+	ClientIP          string // exact
+	UserAgentLike     string // SQL-like pattern, % wildcard
 }
 
 func (f Filter) render(from, to time.Time) string {
@@ -99,6 +102,15 @@ func (f Filter) render(from, to time.Time) string {
 	}
 	if f.FirewallAction != "" {
 		parts = append(parts, "action:"+quote(f.FirewallAction))
+	}
+	if f.FirewallRuleID != "" {
+		parts = append(parts, "ruleId:"+quote(f.FirewallRuleID))
+	}
+	if f.ClientIP != "" {
+		parts = append(parts, "clientIP:"+quote(f.ClientIP))
+	}
+	if f.UserAgentLike != "" {
+		parts = append(parts, "userAgent_like:"+quote(f.UserAgentLike))
 	}
 	if f.FirewallNotAction != "" {
 		parts = append(parts, "action_neq:"+quote(f.FirewallNotAction))
@@ -279,6 +291,16 @@ func (c *Client) ASNNames(ctx context.Context, zoneID string, from, to time.Time
 	return out, nil
 }
 
+// ASNName returns one ASN's registered name ("" if unknown).
+func (c *Client) ASNName(ctx context.Context, zoneID string, from, to time.Time, asn int) (string, error) {
+	rows, err := c.zoneRows(ctx, zoneID, "httpRequestsAdaptiveGroups", "count dimensions{clientAsn clientASNDescription}", 1, true, Filter{ASN: asn}.render(from, to))
+	if err != nil || len(rows) == 0 {
+		return "", err
+	}
+	name, _ := rows[0].Dimensions["clientASNDescription"].(string)
+	return name, nil
+}
+
 // FirewallByRule returns firewall-event counts grouped by rule and action
 // ("<action> <source>:<ruleId>"). Not available on every plan: callers
 // must treat an error as "data unavailable", not as zero.
@@ -295,6 +317,25 @@ func (c *Client) FirewallByRule(ctx context.Context, zoneID string, from, to tim
 		})
 	}
 	return out, nil
+}
+
+// Firewall dimension names accepted by FirewallTop.
+const (
+	FwDimIP      = "clientIP"
+	FwDimASN     = "clientAsn"
+	FwDimCountry = "clientCountryName"
+	FwDimUA      = "userAgent"
+)
+
+// FirewallTop returns firewall-event counts of one rule grouped by one
+// dimension — "how often did each blocked object try" (SPEC 7.4).
+func (c *Client) FirewallTop(ctx context.Context, zoneID string, from, to time.Time, ruleID, dim string, limit int) ([]Face, error) {
+	rows, err := c.zoneRows(ctx, zoneID, "firewallEventsAdaptiveGroups", "count dimensions{"+dim+"}", limit, true,
+		Filter{FirewallRuleID: ruleID}.render(from, to))
+	if err != nil {
+		return nil, err
+	}
+	return faces(rows, dim), nil
 }
 
 // WorkerStats returns invocation count (requests, including subrequests)

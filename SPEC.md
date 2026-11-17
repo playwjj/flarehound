@@ -1,8 +1,8 @@
 # FlareHound 规格说明书（SPEC）
 
-- 版本：0.4（v0.2 每日报告、v0.3 日内看守、v0.4 建议引擎与本地归档落地；2026-11-17 补订 WAF 规则体检与可选执行模块）
+- 版本：0.5（v0.2 每日报告、v0.3 日内看守、v0.4 建议引擎与本地归档、v0.5 一键封锁落地；2026-11-17 补订 WAF 规则体检与可选执行模块）
 - 日期：2026-11-17
-- 状态：v0.4 已实现，v0.5 一键封锁待开发
+- 状态：v0.5 已实现（封锁模块待真实 zone 验证），v0.6 WAF 规则体检待开发
 - 许可证：MIT
 
 > 英文说明见 [README.md](README.md)。本文档是给贡献者与维护者看的完整规格，定义产品边界、数据口径、检测规则与路线图。实现与本文冲突时，先改本文再改代码。
@@ -179,7 +179,7 @@
 
 ### 7.4 每日报告的固定检查点（示例，随站点配置）
 
-- 昨日被拦截名单（IP / ASN）的尝试量（为「何时可以解封」提供依据：以尝试量而非安静时长为准）。v0.2 实现为按「动作 + 来源 + ruleId」聚合的防火墙事件 Top 10；数据集不可用（Free 套餐或缺权限）时明说不可用，不报 0；v0.5 起改为按封锁项汇报；
+- 昨日被拦截名单（IP / ASN）的尝试量（为「何时可以解封」提供依据：以尝试量而非安静时长为准）。按「动作 + 来源 + ruleId」聚合的防火墙事件 Top 10；数据集不可用（Free 套餐或缺权限）时明说不可用，不报 0；v0.5 起另列每个 FlareHound 封锁项的尝试量、起始时间与到期时间；
 - 重点路径的源站到达量（如登录、注册、榜单类页面应为 0 或低量）。配置 `daily.paths`（路径模式 + 上限），到达量 = 该路径昂贵类缓存状态（见第 8 节）的请求数，超限标 ⚠；
 - 已知记账假象的单列说明（如缓存读未命中被记为 504 的条目，与真实访客错误率分开报）。配置 `daily.artifacts`（标签 + 路径模式 + 边缘状态码），单列计数。
 
@@ -252,7 +252,8 @@
 - **Token 权限**：只读。已知够用的最小集：
   - Zone 级：Analytics Read、Logs Read、Zone Read（能力探测读取套餐与配额）；
   - Account 级：Workers Scripts Read（读取 Worker 调用量指标）、Account Analytics Read。
-  - Zone 级（启用 WAF 体检时追加）：Firewall Services Read（只读读取规则集）。
+  - Zone 级（启用 WAF 体检时追加）：WAF Read（读取自定义规则集，Rulesets API 的权限名）与 Firewall Services Read（IP 访问规则）。
+- **写 Token**（仅封锁模块，第 13 节）：Account 级 Account Filter Lists Edit（IP 名单）；Zone 级 WAF Edit（自定义规则，Rulesets API）、Firewall Services Edit（IP 访问规则兜底）、DNS Read（读取源站 IP 作护栏）、Zone Read（读取套餐以判断规则额度）。
   （以实际授权结果为准，README 中给出创建步骤与逐项说明。）
 - Token 只从环境变量（如 `CF_API_TOKEN`）读取；禁止写入配置文件与日志；日志中出现 Token 特征串必须脱敏。实现：全部日志经脱敏写入器，已加载的密钥值、`Bearer …` 串与 Telegram `/bot<token>` 段一律替换为 `[REDACTED]`。
 - Webhook URL 本身常含密钥（如 Slack / 飞书机器人地址），应经 `notify.webhook_url_env` 从环境变量读取；`webhook_url` 明文字段仅为兼容保留。
@@ -278,7 +279,7 @@
 - **动作可选**：每条封锁可选 Block 或 Managed Challenge。默认：IP / 网段用 Block；ASN / 国家默认建议 Challenge（误伤面大），用户可改 Block；UA 默认 Block。
 - **入口**：① 告警 / 报告中的封锁候选（见第 8 节）直接确认执行，候选自带对象类型与建议机制；② CLI：`flarehound block ip 203.0.113.7`、`flarehound block asn 207990`、`flarehound block country XX --action challenge`、`flarehound block ua "BadBot/1.0"`、`flarehound unblock …`、`flarehound blocks`（列出全部封锁项与各自近 7 天尝试量）。
 - **临时封锁**：所有机制均无原生 TTL；TTL（如 `--for 24h`）由工具按审计记录到期自动撤销，并在日报中提及；不带 TTL 为长期封锁。
-- **授权**：封锁动作使用独立的写 Token（权限：账户 IP Lists Write + 目标 zone 的 Firewall Services Write），与只读 Token 分开存放；看守进程永不读取该 Token。未配置写 Token 时，封锁候选只展示不执行。
+- **授权**：封锁动作使用独立的写 Token（权限见第 12 节），与只读 Token 分开存放；看守进程永不读取该 Token。未配置写 Token 时，封锁候选只展示不执行。
 - **护栏**（低摩擦不等于无护栏）：
   - 永不封锁：Cloudflare 官方 IP 段、该 zone 的源站 IP（自动从 DNS 记录读取）、私有 / 保留地址、用户自维护的白名单；
   - 份额提示：目标占异常量份额可忽略（如 < 1%）时，确认前明说「封它解决不了这次异常」，并给出更有效的处置——易用不能变成易错；
@@ -286,6 +287,20 @@
   - 国家提示：整国封锁误伤最大，确认前展示该国流量的真人 / 机器人构成；
   - UA 提示：明示 UA 可伪造、爬虫会轮换（实战中一天换三批），按 UA 封只适合指纹稳定的目标；
   - 每次封锁写入审计日志（时间、对象、机制、理由 / 关联的 Finding、TTL）；解封一键完成；日报固定检查点汇报各封锁项的尝试量（口径同第 7.4 节）。
+
+**v0.5 实现口径**：
+
+- **自有对象**：每个「对象类型 × 动作」一条自定义规则，`ref` 与描述均为 `flarehound-<类型>-<动作>`（如 `flarehound-asn-challenge`）；IP 封禁另用账户级 IP 名单 `flarehound_block` 与引用它的规则 `flarehound-ip-block`（表达式 `ip.src in $flarehound_block`）；IP 访问规则兜底项的备注以 `flarehound:` 开头。工具只识别、只修改这些对象。
+- **表达式**：IP `(ip.src in {…})`；ASN `(ip.geoip.asnum in {…}) and not cf.client.bot`；国家 `(ip.geoip.country in {"XX" …}) and not cf.client.bot`（国家规则同样保留已验证机器人——整国规则不应顺带屏蔽搜索引擎）；UA `(http.user_agent contains "…" or …)`。格式固定，可反解析；规则被手工改成无法识别的形状时，工具拒绝修改并报错，绝不覆盖。单条表达式超过 4,096 字符时拒绝追加。
+- **Cloudflare 是事实来源**：当前封锁集合每次从 Cloudflare 读取（规则表达式 + 名单条目 + 访问规则）；本地审计日志记录谁、为何、何时、到期时间。`flarehound blocks` 对账两者：有远端无审计（手工创建）、有审计无远端（被手工删除）都会标出。
+- **机制选择**：IP 封禁优先名单（可容纳数千条，名单建不出来时退为表达式规则，同样只占 1 条规则）；其余对象优先合并规则。规则额度按套餐（Free 5 / Pro 20 / Business 100 / Enterprise 1,000，与用户规则共享）判断；已有自有规则时追加不占新额度；额度已满时 IP / ASN 退到 IP 访问规则（并明示无法豁免已验证机器人；IPv4 网段仅 /16、/24，IPv6 仅 /48、/64），国家 / UA 无兜底，报错并说明。新规则追加在用户规则之后，不调整用户规则顺序。zone 尚无自定义规则集时才创建入口规则集（绝不对已存在的入口规则集做整体替换）。
+- **改动动作**：同一对象已以相同动作封锁 → 不做任何事；以另一动作封锁 → 要求先解封。解封后规则为空则删除该规则（释放额度）；名单清空时删除引用规则（名单保留）。
+- **确认流程**：先展示完整计划（zone、对象、动作、机制与额度、变更后的表达式、近一小时实测份额、到期时间、全部护栏警告），再一次 y/N 确认（`--yes` 跳过）。封禁宽带 / 未知类型 ASN 或整国封禁时，必须重新输入该 ASN 号 / 国家代码确认（`--confirm` 可预填），`--yes` 不能代替。
+- **护栏实现**：永不封锁清单 = Cloudflare 官方段（实时拉取，失败用内置副本）+ zone 的 A / AAAA 记录（读不到 DNS 时拒绝封 IP，除非 `--skip-origin-check`）+ 私有 / 保留 / 文档地址段 + `blocking.never_block`；ASN 永不封锁 Cloudflare 自身（13335、209242）与 `blocking.never_block_asns`。份额按「刚落定的整点小时」对比昨日同小时测量：单 IP（含 /32）、ASN、UA 可测，网段与国家不可测并明说。份额 < 1% 时警告「封它解决不了这次异常」。
+- **回读验证**：每次变更后重新读取 Cloudflare 状态，确认对象已按预期动作存在（或已消失），否则报错并提示核对面板。
+- **入口**：① 告警中的 ASN 建议与 IP 封锁候选附带可直接执行的命令（默认 `--for 24h`）；② CLI：`block` / `unblock` / `blocks`（`--days` 尝试量窗口）/ `enforce`。
+- **TTL**：到期时间存于审计日志；`flarehound enforce` 进程（持写 Token，默认每 5 分钟）到期解封并记 `expire` 事件。看守进程不持写 Token，只在日报中展示各封锁项的 24 小时尝试量与到期时间。docker-compose 提供 `admin` profile 的独立服务。
+- **尝试量**：按封锁项所在规则的 `ruleId` 查询防火墙事件，按对象维度（clientIP / clientAsn / clientCountryName / userAgent）归属到具体条目，逐日查询后求和；查询失败显示「不可用」，不报 0。
 
 ### 13.2 通用执行模块（v0.7 起）
 
@@ -313,9 +328,10 @@
 - `report.language`：`en` / `zh`；
 - `notify`：渠道与端点（敏感值只写环境变量名，不写明文）；
 - `state_file`：状态文件路径（Docker 形态下挂载到 /app/data）；多 zone 时自动派生每 zone 一个状态文件；通知待发箱 `outbox.json` 与其同目录；
-- `archive`：`disabled`（默认 false）、`file`（默认与状态文件同目录的 `archive.db`）、`hourly_retention_days`（默认 400）。
+- `archive`：`disabled`（默认 false）、`file`（默认与状态文件同目录的 `archive.db`）、`hourly_retention_days`（默认 400）；
+- `blocking`：`write_token_env`（默认 `CF_WRITE_TOKEN`，不得与只读 Token 同名）、`never_block`（IP / CIDR）、`never_block_asns`。
 
-命令行：`-config`、`-once`（跑一轮日内看守后退出）、`-daily`（立即生成日报后退出）、`-dry-run`（消息打印到标准输出，不发送）、`-backfill N`（回填近 N 天归档后退出）、`-version`。
+命令行：`-config`、`-once`（跑一轮日内看守后退出）、`-daily`（立即生成日报后退出）、`-dry-run`（消息打印到标准输出，不发送）、`-backfill N`（回填近 N 天归档后退出）、`-version`；子命令 `block` / `unblock` / `blocks` / `enforce` / `help`（第 13 节，只有子命令读取写 Token）。
 
 ## 15. 路线图
 
@@ -325,7 +341,7 @@
 | v0.2 ✅ | 每日报告全量落地（固定检查点、两窗对比、报告模板） |
 | v0.3 ✅ | 日内看守全量落地（新面孔检测、升级/恢复状态机、归因查询） |
 | v0.4 ✅ | 建议引擎（封禁/挑战/限速/缓存四类候选）；本地 SQLite 归档（小时 / 日快照、长基线、新面孔历史、报警历史、回填） |
-| v0.5 | 一键封锁（IP / 网段 / ASN / 国家 / UA：告警内直接封、CLI、TTL 临时封锁、护栏与审计） |
+| v0.5 ✅ | 一键封锁（IP / 网段 / ASN / 国家 / UA：告警内直接封、CLI、TTL 临时封锁、护栏与审计） |
 | v0.6 | WAF 规则体检（覆盖缺口 / 顺序与冗余 / 命中统计 / 豁免面审计） |
 | v0.7 | 通用执行模块（任意规则变更：独立写 Token、逐项确认、改前备份、回读验证） |
 | v0.8 | 通知渠道补齐（Slack/Discord/邮件）；多 zone 并行 |

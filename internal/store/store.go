@@ -78,6 +78,21 @@ CREATE TABLE IF NOT EXISTS alerts (
 	sent_at     INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS alerts_zone ON alerts (zone, window_to);
+CREATE TABLE IF NOT EXISTS block_events (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	at         INTEGER NOT NULL,
+	zone       TEXT    NOT NULL,
+	op         TEXT    NOT NULL, -- block | unblock | expire
+	type       TEXT    NOT NULL,
+	value      TEXT    NOT NULL,
+	action     TEXT    NOT NULL,
+	mechanism  TEXT    NOT NULL,
+	rule_id    TEXT    NOT NULL,
+	reason     TEXT    NOT NULL,
+	expires_at INTEGER NOT NULL, -- 0: no expiry
+	actor      TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS block_events_target ON block_events (zone, type, value, id);
 `
 
 // Open opens (creating if needed) the archive at path.
@@ -293,4 +308,77 @@ func (s *Store) Stats(zone string) (Stats, error) {
 		st.Oldest = time.Unix(oldest.Int64, 0).UTC()
 	}
 	return st, err
+}
+
+// BlockEvent is one append-only audit record of the blocking module
+// (SPEC 13.1: time, object, mechanism, reason / linked finding, TTL).
+type BlockEvent struct {
+	ID        int64
+	At        time.Time
+	Zone      string
+	Op        string // block | unblock | expire
+	Type      string
+	Value     string
+	Action    string
+	Mechanism string
+	RuleID    string
+	Reason    string
+	ExpiresAt time.Time // zero: permanent
+	Actor     string
+}
+
+// AddBlockEvent appends an audit record. There is no update or delete.
+func (s *Store) AddBlockEvent(e BlockEvent) error {
+	var exp int64
+	if !e.ExpiresAt.IsZero() {
+		exp = e.ExpiresAt.Unix()
+	}
+	if e.At.IsZero() {
+		e.At = time.Now()
+	}
+	_, err := s.db.Exec(`INSERT INTO block_events (at, zone, op, type, value, action, mechanism, rule_id, reason, expires_at, actor)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		e.At.Unix(), e.Zone, e.Op, e.Type, e.Value, e.Action, e.Mechanism, e.RuleID, e.Reason, exp, e.Actor)
+	return err
+}
+
+func scanEvents(rows *sql.Rows) ([]BlockEvent, error) {
+	defer rows.Close()
+	var out []BlockEvent
+	for rows.Next() {
+		var e BlockEvent
+		var at, exp int64
+		if err := rows.Scan(&e.ID, &at, &e.Zone, &e.Op, &e.Type, &e.Value, &e.Action, &e.Mechanism, &e.RuleID, &e.Reason, &exp, &e.Actor); err != nil {
+			return nil, err
+		}
+		e.At = time.Unix(at, 0).UTC()
+		if exp > 0 {
+			e.ExpiresAt = time.Unix(exp, 0).UTC()
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+const eventCols = `id, at, zone, op, type, value, action, mechanism, rule_id, reason, expires_at, actor`
+
+// ActiveBlocks returns, per target, the latest event when it is a block —
+// i.e. what the audit log believes is currently blocked in a zone.
+func (s *Store) ActiveBlocks(zone string) ([]BlockEvent, error) {
+	rows, err := s.db.Query(`SELECT `+eventCols+` FROM block_events e
+		WHERE zone = ? AND id = (SELECT MAX(id) FROM block_events WHERE zone = e.zone AND type = e.type AND value = e.value)
+		AND op = 'block' ORDER BY type, value`, zone)
+	if err != nil {
+		return nil, err
+	}
+	return scanEvents(rows)
+}
+
+// BlockHistory returns a zone's audit log, oldest first.
+func (s *Store) BlockHistory(zone string) ([]BlockEvent, error) {
+	rows, err := s.db.Query(`SELECT `+eventCols+` FROM block_events WHERE zone = ? ORDER BY id`, zone)
+	if err != nil {
+		return nil, err
+	}
+	return scanEvents(rows)
 }

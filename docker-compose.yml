@@ -12,3 +12,20 @@ services:
     volumes:
       - ./config.json:/app/config.json:ro
       - ./data:/app/data
+
+  # Optional (v0.5 one-click blocking). Holds the separate WRITE token; the
+  # watchdog above never sees it. Runs the TTL enforcer, and is the
+  # container to run block commands in:
+  #   docker compose --profile admin up -d
+  #   docker compose run --rm flarehound-admin block asn 207990 --for 24h
+  flarehound-admin:
+    image: passport888/flarehound:latest
+    profiles: ["admin"]
+    restart: unless-stopped
+    command: ["-config", "/app/config.json", "enforce"]
+    environment:
+      CF_API_TOKEN: ${CF_API_TOKEN:-}
+      CF_WRITE_TOKEN: ${CF_WRITE_TOKEN:-}  # the separate blocking token
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - ./data:/app/data

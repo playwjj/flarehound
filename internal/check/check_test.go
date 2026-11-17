@@ -80,6 +80,13 @@ func (f *fakeAPI) ASNNames(context.Context, string, time.Time, time.Time, int) (
 	return map[int]string{207990: "EXAMPLE-HOSTING-AS", 4134: "CHINANET-BACKBONE"}, nil
 }
 
+func (f *fakeAPI) FirewallTop(_ context.Context, _ string, _, _ time.Time, ruleID, _ string, _ int) ([]cfapi.Face, error) {
+	if ruleID == "rule-asn" {
+		return []cfapi.Face{{Name: "AS207990", ASN: 207990, Count: 120}, {Name: "AS1", ASN: 1, Count: 5}}, nil
+	}
+	return nil, nil
+}
+
 func (f *fakeAPI) WorkerStats(_ context.Context, _, _ string, from, _ time.Time) (int64, float64, error) {
 	w := f.w(from)
 	return w.calls, w.cpu, nil
@@ -151,7 +158,8 @@ func TestIncidentReplay(t *testing.T) {
 	alert := out.msgs[0]
 	t.Logf("alert:\n%s", alert)
 	for _, want := range []string{"anomaly", "Worker web calls", "AS207990", "Hypotheses", "per-IP blocking will not help", "/rank",
-		"Block AS207990 (EXAMPLE-HOSTING-AS, hosting network)", "(ip.geoip.asnum in {207990}) and not cf.client.bot", "Rate-limit /rank", "rollback:"} {
+		"Block AS207990 (EXAMPLE-HOSTING-AS, hosting network)", "(ip.geoip.asnum in {207990}) and not cf.client.bot", "Rate-limit /rank", "rollback:",
+		"one-click: flarehound block asn 207990 --action block --for 24h"} {
 		if !strings.Contains(alert, want) {
 			t.Errorf("alert lacks %q:\n%s", want, alert)
 		}
@@ -363,5 +371,25 @@ func TestBackfill(t *testing.T) {
 	}
 	if len(api.reads) != 0 {
 		t.Fatalf("re-fetched %d archived windows", len(api.reads))
+	}
+}
+
+func TestDailyShowsBlocks(t *testing.T) {
+	cfg := testConfig(t)
+	api := &fakeAPI{windows: map[time.Time]*window{}, reads: map[time.Time]int{}}
+	out := &sink{}
+	end := time.Date(2026, 11, 17, 8, 0, 0, 0, time.UTC)
+	r := &Runner{API: api, Cfg: cfg, Sender: out, Now: func() time.Time { return end.Add(7 * time.Minute) }}
+	st := withStore(t, r)
+	zone := cfg.Cloudflare.Zones[0]
+	api.windows[end.Add(-48*time.Hour)] = normal()
+	api.windows[end.Add(-24*time.Hour)] = normal()
+	_ = st.AddBlockEvent(store.BlockEvent{At: end.Add(-5 * time.Hour), Zone: zone.ZoneID, Op: "block", Type: "asn", Value: "207990",
+		Action: "challenge", Mechanism: "custom_rule", RuleID: "rule-asn", ExpiresAt: end.Add(19 * time.Hour), Actor: "cli"})
+	if err := r.Daily(context.Background(), zone); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.msgs[0], "AS207990 (challenge): 120") || !strings.Contains(out.msgs[0], "expires 11-18 03:00") {
+		t.Fatalf("daily lacks block checkpoint:\n%s", out.msgs[0])
 	}
 }

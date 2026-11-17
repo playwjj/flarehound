@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/playwjj/flarehound/internal/analyze"
+	"github.com/playwjj/flarehound/internal/block"
 	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/schedule"
 	"github.com/playwjj/flarehound/internal/state"
@@ -374,6 +375,9 @@ func Intraday(language string, d IntradayData) string {
 		b.WriteString("\n" + l.t("Block candidates:\n", "封锁候选：\n"))
 		for _, c := range d.Block.Candidates {
 			fmt.Fprintf(&b, l.t("- IP %s: %s requests, ~%s of the excess\n", "- IP %s：%s 次，约占增量 %s\n"), c.IP, n(c.Count), share(c.Share))
+			if t, err := block.Parse("ip", c.IP); err == nil {
+				fmt.Fprintf(&b, "  %s %s\n", l.t("one-click:", "一键执行："), block.Command(t, block.Block, "24h", ""))
+			}
 		}
 	} else if d.Block.Dispersed {
 		b.WriteString("\n" + l.t("Sources are dispersed (top IP < 1% of the excess): per-IP blocking will not help — act at ASN or path level (challenge).\n",
@@ -404,6 +408,16 @@ type ArtifactCount struct {
 	Count int64
 }
 
+// BlockStatus is one active FlareHound block for the daily checkpoint.
+type BlockStatus struct {
+	Target     string
+	Action     string
+	Attempts   int64
+	AttemptsNA bool
+	Since      time.Time
+	ExpiresAt  time.Time
+}
+
 // ArchiveInfo summarises the local archive for the daily report.
 type ArchiveInfo struct {
 	Hours, Days int64
@@ -427,6 +441,7 @@ type DailyData struct {
 	Artifacts         []ArtifactCount
 	Suggestions       []suggest.Suggestion
 	Archive           *ArchiveInfo
+	Blocks            []BlockStatus
 	ActiveSince       time.Time
 	ActiveFingerprint string
 	Gaps              []string
@@ -488,6 +503,22 @@ func Daily(language string, d DailyData) string {
 		b.WriteString(l.t("- firewall events by rule (attempts — the basis for lifting a block):\n", "- 按规则的防火墙事件（尝试量——解封以尝试量为准）：\n"))
 		for _, f := range d.Firewall {
 			fmt.Fprintf(&b, "  %s: %s\n", f.Name, n(f.Count))
+		}
+	}
+	if len(d.Blocks) > 0 {
+		b.WriteString(l.t("- FlareHound blocks (attempts in the window — lift a block when attempts stop, not when it gets quiet):\n",
+			"- FlareHound 封锁项（窗口内尝试量——尝试停止才考虑解封，而不是看安静多久）：\n"))
+		for _, x := range d.Blocks {
+			att := n(x.Attempts)
+			if x.AttemptsNA {
+				att = l.t("n/a", "不可用")
+			}
+			exp := l.t("permanent", "长期")
+			if !x.ExpiresAt.IsZero() {
+				exp = l.t("expires ", "到期 ") + x.ExpiresAt.In(locOr(d.Loc)).Format("01-02 15:04")
+			}
+			fmt.Fprintf(&b, "  %s (%s): %s; %s %s; %s\n", x.Target, x.Action, att,
+				l.t("since", "始于"), x.Since.In(locOr(d.Loc)).Format("01-02 15:04"), exp)
 		}
 	}
 	for _, c := range d.Checkpoints {

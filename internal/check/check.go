@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/playwjj/flarehound/internal/analyze"
+	"github.com/playwjj/flarehound/internal/block"
 	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/config"
 	"github.com/playwjj/flarehound/internal/report"
@@ -29,6 +30,7 @@ type API interface {
 	Top(ctx context.Context, zoneID string, from, to time.Time, dim string, limit int, f cfapi.Filter) ([]cfapi.Face, error)
 	FirewallByRule(ctx context.Context, zoneID string, from, to time.Time, limit int) ([]cfapi.Face, error)
 	ASNNames(ctx context.Context, zoneID string, from, to time.Time, limit int) (map[int]string, error)
+	FirewallTop(ctx context.Context, zoneID string, from, to time.Time, ruleID, dim string, limit int) ([]cfapi.Face, error)
 	WorkerStats(ctx context.Context, accountID, script string, from, to time.Time) (int64, float64, error)
 }
 
@@ -515,6 +517,17 @@ func (r *Runner) Daily(ctx context.Context, zone config.Zone) error {
 		}
 		if err := r.Store.PutSnapshot(z, store.Day, w.From, w.To, snap); err != nil {
 			log.Printf("zone %s: archive daily: %v", zone.Name, err)
+		}
+		if evs, err := r.Store.ActiveBlocks(z); err != nil {
+			logErr("blocks", err)
+		} else {
+			for _, ev := range evs {
+				t := block.Target{Type: block.Type(ev.Type), Value: ev.Value}
+				bs := report.BlockStatus{Target: t.String(), Action: ev.Action, Since: ev.At, ExpiresAt: ev.ExpiresAt}
+				bs.Attempts, err = block.Attempts(ctx, r.API, z, ev.RuleID, t, w.From, w.To)
+				bs.AttemptsNA = err != nil
+				d.Blocks = append(d.Blocks, bs)
+			}
 		}
 		if st, err := r.Store.Stats(z); err == nil {
 			d.Archive = &report.ArchiveInfo{Hours: st.Hours, Days: st.Days, Oldest: st.Oldest}
