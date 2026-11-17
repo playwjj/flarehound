@@ -4,7 +4,7 @@
 
 Cloudflare gives you data. FlareHound gives you the conclusion.
 
-> Status: **v0.4** — hourly watch, daily report and suggestion engine are complete. The detection model, thresholds and alert discipline are ported from a real incident response (a residential-proxy crawler flood, 2026-11-17). Next up: one-click blocking (v0.5). See [SPEC.md](SPEC.md) (in Chinese) for the full design.
+> Status: **v0.4** — hourly watch, daily report, suggestion engine and local archive are complete. The detection model, thresholds and alert discipline are ported from a real incident response (a residential-proxy crawler flood, 2026-11-17). Next up: one-click blocking (v0.5). See [SPEC.md](SPEC.md) (in Chinese) for the full design.
 
 ## Why
 
@@ -19,7 +19,7 @@ FlareHound watches the traffic itself:
 - **New-face detection** — user agents and ASNs that suddenly enter your Top 10 and weren't in yesterday's Top 25.
 - **Quiet by design** — no anomaly, no message. The same anomaly never alerts twice unless it grows another 25%; two clean rounds earn a single "recovered" line.
 - **Suggestions, never actions** — the watchdog core is read-only. It may suggest blocking an ASN or challenging a path, with evidence and expected impact, but it never changes your Cloudflare configuration. (Blocking an IP, range, ASN, country or user-agent becomes a one-click, separately authorized action in v0.5; a general action module follows in v0.7 — both behind their own write token and per-action confirmation; the core stays read-only.)
-- **A memory Cloudflare doesn't keep** — Cloudflare retains only ~31 days of analytics, and raw logs are a metered add-on. FlareHound snapshots every check into a local SQLite archive, building the long memory the platform lacks: multi-week baselines, 90-day per-rule hit history, first-seen dates for ASNs and user agents.
+- **A memory Cloudflare doesn't keep** — Cloudflare retains only ~31 days of analytics, and raw logs are a metered add-on. FlareHound snapshots every check into a local SQLite file (`data/archive.db`, ~13 months of hourly snapshots, daily rollups forever), building the long memory the platform lacks. Once four weeks are archived, a spike must beat both yesterday *and* the 4-week same-hour median before it alerts — one odd yesterday no longer pages you. New ASNs and user agents are reported with their first-seen date, and every alert is kept in a history table.
 
 ## Quick start
 
@@ -39,6 +39,12 @@ export CF_API_TOKEN=...
 
 4. Point `notify.webhook_url_env` at an environment variable holding any endpoint that accepts a JSON POST (Telegram/Slack/Discord bridges included), or configure the Telegram bot.
 5. Pick the report language: `"report": {"language": "en"}` or `"zh"` (Chinese).
+
+Optionally fill the local archive with the last four weeks right away (Cloudflare keeps ~31 days), so the 4-week baseline works from day one instead of week five. It is paced to ~1 query/second and takes about an hour per zone:
+
+```bash
+flarehound -config config.json -backfill 28
+```
 
 Try it before going live — this prints the messages instead of sending them:
 
@@ -122,7 +128,7 @@ The primary form factor is a single Go binary in a Docker container, running on 
 
 - ~~v0.2~~ — daily digest (24 h comparison + fixed checkpoints) ✅
 - ~~v0.3~~ — full intraday watch (new-face detection, escalation/recovery state machine, attribution queries) ✅
-- ~~v0.4~~ — suggestion engine (block / challenge / rate-limit / cache candidates) ✅
+- ~~v0.4~~ — suggestion engine (block / challenge / rate-limit / cache candidates) + local SQLite archive ✅
 - **v0.5** — one-click blocking (IP / CIDR / ASN / country / user-agent — block from an alert or the CLI, expiring blocks, guard rails, audit log)
 - **v0.6** — WAF rule audit (coverage gaps on sensitive paths, ordering/redundancy issues, per-rule hit stats, over-broad exemptions)
 - **v0.7** — general action module (execute approved suggestions with a separate write token, pre-change backup, read-back verification)

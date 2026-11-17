@@ -267,7 +267,9 @@ type IntradayData struct {
 	Hypotheses  []analyze.Hypothesis
 	Block       analyze.BlockAdvice
 	Suggestions []suggest.Suggestion
-	Since       time.Time // episode start
+	Since       time.Time        // episode start
+	Long        *analyze.Metrics // 4-week same-hour median, when the archive has enough samples
+	LongN       int              // samples behind Long (or collected so far)
 }
 
 // Intraday renders an intraday alert / escalation / recovery message.
@@ -297,6 +299,11 @@ func Intraday(language string, d IntradayData) string {
 	}
 	b.WriteString("\n")
 	l.twoWindows(&b, d.Cur, d.Base, l.t("vs same hour yesterday", "对比昨日同时段"))
+	if d.Long != nil {
+		fmt.Fprintf(&b, l.t("- 4-week same-hour median (%d samples): requests %s, dynamic %s, origin 5xx %s — every volume line above also crossed this baseline\n",
+			"- 近 4 周同时段中位数（%d 个样本）：总请求 %s，dynamic %s，源站 5xx %s——上述量类越线均已对此基线复核\n"),
+			d.LongN, n(d.Long.Total), n(d.Long.Dynamic), n(d.Long.Origin5xx))
+	}
 
 	a := d.Attr
 	var attr []string
@@ -317,6 +324,19 @@ func Intraday(language string, d IntradayData) string {
 	sort.Strings(keys)
 	for _, k := range keys {
 		attr = append(attr, fmt.Sprintf(l.t("%s hits: %s", "%s 主要路径：%s"), clip(k, 60), faceList(a.FacePaths[k], 3)))
+	}
+	if a.FaceHistory != nil {
+		for _, f := range d.Findings {
+			if f.Rule != analyze.RuleNewFaceUA && f.Rule != analyze.RuleNewFaceASN {
+				continue
+			}
+			if h, ok := a.FaceHistory[f.Subject]; ok {
+				attr = append(attr, fmt.Sprintf(l.t("%s seen before: first %s, last %s, peak %s/window", "%s 曾出现过：首次 %s，最近 %s，峰值 %s/窗"),
+					clip(f.Subject, 60), h.First.In(locOr(d.Loc)).Format("2006-01-02 15:04"), h.Last.In(locOr(d.Loc)).Format("01-02 15:04"), n(h.MaxCount)))
+			} else {
+				attr = append(attr, fmt.Sprintf(l.t("%s: never seen before in the archive", "%s：归档中首次出现"), clip(f.Subject, 60)))
+			}
+		}
 	}
 	if len(a.TopIPs) > 0 {
 		attr = append(attr, l.t("top client IPs: ", "客户端 IP Top：")+faceList(a.TopIPs, 5))
@@ -384,6 +404,13 @@ type ArtifactCount struct {
 	Count int64
 }
 
+// ArchiveInfo summarises the local archive for the daily report.
+type ArchiveInfo struct {
+	Hours, Days int64
+	Oldest      time.Time
+	LongSamples int
+}
+
 // DailyData is everything the daily report shows.
 type DailyData struct {
 	Zone              string
@@ -399,6 +426,7 @@ type DailyData struct {
 	Checkpoints       []Checkpoint
 	Artifacts         []ArtifactCount
 	Suggestions       []suggest.Suggestion
+	Archive           *ArchiveInfo
 	ActiveSince       time.Time
 	ActiveFingerprint string
 	Gaps              []string
@@ -478,6 +506,19 @@ func Daily(language string, d DailyData) string {
 	if !d.ActiveSince.IsZero() {
 		fmt.Fprintf(&b, "\n"+l.t("Intraday anomaly still open since %s: %s\n", "日内异常仍在持续，始于 %s：%s\n"),
 			d.ActiveSince.In(locOr(d.Loc)).Format("01-02 15:04"), d.ActiveFingerprint)
+	}
+	if a := d.Archive; a != nil {
+		long := fmt.Sprintf(l.t("long baseline active (%d samples)", "长基线已启用（%d 个样本）"), a.LongSamples)
+		if a.LongSamples < analyze.LongBaselineMinSamples {
+			long = fmt.Sprintf(l.t("long baseline at %d/%d samples (run with -backfill 28 to fill it now)", "长基线样本 %d/%d（可用 -backfill 28 立即补齐）"),
+				a.LongSamples, analyze.LongBaselineMinSamples)
+		}
+		oldest := "-"
+		if !a.Oldest.IsZero() {
+			oldest = a.Oldest.In(locOr(d.Loc)).Format("2006-01-02")
+		}
+		fmt.Fprintf(&b, "\n"+l.t("Archive: %s hourly + %s daily snapshots since %s; %s\n", "归档：%s 个小时快照 + %s 个日快照，始于 %s；%s\n"),
+			n(a.Hours), n(a.Days), oldest, long)
 	}
 	if len(d.Gaps) > 0 {
 		fmt.Fprintf(&b, "\n"+l.t("Data gaps (queries failed): %s\n", "数据缺口（查询失败）：%s\n"), strings.Join(d.Gaps, ", "))

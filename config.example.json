@@ -49,5 +49,10 @@
     "telegram_bot_token_env": "",
     "telegram_chat_id": ""
   },
-  "state_file": "data/state.json"
+  "state_file": "data/state.json",
+  "archive": {
+    "disabled": false,
+    "file": "data/archive.db",
+    "hourly_retention_days": 400
+  }
 }

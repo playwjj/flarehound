@@ -118,6 +118,11 @@ type Config struct {
 	} `json:"report"`
 	Notify    Notify `json:"notify"`
 	StateFile string `json:"state_file"`
+	Archive   struct {
+		Disabled            bool   `json:"disabled"`
+		File                string `json:"file"`                  // default: <data dir>/archive.db
+		HourlyRetentionDays int    `json:"hourly_retention_days"` // default 400 (~13 months)
+	} `json:"archive"`
 
 	// Secrets resolved from the environment at load time; never persisted.
 	APIToken         string `json:"-"`
@@ -242,6 +247,15 @@ func (c *Config) resolve() error {
 	}
 	if c.StateFile == "" {
 		c.StateFile = "data/state.json"
+	}
+	if c.Archive.File == "" {
+		c.Archive.File = filepath.Join(c.DataDir(), "archive.db")
+	}
+	if c.Archive.HourlyRetentionDays <= 0 {
+		c.Archive.HourlyRetentionDays = 400
+	}
+	if c.Archive.HourlyRetentionDays < 30 {
+		return fmt.Errorf("config: archive.hourly_retention_days must be >= 30 (the long baseline needs 28 days)")
 	}
 	return nil
 }

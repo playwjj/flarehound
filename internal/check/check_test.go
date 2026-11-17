@@ -7,8 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/playwjj/flarehound/internal/analyze"
 	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/config"
+	"github.com/playwjj/flarehound/internal/store"
 )
 
 // window is the fake data for one window, keyed by its start time.
@@ -245,5 +247,121 @@ func TestDailyReport(t *testing.T) {
 		if !strings.Contains(msg, want) {
 			t.Errorf("daily lacks %q:\n%s", want, msg)
 		}
+	}
+}
+
+func withStore(t *testing.T, r *Runner) *store.Store {
+	t.Helper()
+	st, err := store.Open(filepath.Join(t.TempDir(), "archive.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	r.Store = st
+	r.Cfg.Archive.HourlyRetentionDays = 400
+	return st
+}
+
+// TestLongBaselineSuppressesOddYesterday: yesterday was unusually quiet,
+// so today's ordinary traffic looks like +50% — but against the 4-week
+// median it is normal, and the archive keeps the watch quiet.
+func TestLongBaselineSuppressesOddYesterday(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Cloudflare.Zones[0].Workers = nil
+	api := &fakeAPI{windows: map[time.Time]*window{}, reads: map[time.Time]int{}}
+	out := &sink{}
+	from := time.Date(2026, 11, 17, 8, 0, 0, 0, time.UTC)
+	r := &Runner{API: api, Cfg: cfg, Sender: out, Now: func() time.Time { return from.Add(67 * time.Minute) }}
+	zone := cfg.Cloudflare.Zones[0]
+
+	quiet := normal()
+	quiet.total, quiet.dynamic = 66_000, 26_000
+	api.windows[from.Add(-24*time.Hour)] = quiet
+	api.windows[from] = normal()
+
+	// Without the archive: false alarm.
+	if err := r.Intraday(context.Background(), zone); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.msgs) != 1 {
+		t.Fatalf("expected the yesterday-only comparison to fire, got %d msgs", len(out.msgs))
+	}
+
+	// With 4 weeks of archived normal days: quiet.
+	out.msgs = nil
+	cfg.StateFile = filepath.Join(t.TempDir(), "state.json")
+	st := withStore(t, r)
+	for k := 2; k <= 28; k++ {
+		d := from.Add(-time.Duration(k) * 24 * time.Hour)
+		if err := st.PutSnapshot(zone.ZoneID, store.Hour, d, d.Add(time.Hour), store.Snapshot{Metrics: analyzeMetrics(normal())}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := r.Intraday(context.Background(), zone); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.msgs) != 0 {
+		t.Fatalf("long baseline did not suppress the odd-yesterday alarm:\n%s", out.msgs[0])
+	}
+	// The round itself was archived, baseline window included.
+	if _, ok, _ := st.Snapshot(zone.ZoneID, store.Hour, from); !ok {
+		t.Fatal("current window not archived")
+	}
+	if _, ok, _ := st.Snapshot(zone.ZoneID, store.Hour, from.Add(-24*time.Hour)); !ok {
+		t.Fatal("baseline window not archived")
+	}
+}
+
+func analyzeMetrics(w *window) analyze.Metrics {
+	return analyze.Metrics{Total: w.total, Dynamic: w.dynamic, Origin5xx: w.o5xx, TopUA: w.ua, TopASN: w.asn}
+}
+
+func TestArchiveAnnotatesAndRecords(t *testing.T) {
+	cfg := testConfig(t)
+	api := &fakeAPI{windows: map[time.Time]*window{}, reads: map[time.Time]int{}}
+	out := &sink{}
+	from := time.Date(2026, 11, 17, 8, 0, 0, 0, time.UTC)
+	r := &Runner{API: api, Cfg: cfg, Sender: out, Now: func() time.Time { return from.Add(67 * time.Minute) }}
+	st := withStore(t, r)
+	zone := cfg.Cloudflare.Zones[0]
+	api.windows[from.Add(-24*time.Hour)] = normal()
+	api.windows[from] = surge()
+	if err := r.Intraday(context.Background(), zone); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.msgs) != 1 || !strings.Contains(out.msgs[0], "AS207990: never seen before in the archive") {
+		t.Fatalf("got %v", out.msgs)
+	}
+	as, _ := st.Alerts(zone.ZoneID, from, from.Add(2*time.Hour))
+	if len(as) != 1 || as[0].Decision != "alert" {
+		t.Fatalf("alert history = %+v", as)
+	}
+	if rec, ok, _ := st.Face(zone.ZoneID, store.DimASN, "AS207990"); !ok || !rec.FirstSeen.Equal(from) {
+		t.Fatalf("face not recorded: %+v", rec)
+	}
+}
+
+func TestBackfill(t *testing.T) {
+	cfg := testConfig(t)
+	api := &fakeAPI{windows: map[time.Time]*window{}, reads: map[time.Time]int{}}
+	now := time.Date(2026, 11, 17, 8, 7, 0, 0, time.UTC)
+	r := &Runner{API: api, Cfg: cfg, Sender: &sink{}, Now: func() time.Time { return now },
+		Sleep: func(context.Context, time.Duration) error { return nil }}
+	st := withStore(t, r)
+	zone := cfg.Cloudflare.Zones[0]
+	if err := r.Backfill(context.Background(), zone, 2, 0); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := st.Stats(zone.ZoneID)
+	if s.Hours != 48 {
+		t.Fatalf("backfilled %d hours, want 48", s.Hours)
+	}
+	// Second run fetches nothing new.
+	api.reads = map[time.Time]int{}
+	if err := r.Backfill(context.Background(), zone, 2, 0); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.reads) != 0 {
+		t.Fatalf("re-fetched %d archived windows", len(api.reads))
 	}
 }

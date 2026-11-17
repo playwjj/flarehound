@@ -19,6 +19,7 @@ import (
 	"github.com/playwjj/flarehound/internal/report"
 	"github.com/playwjj/flarehound/internal/schedule"
 	"github.com/playwjj/flarehound/internal/state"
+	"github.com/playwjj/flarehound/internal/store"
 	"github.com/playwjj/flarehound/internal/suggest"
 )
 
@@ -40,6 +41,7 @@ type Runner struct {
 	API    API
 	Cfg    *config.Config
 	Sender Sender
+	Store  *store.Store                                     // nil: archive disabled
 	Now    func() time.Time                                 // default time.Now
 	Sleep  func(ctx context.Context, d time.Duration) error // default: timer
 }
@@ -226,7 +228,7 @@ func (r *Runner) settle(ctx context.Context, zone config.Zone, w schedule.Window
 // attribute runs the follow-up queries of SPEC 6.6 / 8. Failures degrade
 // the attribution instead of failing the round: an alert with partial
 // evidence beats no alert.
-func (r *Runner) attribute(ctx context.Context, zone config.Zone, w, bw schedule.Window, fs []analyze.Finding, a *analyze.Attribution) {
+func (r *Runner) attribute(ctx context.Context, zone config.Zone, w, bw schedule.Window, fs []analyze.Finding, a *analyze.Attribution, ex *store.Snapshot) {
 	z := zone.ZoneID
 	logErr := func(what string, err error) {
 		if err != nil {
@@ -234,8 +236,12 @@ func (r *Runner) attribute(ctx context.Context, zone config.Zone, w, bw schedule
 		}
 	}
 	var err error
-	a.CacheCur, err = r.API.Top(ctx, z, w.From, w.To, cfapi.DimCacheStatus, 20, cfapi.Filter{})
-	logErr("cache status", err)
+	if ex != nil && len(ex.Cache) > 0 {
+		a.CacheCur = ex.Cache
+	} else {
+		a.CacheCur, err = r.API.Top(ctx, z, w.From, w.To, cfapi.DimCacheStatus, 20, cfapi.Filter{})
+		logErr("cache status", err)
+	}
 	a.CacheBase, err = r.API.Top(ctx, z, bw.From, bw.To, cfapi.DimCacheStatus, 20, cfapi.Filter{})
 	logErr("cache status (baseline)", err)
 
@@ -265,10 +271,17 @@ func (r *Runner) attribute(ctx context.Context, zone config.Zone, w, bw schedule
 		}
 	}
 
-	a.Firewall, err = r.API.FirewallByRule(ctx, z, w.From, w.To, 10)
-	if err != nil {
-		a.FirewallNA = true
-		log.Printf("zone %s: firewall events unavailable: %v", zone.Name, err)
+	if ex != nil && (len(ex.Firewall) > 0 || ex.FirewallNA) {
+		a.Firewall, a.FirewallNA = ex.Firewall, ex.FirewallNA
+		if len(a.Firewall) > 10 {
+			a.Firewall = a.Firewall[:10]
+		}
+	} else {
+		a.Firewall, err = r.API.FirewallByRule(ctx, z, w.From, w.To, 10)
+		if err != nil {
+			a.FirewallNA = true
+			log.Printf("zone %s: firewall events unavailable: %v", zone.Name, err)
+		}
 	}
 
 	a.ASNNames, err = r.API.ASNNames(ctx, z, w.From, w.To, currentTop)
@@ -346,8 +359,13 @@ func (r *Runner) Intraday(ctx context.Context, zone config.Zone) error {
 
 	th := Thresholds(cfg)
 	findings := analyze.Evaluate(cur, base, th, known(cfg))
+	long, longN := r.longBaseline(zone, w)
+	if long != nil {
+		findings = analyze.CrossCheck(findings, analyze.Evaluate(cur, *long, th, known(cfg)))
+	}
 	var attr analyze.Attribution
 	findings, attr.VerifiedBots = r.verifyBots(ctx, zone, w, findings)
+	attr.FaceHistory = r.faceHistory(zone, findings)
 	findings, attr.Unsettled, err = r.settle(ctx, zone, w, &cur, findings)
 	if err != nil {
 		return err
@@ -364,10 +382,12 @@ func (r *Runner) Intraday(ctx context.Context, zone config.Zone) error {
 		log.Printf("zone %s: %s withheld: window still filling after settle delay", zone.Name, u)
 	}
 
+	ex := r.archiveRound(ctx, zone, w, bw, cur, base)
+
 	var text string
 	if decision.Notify() {
 		if decision != state.DecRecovered {
-			r.attribute(ctx, zone, w, bw, findings, &attr)
+			r.attribute(ctx, zone, w, bw, findings, &attr, ex)
 			firstAlert = st.FirstAlertAt
 		}
 		hyps := analyze.Hypothesize(cur, base, findings, attr)
@@ -382,8 +402,13 @@ func (r *Runner) Intraday(ctx context.Context, zone config.Zone) error {
 			Zone: zone.Name, Window: w, Loc: cfg.Location, Decision: decision,
 			Cur: cur, Base: base, Findings: findings, Attr: attr,
 			Hypotheses: hyps, Block: block, Suggestions: sugs,
-			Since: firstAlert,
+			Since: firstAlert, Long: long, LongN: longN,
 		})
+		if r.Store != nil {
+			if err := r.Store.RecordAlert(zone.ZoneID, w.To, decision.String(), st.Fingerprint, findings); err != nil {
+				log.Printf("zone %s: archive alert: %v", zone.Name, err)
+			}
+		}
 	}
 
 	// State first: if delivery fails the message is already in the
@@ -483,6 +508,22 @@ func (r *Runner) Daily(ctx context.Context, zone config.Zone) error {
 		d.Artifacts = append(d.Artifacts, report.ArtifactCount{Label: a.Label, Count: n})
 	}
 
+	if r.Store != nil {
+		snap := store.Snapshot{Metrics: cur, Cache: cacheCur, Firewall: d.Firewall, FirewallNA: d.FirewallNA}
+		for _, p := range d.DynamicPaths {
+			snap.DynamicPaths = append(snap.DynamicPaths, cfapi.Face{Name: p.Path, Count: p.Cur})
+		}
+		if err := r.Store.PutSnapshot(z, store.Day, w.From, w.To, snap); err != nil {
+			log.Printf("zone %s: archive daily: %v", zone.Name, err)
+		}
+		if st, err := r.Store.Stats(z); err == nil {
+			d.Archive = &report.ArchiveInfo{Hours: st.Hours, Days: st.Days, Oldest: st.Oldest}
+			if samples, err := r.Store.SameHour(z, w.To.Add(-time.Hour), w.To, analyze.LongBaselineDays); err == nil {
+				d.Archive.LongSamples = len(samples)
+			}
+		}
+	}
+
 	if st, err := state.Load(StatePath(cfg, zone)); err == nil && st.Active {
 		d.ActiveSince = st.FirstAlertAt
 		d.ActiveFingerprint = st.Fingerprint
@@ -496,3 +537,140 @@ func (r *Runner) Daily(ctx context.Context, zone config.Zone) error {
 // IsAccessError reports whether err is a token-permission problem, which
 // deserves a louder log line than a transient network error.
 func IsAccessError(err error) bool { return errors.Is(err, cfapi.ErrNoAccess) }
+
+// ---- archive (SPEC 6 "本地数据归档") ----
+
+// longBaseline returns the median of the last 28 days' same-hour
+// snapshots once the archive has enough of them, else nil.
+func (r *Runner) longBaseline(zone config.Zone, w schedule.Window) (*analyze.Metrics, int) {
+	if r.Store == nil {
+		return nil, 0
+	}
+	samples, err := r.Store.SameHour(zone.ZoneID, w.From, w.To, analyze.LongBaselineDays)
+	if err != nil {
+		log.Printf("zone %s: long baseline: %v", zone.Name, err)
+		return nil, 0
+	}
+	if len(samples) < analyze.LongBaselineMinSamples {
+		return nil, len(samples)
+	}
+	m := analyze.Median(samples)
+	return &m, len(samples)
+}
+
+// faceHistory looks up each new face in the archive, before this round
+// touches it, so "never seen before" stays true for genuinely new faces.
+func (r *Runner) faceHistory(zone config.Zone, fs []analyze.Finding) map[string]analyze.FaceSeen {
+	if r.Store == nil {
+		return nil
+	}
+	out := map[string]analyze.FaceSeen{}
+	for _, f := range fs {
+		dim := ""
+		switch f.Rule {
+		case analyze.RuleNewFaceUA:
+			dim = store.DimUA
+		case analyze.RuleNewFaceASN:
+			dim = store.DimASN
+		default:
+			continue
+		}
+		rec, ok, err := r.Store.Face(zone.ZoneID, dim, f.Subject)
+		if err != nil {
+			log.Printf("zone %s: face history: %v", zone.Name, err)
+			continue
+		}
+		if ok {
+			out[f.Subject] = analyze.FaceSeen{First: rec.FirstSeen, Last: rec.LastSeen, MaxCount: rec.MaxCount}
+		}
+	}
+	return out
+}
+
+// archiveRound stores this round's windows and faces and prunes old
+// hours. The current window gets the full breakdown set; the baseline
+// window is stored only if absent (it was yesterday's current window, and
+// a poorer copy must not overwrite a richer one). Archive failures are
+// logged, never fatal: the watch matters more than the history.
+func (r *Runner) archiveRound(ctx context.Context, zone config.Zone, w, bw schedule.Window, cur, base analyze.Metrics) *store.Snapshot {
+	if r.Store == nil {
+		return nil
+	}
+	z := zone.ZoneID
+	logErr := func(what string, err error) {
+		if err != nil {
+			log.Printf("zone %s: archive %s: %v", zone.Name, what, err)
+		}
+	}
+	snap := store.Snapshot{Metrics: cur}
+	var err error
+	snap.Cache, err = r.API.Top(ctx, z, w.From, w.To, cfapi.DimCacheStatus, 20, cfapi.Filter{})
+	logErr("cache status", err)
+	snap.DynamicPaths, err = r.API.Top(ctx, z, w.From, w.To, cfapi.DimPath, 10, cfapi.Filter{CacheStatus: "dynamic"})
+	logErr("dynamic paths", err)
+	snap.Firewall, err = r.API.FirewallByRule(ctx, z, w.From, w.To, 25)
+	snap.FirewallNA = err != nil
+
+	logErr("snapshot", r.Store.PutSnapshot(z, store.Hour, w.From, w.To, snap))
+	if _, ok, err := r.Store.Snapshot(z, store.Hour, bw.From); err == nil && !ok {
+		logErr("baseline snapshot", r.Store.PutSnapshot(z, store.Hour, bw.From, bw.To, store.Snapshot{Metrics: base}))
+	}
+	logErr("faces", r.Store.TouchFaces(z, store.DimUA, cur.TopUA, w.From))
+	logErr("faces", r.Store.TouchFaces(z, store.DimASN, cur.TopASN, w.From))
+	logErr("faces", r.Store.TouchFaces(z, store.DimUA, base.TopUA, bw.From))
+	logErr("faces", r.Store.TouchFaces(z, store.DimASN, base.TopASN, bw.From))
+
+	cutoff := r.now().Add(-time.Duration(r.Cfg.Archive.HourlyRetentionDays) * 24 * time.Hour)
+	if n, err := r.Store.Prune(cutoff); err != nil {
+		logErr("prune", err)
+	} else if n > 0 {
+		log.Printf("zone %s: archive pruned %d hourly snapshots older than %s", zone.Name, n, cutoff.Format("2006-01-02"))
+	}
+	return &snap
+}
+
+// Backfill archives the last `days` days of hourly windows from
+// Cloudflare (which keeps ~31 days), so the long baseline is available
+// right after deployment instead of four weeks later. Windows already in
+// the archive are skipped. Calls are paced to stay well inside the
+// GraphQL rate limit; progress is logged.
+func (r *Runner) Backfill(ctx context.Context, zone config.Zone, days int, pace time.Duration) error {
+	if r.Store == nil {
+		return errors.New("archive is disabled")
+	}
+	cfg := r.Cfg
+	latest := schedule.IntradayWindow(r.now(), cfg.IntradayInterval(), cfg.IntradayOffset())
+	n := days * int(24*time.Hour/cfg.IntradayInterval())
+	done, skipped := 0, 0
+	for i := 0; i < n; i++ {
+		w := latest.Shift(-time.Duration(i) * cfg.IntradayInterval())
+		if _, ok, err := r.Store.Snapshot(zone.ZoneID, store.Hour, w.From); err != nil {
+			return err
+		} else if ok {
+			skipped++
+			continue
+		}
+		m, err := r.fetch(ctx, zone, w, baselineTop)
+		if err != nil {
+			return fmt.Errorf("backfill %s (after %d windows): %w", w, done, err)
+		}
+		if err := r.Store.PutSnapshot(zone.ZoneID, store.Hour, w.From, w.To, store.Snapshot{Metrics: m}); err != nil {
+			return err
+		}
+		if err := r.Store.TouchFaces(zone.ZoneID, store.DimUA, m.TopUA, w.From); err != nil {
+			return err
+		}
+		if err := r.Store.TouchFaces(zone.ZoneID, store.DimASN, m.TopASN, w.From); err != nil {
+			return err
+		}
+		done++
+		if done%24 == 0 {
+			log.Printf("zone %s: backfill %d/%d windows (back to %s)", zone.Name, done+skipped, n, w.From.Format("2006-01-02 15:04"))
+		}
+		if err := r.sleep(ctx, pace); err != nil {
+			return err
+		}
+	}
+	log.Printf("zone %s: backfill finished: %d windows fetched, %d already archived", zone.Name, done, skipped)
+	return nil
+}

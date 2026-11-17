@@ -22,6 +22,7 @@ import (
 	"github.com/playwjj/flarehound/internal/logx"
 	"github.com/playwjj/flarehound/internal/notify"
 	"github.com/playwjj/flarehound/internal/schedule"
+	"github.com/playwjj/flarehound/internal/store"
 )
 
 // version is stamped at release time via -ldflags "-X main.version=..."
@@ -33,6 +34,7 @@ func main() {
 	once := flag.Bool("once", false, "run one intraday check and exit")
 	daily := flag.Bool("daily", false, "build the daily report now and exit")
 	dryRun := flag.Bool("dry-run", false, "print messages to stdout instead of sending them")
+	backfill := flag.Int("backfill", 0, "archive the last N days (1-30) of hourly windows from Cloudflare, then exit")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 	if *showVersion {
@@ -53,6 +55,34 @@ func main() {
 
 	disp := buildDispatcher(cfg, *dryRun)
 	runner := &check.Runner{API: cfapi.New(cfg.APIToken), Cfg: cfg, Sender: disp}
+	if !cfg.Archive.Disabled {
+		st, err := store.Open(cfg.Archive.File)
+		if err != nil {
+			log.Fatalf("archive: %v", err)
+		}
+		defer st.Close()
+		runner.Store = st
+	}
+
+	if *backfill != 0 {
+		if *backfill < 1 || *backfill > 30 {
+			log.Fatal("-backfill takes 1..30 days (Cloudflare keeps ~31 days of analytics)")
+		}
+		if runner.Store == nil {
+			log.Fatal("-backfill needs the archive (archive.disabled is true)")
+		}
+		for _, zone := range cfg.Cloudflare.Zones {
+			// ~1 query per second keeps well inside the GraphQL rate limit.
+			queries := 5 + len(zone.Workers) + len(cfg.PathRules)
+			pace := time.Duration(queries) * time.Second
+			log.Printf("zone %s: backfilling %d days, ~%d queries per window, ~%s total", zone.Name, *backfill, queries,
+				(time.Duration(*backfill*24) * pace).Round(time.Minute))
+			if err := runner.Backfill(ctx, zone, *backfill, pace); err != nil {
+				log.Fatalf("zone %s: %v", zone.Name, err)
+			}
+		}
+		return
+	}
 
 	forEachZone := func(kind string, fn func(context.Context, config.Zone) error) {
 		rctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
@@ -77,7 +107,8 @@ func main() {
 		}
 		if *daily {
 			if cfg.Schedule.DailyReportAt == "" {
-				log.Fatal("daily report is disabled (schedule.daily_report_at is empty)")
+				log.Print("daily report is disabled (schedule.daily_report_at is empty)")
+				return
 			}
 			forEachZone("daily", runner.Daily)
 		}

@@ -2,6 +2,7 @@ package analyze
 
 import (
 	"strings"
+	"time"
 
 	"github.com/playwjj/flarehound/internal/cfapi"
 )
@@ -21,7 +22,17 @@ type Attribution struct {
 	FirewallNA   bool                    `json:"firewall_na,omitempty"` // dataset unavailable (plan/permission)
 	VerifiedBots []string                `json:"verified_bots,omitempty"`
 	ASNNames     map[int]string          `json:"asn_names,omitempty"` // registered ASN names, best-effort
-	Unsettled    []string                `json:"unsettled,omitempty"` // collapse rules held back: data still arriving
+	// FaceHistory is the archive's memory of each new face (finding
+	// Subject): when it was first and last seen in any Top list. A face
+	// absent from the map has never been seen before.
+	FaceHistory map[string]FaceSeen `json:"face_history,omitempty"`
+	Unsettled   []string            `json:"unsettled,omitempty"` // collapse rules held back: data still arriving
+}
+
+// FaceSeen is a face's archived history.
+type FaceSeen struct {
+	First, Last time.Time
+	MaxCount    int64
 }
 
 // PathDelta is one path's count in both windows.
