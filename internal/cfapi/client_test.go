@@ -111,3 +111,30 @@ func TestMitigatedIPs(t *testing.T) {
 		t.Fatalf("got %+v %v", got, err)
 	}
 }
+
+// TestASNIsAString: clientAsn is a String in the GraphQL schema — the
+// filter must be quoted (an unquoted number is rejected with "clientAsn:
+// not a string"), and dimension values arrive as strings.
+func TestASNIsAString(t *testing.T) {
+	var q string
+	c := server(t, `{"data":{"viewer":{"zones":[{"httpRequestsAdaptiveGroups":[
+		{"count":9,"dimensions":{"clientAsn":"207990","clientRequestPath":"/a"}}]}]}}}`, &q)
+	if _, err := c.Top(context.Background(), "zone", from, to, DimPath, 3, Filter{ASN: 207990}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(q, `clientAsn:"207990"`) || strings.Contains(q, "clientAsn:207990") {
+		t.Fatalf("ASN filter not a string literal: %s", q)
+	}
+
+	c = server(t, `{"data":{"viewer":{"zones":[{"httpRequestsAdaptiveGroups":[
+		{"count":9,"dimensions":{"clientAsn":"15169","clientASNDescription":"GOOGLE"}},
+		{"count":5,"dimensions":{"clientAsn":7922,"clientASNDescription":"COMCAST"}}]}]}}}`, nil)
+	got, err := c.Top(context.Background(), "zone", from, to, DimASN, 5, Filter{})
+	if err != nil || got[0].Name != "AS15169" || got[0].ASN != 15169 || got[1].ASN != 7922 {
+		t.Fatalf("string ASN dimension: %+v %v", got, err)
+	}
+	names, err := c.ASNNames(context.Background(), "zone", from, to, 5)
+	if err != nil || names[15169] != "GOOGLE" || names[7922] != "COMCAST" {
+		t.Fatalf("names %v %v", names, err)
+	}
+}

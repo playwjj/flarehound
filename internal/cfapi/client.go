@@ -22,6 +22,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -95,7 +96,9 @@ func (f Filter) render(from, to time.Time) string {
 		parts = append(parts, "userAgent:"+quote(f.UserAgent))
 	}
 	if f.ASN > 0 {
-		parts = append(parts, fmt.Sprintf("clientAsn:%d", f.ASN))
+		// clientAsn is a String in the schema: an unquoted number is
+		// rejected ("clientAsn: not a string").
+		parts = append(parts, "clientAsn:"+quote(strconv.Itoa(f.ASN)))
 	}
 	if f.WorkerScript != "" {
 		parts = append(parts, "scriptName:"+quote(f.WorkerScript))
@@ -246,6 +249,19 @@ func (c *Client) Top(ctx context.Context, zoneID string, from, to time.Time, dim
 	return faces(rows, dim), nil
 }
 
+// asnOf reads an ASN dimension value, which the API returns as a string
+// (it is a String in the schema); numbers are accepted too.
+func asnOf(v any) (int, bool) {
+	switch x := v.(type) {
+	case float64:
+		return int(x), x > 0
+	case string:
+		n, err := strconv.Atoi(strings.TrimPrefix(strings.ToUpper(x), "AS"))
+		return n, err == nil && n > 0
+	}
+	return 0, false
+}
+
 func faces(rows []row, dims ...string) []Face {
 	out := make([]Face, 0, len(rows))
 	for _, r := range rows {
@@ -254,8 +270,8 @@ func faces(rows []row, dims ...string) []Face {
 		for _, d := range dims {
 			v := r.Dimensions[d]
 			if d == DimASN {
-				if n, ok := v.(float64); ok {
-					face.ASN = int(n)
+				if n, ok := asnOf(v); ok {
+					face.ASN = n
 					names = append(names, fmt.Sprintf("AS%d", face.ASN))
 					continue
 				}
@@ -280,12 +296,12 @@ func (c *Client) ASNNames(ctx context.Context, zoneID string, from, to time.Time
 	}
 	out := map[int]string{}
 	for _, r := range rows {
-		n, ok := r.Dimensions[DimASN].(float64)
+		n, ok := asnOf(r.Dimensions[DimASN])
 		if !ok {
 			continue
 		}
 		if d, ok := r.Dimensions["clientASNDescription"].(string); ok {
-			out[int(n)] = d
+			out[n] = d
 		}
 	}
 	return out, nil
