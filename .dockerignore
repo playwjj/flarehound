@@ -1,0 +1,7 @@
+# Keep secrets and local state out of the build context.
+.env
+.env.*
+*.env
+config.json
+data/
+.git/

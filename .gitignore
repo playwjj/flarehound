@@ -6,3 +6,8 @@ data/
 # build output
 /flarehound
 *.test
+
+# secrets: API tokens live only in env files that never enter git
+.env
+.env.*
+*.env
