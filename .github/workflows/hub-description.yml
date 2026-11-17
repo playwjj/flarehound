@@ -1,0 +1,27 @@
+name: Update Docker Hub description
+
+# Keeps the Docker Hub repository overview in sync with the GitHub
+# README: runs whenever README.md changes on main, or on demand.
+# NOTE: the Docker Hub description API needs the account password —
+# repo secret DOCKERHUB_PASSWORD (a Docker Hub access token cannot
+# update descriptions). Without that secret this workflow fails;
+# add the secret, then run it once from the Actions tab.
+
+on:
+  push:
+    branches: [main]
+    paths: [README.md]
+  workflow_dispatch:
+
+jobs:
+  dockerhub-description:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+          repository: ${{ vars.DOCKERHUB_USERNAME }}/flarehound
+          short-description: "Self-hosted watchdog for Cloudflare sites: anomaly alerts, WAF audit, one-click blocking."
+          readme-filepath: ./README.md
