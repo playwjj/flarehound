@@ -1,6 +1,6 @@
 // Package notify delivers rendered reports to the user's channels.
 // v1 ships a generic webhook and Telegram; Slack/Discord/mail are
-// webhook-template variants on the roadmap (SPEC.md section 10).
+// webhook-template variants on the roadmap (SPEC.md section 11).
 package notify
 
 import (

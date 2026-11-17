@@ -1,5 +1,5 @@
 // Package report renders findings into the short, conclusion-first
-// message format defined in SPEC.md section 10.
+// message format defined in SPEC.md section 11.
 package report
 
 import (
