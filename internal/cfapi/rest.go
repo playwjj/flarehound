@@ -47,6 +47,16 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("cloudflare API: HTTP %d: %d %s", e.Status, e.Code, e.Message)
 }
 
+// IsPermission reports whether err means the token lacks a permission
+// for the endpoint (as opposed to a transient or input error).
+func IsPermission(err error) bool {
+	var ae *APIError
+	if !errors.As(err, &ae) {
+		return false
+	}
+	return ae.Status == http.StatusUnauthorized || ae.Status == http.StatusForbidden || ae.Code == 10000 || ae.Code == 9109
+}
+
 // IsNotFound reports whether err is a 404 from the API.
 func IsNotFound(err error) bool {
 	var ae *APIError

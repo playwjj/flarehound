@@ -125,7 +125,11 @@ func Warnings(t Target, a Action, network string, share float64, shareKnown bool
 		case "eyeball":
 			w = append(w, "this is a residential/mobile/backbone network: real people browse from it. Blocking it WILL hit real users — prefer --action challenge and watch the attempts first")
 		case "unknown":
-			w = append(w, "network type unknown: it may carry real users. Prefer --action challenge")
+			if a == Block {
+				w = append(w, "network type unknown: it may carry real users. Prefer --action challenge")
+			} else {
+				w = append(w, "network type unknown: it may carry real users; a challenge lets them through")
+			}
 		}
 	case Country:
 		w = append(w, "a whole-country rule has the widest blast radius of all; every real visitor from that country is affected (per-country traffic is not measurable from adaptive analytics, so FlareHound cannot show the human share)")

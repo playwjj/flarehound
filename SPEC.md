@@ -115,12 +115,23 @@
 
 **口径与已知的坑**（实战沉淀，实现时必须遵守）：
 
-- adaptive 数据集**没有 host 维度**，也没有 `clientCountry` 字段；filter **不支持** `clientReferer`。按主机/国家/来源页的拆分不可得，归因时必须明说这一局限。
+- 可用字段**因套餐而异**，以运行时能力探测为准（见下文「能力探测」）。2026-11-17 在 Free zone 实测：`httpRequestsAdaptiveGroups` **有** `clientRequestHTTPHost`、`clientCountryName`、`clientIP`、`verifiedBotCategory`，**没有** `clientAsn` 与 `clientASNDescription`；`firewallEventsAdaptiveGroups` 整体未启用。filter 仍**不支持** `clientReferer`，来源页拆分不可得，归因时必须明说。（本节旧版称「没有 host / 国家维度」，经实测更正。）
 - adaptive 计数包含 Worker 子请求与缓存操作条目，总量可达面板口径的约 2 倍。**只允许 adaptive 与 adaptive 同口径环比**，禁止与面板数字混比。
 - 新鲜数据存在入库延迟：刚结束的窗口可能显著少计。判定「塌量」前必须交叉验证 zone 级到达率；拿未落定数据不得下结论。
 - GraphQL 查询过长（约 320 字符以上）存在被截断风险：查询保持紧凑、单维度、带 `orderBy:[count_DESC]`（不带排序时返回的分组是任意的）。
 - 低量路径在采样下可能返回 0 行；0 不等于不存在。
 - `workersInvocationsAdaptive` 只有 CPU 分位数，没有 CPU 总量；成本估算需由分位数推算并标注为估算。
+
+### 能力探测（v0.5 补订）
+
+每个 zone 首次巡检时查询 GraphQL `settings` 节点（`httpRequestsAdaptiveGroups{enabled availableFields}`、`firewallEventsAdaptiveGroups{enabled}`），得到本套餐实际开放的维度与数据集，进程内缓存；探测失败时按「全部可用」处理并在下一轮重试。按能力画像降级，绝不查询不可用字段（否则整轮查询报错、看守中断——这是 Free zone 实测踩到的坑）：
+
+- 无 `clientAsn`：不查 ASN Top，新面孔 ASN 检测关闭，ASN 类建议不出现；日报明说「本套餐不提供 ASN 拆分」。
+- 无 `clientASNDescription`：不查 ASN 登记名，网络类型只靠内置表。
+- 防火墙数据集未启用：防火墙事件与封锁项尝试量显示「不可用」，不报 0，不发查询。
+- 爬虫验真优先用 `verifiedBotCategory`（Cloudflare 自身的已验证机器人分类，Free 可用）：自称已知爬虫的新 UA，≥ 90% 请求带非空分类即排除；该维度不可用时退回按 ASN 验真；两者都不可用则不排除。
+
+写侧同理：写 Token 缺「Account Filter Lists」时不用 IP 名单（IP 封禁改用表达式规则），缺「Firewall Services」时不用 IP 访问规则兜底，计划与报错中说明原因；缺「DNS Read」时拒绝封 IP（源站护栏无法执行），除非显式 `--skip-origin-check`。
 
 ### 本地数据归档（弥补 CF 的保留期）
 
@@ -351,7 +362,7 @@
 ## 16. 已知限制
 
 - GraphQL Analytics 为采样数据，小流量站点的细粒度拆分可能不稳定；阈值应结合站点量级调整。
-- 无 host / 国家 / Referer 维度（见第 6 节），多站点同 zone、按国家归因等场景不可得。
+- 无 Referer 维度；ASN 维度与防火墙事件在 Free 套餐不可用（见第 6 节能力探测）。host 与国家维度实测可用，但 v0.5 尚未用于归因与封锁份额测量（路线图待办）。
 - 数据入库延迟决定了巡检粒度下限（约 5–10 分钟），不适用于实时防御；防御动作仍靠 Cloudflare 边缘规则本身。
 - 本工具只覆盖 Cloudflare；源站内部指标（进程、数据库）不在范围内。
 - 套餐能力差异：自定义规则数（Free 5 / Pro 20 / Business 100 / Enterprise 1,000）、限速规则数（Free 1 / Pro 2 / Business 5）、托管规则集与机器人能力各档不同；工具以运行时能力探测为准，低档套餐下部分功能降级或不可用。

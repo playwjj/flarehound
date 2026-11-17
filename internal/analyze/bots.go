@@ -40,6 +40,27 @@ func ClaimedBot(ua string) (name string, asns []int, ok bool) {
 // that must come from its own ASNs for the claim to be accepted.
 const VerifiedShare = 0.9
 
+// VerifiedByCategory reports whether a UA claiming to be a known crawler
+// is backed by Cloudflare's own verified-bot classification: at least
+// VerifiedShare of its requests carry a non-empty verifiedBotCategory.
+func VerifiedByCategory(ua string, cats []cfapi.Face) (string, bool) {
+	name, _, ok := ClaimedBot(ua)
+	if !ok {
+		return "", false
+	}
+	var total, good int64
+	for _, f := range cats {
+		total += f.Count
+		if f.Name != "" && f.Name != "<nil>" {
+			good += f.Count
+		}
+	}
+	if total == 0 {
+		return name, false
+	}
+	return name, float64(good)/float64(total) >= VerifiedShare
+}
+
 // VerifiedBot reports whether a UA claiming to be a known crawler is
 // backed by its ASN breakdown (the Top ASNs of requests with that UA).
 // An impostor — Googlebot UA from a residential proxy network — fails.

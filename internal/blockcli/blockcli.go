@@ -58,6 +58,13 @@ func (e *Env) now() time.Time {
 	return time.Now()
 }
 
+func (e *Env) loc() *time.Location {
+	if e.Cfg.Location != nil {
+		return e.Cfg.Location
+	}
+	return time.Local
+}
+
 func (e *Env) manager() *block.Manager {
 	return &block.Manager{API: e.Write, ZoneID: e.Zone.ZoneID, AccountID: e.Cfg.Cloudflare.AccountID}
 }
@@ -196,7 +203,7 @@ func (e *Env) Block(ctx context.Context, t block.Target, o BlockOpts) error {
 		e.printf("Measured:   not measurable for this target type\n")
 	}
 	if o.TTL > 0 {
-		e.printf("Expires:    %s (after %s; needs `flarehound enforce` running)\n", e.now().Add(o.TTL).Format(time.RFC3339), o.TTL)
+		e.printf("Expires:    %s (after %s; needs `flarehound enforce` running)\n", e.now().Add(o.TTL).In(e.loc()).Format("2006-01-02 15:04 MST"), o.TTL)
 	} else {
 		e.printf("Expires:    never (unblock with `flarehound unblock %s %s`)\n", t.Type, t.Value)
 	}
@@ -238,8 +245,9 @@ func (e *Env) Block(ctx context.Context, t block.Target, o BlockOpts) error {
 			e.printf("warning: blocked, but the audit record failed: %v\n", err)
 		}
 	}
-	e.printf("Done — %s is now %s (%s, verified by read-back). Undo: flarehound unblock %s %q\n",
-		t, map[block.Action]string{block.Block: "blocked", block.Challenge: "challenged"}[o.Action], entry.Mechanism, t.Type, t.Value)
+	e.printf("Done — %s is now %s (%s, verified by read-back). Undo: %s\n",
+		t, map[block.Action]string{block.Block: "blocked", block.Challenge: "challenged"}[o.Action], entry.Mechanism,
+		strings.Replace(block.Command(t, block.DefaultAction(t.Type), "", ""), "flarehound block", "flarehound unblock", 1))
 	return nil
 }
 
@@ -307,7 +315,11 @@ func (e *Env) List(ctx context.Context, days int) error {
 			audit[block.Target{Type: block.Type(ev.Type), Value: ev.Value}] = ev
 		}
 	}
-	e.printf("Zone %s — custom rules in use %d of %d (%s plan)\n\n", e.Zone.Name, st.RulesUsed(), st.RuleLimit(), st.Plan)
+	e.printf("Zone %s — custom rules in use %d of %d (%s plan); times in %s\n", e.Zone.Name, st.RulesUsed(), st.RuleLimit(), st.Plan, e.loc())
+	if st.NoLists || st.NoAccess {
+		e.printf("note: the write token cannot read IP lists (%v) / IP Access Rules (%v); blocks held there are not shown\n", st.NoLists, st.NoAccess)
+	}
+	e.printf("\n")
 	if len(entries) == 0 && len(audit) == 0 {
 		e.printf("No FlareHound blocks.\n")
 		return nil
@@ -325,16 +337,16 @@ func (e *Env) List(ctx context.Context, days int) error {
 		}
 		since, expires, reason := "-", "never", "(no audit record: created by hand or elsewhere)"
 		if ev, ok := audit[x.Target]; ok {
-			since, reason = ev.At.Format("2006-01-02 15:04"), ev.Reason
+			since, reason = ev.At.In(e.loc()).Format("2006-01-02 15:04"), ev.Reason
 			if !ev.ExpiresAt.IsZero() {
-				expires = ev.ExpiresAt.Format("2006-01-02 15:04")
+				expires = ev.ExpiresAt.In(e.loc()).Format("2006-01-02 15:04")
 			}
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", x.Target, x.Action, x.Mechanism, attempts, since, expires, reason)
 	}
 	for t, ev := range audit {
 		if !seen[t] {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t-\t%s\t-\tMISSING in Cloudflare (removed by hand?)\n", t, ev.Action, ev.Mechanism, ev.At.Format("2006-01-02 15:04"))
+			fmt.Fprintf(tw, "%s\t%s\t%s\t-\t%s\t-\tMISSING in Cloudflare (removed by hand?)\n", t, ev.Action, ev.Mechanism, ev.At.In(e.loc()).Format("2006-01-02 15:04"))
 		}
 	}
 	return tw.Flush()

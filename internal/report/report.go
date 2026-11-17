@@ -69,6 +69,9 @@ func (l lang) change(cur, base int64) string {
 func share(s float64) string { return fmt.Sprintf("%.0f%%", s*100) }
 
 func clip(s string, max int) string {
+	if s == "" {
+		return "(empty)"
+	}
 	if r := []rune(s); len(r) > max {
 		return string(r[:max]) + "…"
 	}
@@ -437,6 +440,7 @@ type DailyData struct {
 	DynamicPaths      []analyze.PathDelta
 	Firewall          []cfapi.Face
 	FirewallNA        bool
+	NoASN             bool // plan exposes no ASN dimension
 	Checkpoints       []Checkpoint
 	Artifacts         []ArtifactCount
 	Suggestions       []suggest.Suggestion
@@ -486,6 +490,10 @@ func Daily(language string, d DailyData) string {
 		for _, p := range d.DynamicPaths {
 			fmt.Fprintf(&b, "- %s %s\n", clip(p.Path, 70), l.change(p.Cur, p.Base))
 		}
+	}
+	if d.NoASN {
+		b.WriteString("\n" + l.t("ASN breakdown: not available on this plan (no clientAsn in analytics); new-ASN detection is off.\n",
+			"ASN 拆分：本套餐分析数据不提供 clientAsn，新面孔 ASN 检测已关闭。\n"))
 	}
 	l.faces(&b, l.t("Top ASNs", "ASN Top"), d.Cur.TopASN, d.Base.TopASN)
 	l.faces(&b, l.t("Top user agents", "UA Top"), d.Cur.TopUA, d.Base.TopUA)

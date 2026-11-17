@@ -26,6 +26,8 @@ type window struct {
 type fakeAPI struct {
 	windows map[time.Time]*window
 	reads   map[time.Time]int
+	caps    *cfapi.Caps
+	asnUsed bool
 }
 
 func (f *fakeAPI) w(from time.Time) *window {
@@ -57,7 +59,13 @@ func (f *fakeAPI) Top(_ context.Context, _ string, from, _ time.Time, dim string
 	switch dim {
 	case cfapi.DimUserAgent:
 		return w.ua, nil
+	case cfapi.DimVerifiedBot:
+		if strings.Contains(flt.UserAgent, "Googlebot") {
+			return []cfapi.Face{{Name: "Search Engine Crawler", Count: 9000}}, nil
+		}
+		return []cfapi.Face{{Name: "", Count: 9000}}, nil
 	case cfapi.DimASN:
+		f.asnUsed = true
 		if strings.Contains(flt.UserAgent, "Googlebot") {
 			return []cfapi.Face{{Name: "AS15169", ASN: 15169, Count: 9000}}, nil
 		}
@@ -85,6 +93,13 @@ func (f *fakeAPI) FirewallTop(_ context.Context, _ string, _, _ time.Time, ruleI
 		return []cfapi.Face{{Name: "AS207990", ASN: 207990, Count: 120}, {Name: "AS1", ASN: 1, Count: 5}}, nil
 	}
 	return nil, nil
+}
+
+func (f *fakeAPI) Capabilities(context.Context, string) (cfapi.Caps, error) {
+	if f.caps != nil {
+		return *f.caps, nil
+	}
+	return cfapi.AllCaps(), nil
 }
 
 func (f *fakeAPI) WorkerStats(_ context.Context, _, _ string, from, _ time.Time) (int64, float64, error) {
@@ -391,5 +406,40 @@ func TestDailyShowsBlocks(t *testing.T) {
 	}
 	if !strings.Contains(out.msgs[0], "AS207990 (challenge): 120") || !strings.Contains(out.msgs[0], "expires 11-18 03:00") {
 		t.Fatalf("daily lacks block checkpoint:\n%s", out.msgs[0])
+	}
+}
+
+// TestFreePlanDegrades: no clientAsn, no firewall dataset (Cloudflare
+// Free). The round must still run, never query unavailable fields, and
+// verify crawlers through verifiedBotCategory.
+func TestFreePlanDegrades(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Cloudflare.Zones[0].Workers = nil
+	caps := cfapi.Caps{Probed: true, HTTPFields: map[string]bool{
+		"dimensions_userAgent": true, "dimensions_clientIP": true, "dimensions_cacheStatus": true,
+		"dimensions_clientRequestPath": true, "dimensions_verifiedBotCategory": true}}
+	api := &fakeAPI{windows: map[time.Time]*window{}, reads: map[time.Time]int{}, caps: &caps}
+	out := &sink{}
+	from := time.Date(2026, 11, 17, 8, 0, 0, 0, time.UTC)
+	r := &Runner{API: api, Cfg: cfg, Sender: out, Now: func() time.Time { return from.Add(67 * time.Minute) }}
+	api.windows[from.Add(-24*time.Hour)] = normal()
+	cur := surge()
+	cur.ua = append(cur.ua, cfapi.Face{Name: "Mozilla/5.0 (compatible; Googlebot/2.2)", Count: 9000})
+	api.windows[from] = cur
+	if err := r.Intraday(context.Background(), cfg.Cloudflare.Zones[0]); err != nil {
+		t.Fatal(err)
+	}
+	if api.asnUsed {
+		t.Fatal("queried clientAsn on a plan without it")
+	}
+	if len(out.msgs) != 1 || strings.Contains(out.msgs[0], "New user agent") || !strings.Contains(out.msgs[0], "verified crawlers") {
+		t.Fatalf("got %v", out.msgs)
+	}
+	out.msgs = nil
+	if err := r.Daily(context.Background(), cfg.Cloudflare.Zones[0]); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.msgs[0], "not available on this plan") || !strings.Contains(out.msgs[0], "unavailable (plan or token permission)") {
+		t.Fatalf("daily:\n%s", out.msgs[0])
 	}
 }

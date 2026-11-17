@@ -283,3 +283,25 @@ func TestMatchesAndCommand(t *testing.T) {
 		t.Errorf("command %s", c)
 	}
 }
+
+func TestMissingPermissionsDegrade(t *testing.T) {
+	cf := fakecf.New("free", 5)
+	cf.DenyLists, cf.DenyAccess = true, true
+	m := &block.Manager{API: cf, ZoneID: "z", AccountID: "acct"}
+	st, err := m.Load(context.Background())
+	if err != nil || !st.NoLists || !st.NoAccess {
+		t.Fatalf("load: %+v %v", st, err)
+	}
+	// IP block without list permission: expression rule.
+	p := apply(t, m, mustT(t, "ip", "45.13.7.9"), block.Block)
+	if p.Op != block.OpCreateRule {
+		t.Fatalf("op %s", p.Op)
+	}
+	for i := 0; i < 4; i++ {
+		cf.UserRule("user", "true")
+	}
+	st, _ = m.Load(context.Background())
+	if _, err := st.PlanBlock(mustT(t, "asn", "64496"), block.Challenge); err == nil || !strings.Contains(err.Error(), "Firewall Services") {
+		t.Fatalf("full quota without access-rule permission: %v", err)
+	}
+}

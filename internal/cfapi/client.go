@@ -319,6 +319,82 @@ func (c *Client) FirewallByRule(ctx context.Context, zoneID string, from, to tim
 	return out, nil
 }
 
+// Caps is a zone's analytics capability profile (SPEC 5 "capability"),
+// read from the GraphQL settings node: which dimensions the plan exposes
+// and whether the firewall dataset is enabled at all. Free plans, for
+// example, have no clientAsn and no firewall events.
+type Caps struct {
+	HTTPFields      map[string]bool
+	FirewallEnabled bool
+	Probed          bool // false: probing failed, everything is assumed available
+}
+
+// AllCaps is the optimistic profile used when probing fails.
+func AllCaps() Caps { return Caps{FirewallEnabled: true} }
+
+// HasDim reports whether the HTTP dataset exposes a dimension.
+func (c Caps) HasDim(dim string) bool {
+	if !c.Probed {
+		return true
+	}
+	return c.HTTPFields["dimensions_"+dim]
+}
+
+// Capabilities probes the zone's dataset settings.
+func (c *Client) Capabilities(ctx context.Context, zoneID string) (Caps, error) {
+	q := fmt.Sprintf(`{viewer{zones(filter:{zoneTag:%s}){settings{httpRequestsAdaptiveGroups{enabled availableFields}firewallEventsAdaptiveGroups{enabled}}}}}`, quote(zoneID))
+	body, _ := json.Marshal(map[string]string{"query": q})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
+	if err != nil {
+		return AllCaps(), err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return AllCaps(), err
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Data struct {
+			Viewer struct {
+				Zones []struct {
+					Settings struct {
+						HTTP struct {
+							Enabled         bool     `json:"enabled"`
+							AvailableFields []string `json:"availableFields"`
+						} `json:"httpRequestsAdaptiveGroups"`
+						Firewall struct {
+							Enabled bool `json:"enabled"`
+						} `json:"firewallEventsAdaptiveGroups"`
+					} `json:"settings"`
+				} `json:"zones"`
+			} `json:"viewer"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&out); err != nil {
+		return AllCaps(), fmt.Errorf("capabilities: decode: %w", err)
+	}
+	if len(out.Errors) > 0 {
+		return AllCaps(), fmt.Errorf("capabilities: %s", out.Errors[0].Message)
+	}
+	if len(out.Data.Viewer.Zones) == 0 {
+		return AllCaps(), ErrNoAccess
+	}
+	st := out.Data.Viewer.Zones[0].Settings
+	caps := Caps{HTTPFields: map[string]bool{}, FirewallEnabled: st.Firewall.Enabled, Probed: true}
+	for _, f := range st.HTTP.AvailableFields {
+		caps.HTTPFields[f] = true
+	}
+	return caps, nil
+}
+
+// Dimension for Cloudflare's own verified-bot classification.
+const DimVerifiedBot = "verifiedBotCategory"
+
 // Firewall dimension names accepted by FirewallTop.
 const (
 	FwDimIP      = "clientIP"

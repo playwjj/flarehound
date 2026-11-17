@@ -31,6 +31,7 @@ type API interface {
 	FirewallByRule(ctx context.Context, zoneID string, from, to time.Time, limit int) ([]cfapi.Face, error)
 	ASNNames(ctx context.Context, zoneID string, from, to time.Time, limit int) (map[int]string, error)
 	FirewallTop(ctx context.Context, zoneID string, from, to time.Time, ruleID, dim string, limit int) ([]cfapi.Face, error)
+	Capabilities(ctx context.Context, zoneID string) (cfapi.Caps, error)
 	WorkerStats(ctx context.Context, accountID, script string, from, to time.Time) (int64, float64, error)
 }
 
@@ -43,9 +44,11 @@ type Runner struct {
 	API    API
 	Cfg    *config.Config
 	Sender Sender
-	Store  *store.Store                                     // nil: archive disabled
-	Now    func() time.Time                                 // default time.Now
-	Sleep  func(ctx context.Context, d time.Duration) error // default: timer
+	Store  *store.Store // nil: archive disabled
+
+	caps  map[string]cfapi.Caps                            // per zone, probed once per process
+	Now   func() time.Time                                 // default time.Now
+	Sleep func(ctx context.Context, d time.Duration) error // default: timer
 }
 
 const (
@@ -73,6 +76,37 @@ func (r *Runner) sleep(ctx context.Context, d time.Duration) error {
 	case <-t.C:
 		return nil
 	}
+}
+
+// Caps returns the zone's capability profile, probing it on first use.
+// A failed probe assumes everything is available (the pre-probe
+// behaviour) and is retried next round.
+func (r *Runner) Caps(ctx context.Context, zone config.Zone) cfapi.Caps {
+	if c, ok := r.caps[zone.ZoneID]; ok {
+		return c
+	}
+	c, err := r.API.Capabilities(ctx, zone.ZoneID)
+	if err != nil {
+		log.Printf("zone %s: capability probe failed, assuming full analytics: %v", zone.Name, err)
+		return cfapi.AllCaps()
+	}
+	if r.caps == nil {
+		r.caps = map[string]cfapi.Caps{}
+	}
+	r.caps[zone.ZoneID] = c
+	var missing []string
+	for _, d := range []string{cfapi.DimASN, "clientASNDescription", cfapi.DimVerifiedBot} {
+		if !c.HasDim(d) {
+			missing = append(missing, d)
+		}
+	}
+	if !c.FirewallEnabled {
+		missing = append(missing, "firewall events")
+	}
+	if len(missing) > 0 {
+		log.Printf("zone %s: not available on this plan, degraded: %s", zone.Name, strings.Join(missing, ", "))
+	}
+	return c
 }
 
 // Thresholds converts config thresholds into the engine's form.
@@ -142,8 +176,10 @@ func (r *Runner) fetch(ctx context.Context, zone config.Zone, w schedule.Window,
 	if m.TopUA, err = r.API.Top(ctx, z, from, to, cfapi.DimUserAgent, top, cfapi.Filter{}); err != nil {
 		return m, fmt.Errorf("top UA: %w", err)
 	}
-	if m.TopASN, err = r.API.Top(ctx, z, from, to, cfapi.DimASN, top, cfapi.Filter{}); err != nil {
-		return m, fmt.Errorf("top ASN: %w", err)
+	if r.Caps(ctx, zone).HasDim(cfapi.DimASN) {
+		if m.TopASN, err = r.API.Top(ctx, z, from, to, cfapi.DimASN, top, cfapi.Filter{}); err != nil {
+			return m, fmt.Errorf("top ASN: %w", err)
+		}
 	}
 	for _, name := range zone.Workers {
 		calls, cpu, err := r.API.WorkerStats(ctx, r.Cfg.Cloudflare.AccountID, name, from, to)
@@ -173,10 +209,7 @@ func (r *Runner) verifyBots(ctx context.Context, zone config.Zone, w schedule.Wi
 	for _, f := range fs {
 		if f.Rule == analyze.RuleNewFaceUA {
 			if _, _, claims := analyze.ClaimedBot(f.Subject); claims {
-				asns, err := r.API.Top(ctx, zone.ZoneID, w.From, w.To, cfapi.DimASN, 5, cfapi.Filter{UserAgent: f.Subject})
-				if err != nil {
-					log.Printf("zone %s: verify bot: %v", zone.Name, err)
-				} else if name, ok := analyze.VerifiedBot(f.Subject, asns); ok {
+				if name, ok := r.verifyBot(ctx, zone, w, f.Subject); ok {
 					verified = append(verified, name)
 					continue
 				}
@@ -185,6 +218,31 @@ func (r *Runner) verifyBots(ctx context.Context, zone config.Zone, w schedule.Wi
 		out = append(out, f)
 	}
 	return out, verified
+}
+
+// verifyBot checks a crawler claim. Cloudflare's own verified-bot
+// classification is preferred (available on every plan); the crawler's
+// ASNs are the fallback where that dimension is missing.
+func (r *Runner) verifyBot(ctx context.Context, zone config.Zone, w schedule.Window, ua string) (string, bool) {
+	caps := r.Caps(ctx, zone)
+	flt := cfapi.Filter{UserAgent: ua}
+	switch {
+	case caps.HasDim(cfapi.DimVerifiedBot):
+		cats, err := r.API.Top(ctx, zone.ZoneID, w.From, w.To, cfapi.DimVerifiedBot, 5, flt)
+		if err != nil {
+			log.Printf("zone %s: verify bot: %v", zone.Name, err)
+			return "", false
+		}
+		return analyze.VerifiedByCategory(ua, cats)
+	case caps.HasDim(cfapi.DimASN):
+		asns, err := r.API.Top(ctx, zone.ZoneID, w.From, w.To, cfapi.DimASN, 5, flt)
+		if err != nil {
+			log.Printf("zone %s: verify bot: %v", zone.Name, err)
+			return "", false
+		}
+		return analyze.VerifiedBot(ua, asns)
+	}
+	return "", false
 }
 
 // settle re-reads windows that look collapsed. If the count is still
@@ -273,7 +331,10 @@ func (r *Runner) attribute(ctx context.Context, zone config.Zone, w, bw schedule
 		}
 	}
 
-	if ex != nil && (len(ex.Firewall) > 0 || ex.FirewallNA) {
+	caps := r.Caps(ctx, zone)
+	if !caps.FirewallEnabled {
+		a.FirewallNA = true
+	} else if ex != nil && (len(ex.Firewall) > 0 || ex.FirewallNA) {
 		a.Firewall, a.FirewallNA = ex.Firewall, ex.FirewallNA
 		if len(a.Firewall) > 10 {
 			a.Firewall = a.Firewall[:10]
@@ -286,8 +347,10 @@ func (r *Runner) attribute(ctx context.Context, zone config.Zone, w, bw schedule
 		}
 	}
 
-	a.ASNNames, err = r.API.ASNNames(ctx, z, w.From, w.To, currentTop)
-	logErr("ASN names", err)
+	if caps.HasDim("clientASNDescription") {
+		a.ASNNames, err = r.API.ASNNames(ctx, z, w.From, w.To, currentTop)
+		logErr("ASN names", err)
+	}
 }
 
 // sensitive collects every configured sensitive path pattern (path rules
@@ -471,16 +534,24 @@ func (r *Runner) Daily(ctx context.Context, zone config.Zone) error {
 	d.DynamicPaths, err = r.pathDeltas(ctx, z, w, bw, 5)
 	logErr("dynamic paths", err)
 
-	d.Firewall, err = r.API.FirewallByRule(ctx, z, w.From, w.To, 10)
-	if err != nil {
+	caps := r.Caps(ctx, zone)
+	if caps.FirewallEnabled {
+		d.Firewall, err = r.API.FirewallByRule(ctx, z, w.From, w.To, 10)
+		if err != nil {
+			d.FirewallNA = true
+			log.Printf("zone %s: firewall events unavailable: %v", zone.Name, err)
+		}
+	} else {
 		d.FirewallNA = true
-		log.Printf("zone %s: firewall events unavailable: %v", zone.Name, err)
+	}
+	if !caps.HasDim(cfapi.DimASN) {
+		d.NoASN = true
 	}
 
 	// Suggestions: the same engine as intraday, on the day's evidence.
 	// No per-IP data here, so rate-limit advice (which needs it) cannot fire.
 	attr := analyze.Attribution{CacheCur: cacheCur, CacheBase: cacheBase, DynamicPaths: d.DynamicPaths}
-	if len(d.Findings) > 0 {
+	if len(d.Findings) > 0 && caps.HasDim("clientASNDescription") {
 		attr.ASNNames, err = r.API.ASNNames(ctx, z, w.From, w.To, currentTop)
 		logErr("ASN names", err)
 	}
@@ -524,8 +595,10 @@ func (r *Runner) Daily(ctx context.Context, zone config.Zone) error {
 			for _, ev := range evs {
 				t := block.Target{Type: block.Type(ev.Type), Value: ev.Value}
 				bs := report.BlockStatus{Target: t.String(), Action: ev.Action, Since: ev.At, ExpiresAt: ev.ExpiresAt}
-				bs.Attempts, err = block.Attempts(ctx, r.API, z, ev.RuleID, t, w.From, w.To)
-				bs.AttemptsNA = err != nil
+				if caps.FirewallEnabled {
+					bs.Attempts, err = block.Attempts(ctx, r.API, z, ev.RuleID, t, w.From, w.To)
+				}
+				bs.AttemptsNA = !caps.FirewallEnabled || err != nil
 				d.Blocks = append(d.Blocks, bs)
 			}
 		}
@@ -621,8 +694,12 @@ func (r *Runner) archiveRound(ctx context.Context, zone config.Zone, w, bw sched
 	logErr("cache status", err)
 	snap.DynamicPaths, err = r.API.Top(ctx, z, w.From, w.To, cfapi.DimPath, 10, cfapi.Filter{CacheStatus: "dynamic"})
 	logErr("dynamic paths", err)
-	snap.Firewall, err = r.API.FirewallByRule(ctx, z, w.From, w.To, 25)
-	snap.FirewallNA = err != nil
+	if r.Caps(ctx, zone).FirewallEnabled {
+		snap.Firewall, err = r.API.FirewallByRule(ctx, z, w.From, w.To, 25)
+		snap.FirewallNA = err != nil
+	} else {
+		snap.FirewallNA = true
+	}
 
 	logErr("snapshot", r.Store.PutSnapshot(z, store.Hour, w.From, w.To, snap))
 	if _, ok, err := r.Store.Snapshot(z, store.Hour, bw.From); err == nil && !ok {
@@ -663,6 +740,7 @@ func (r *Runner) Backfill(ctx context.Context, zone config.Zone, days int, pace 
 			skipped++
 			continue
 		}
+		started := time.Now()
 		m, err := r.fetch(ctx, zone, w, baselineTop)
 		if err != nil {
 			return fmt.Errorf("backfill %s (after %d windows): %w", w, done, err)
@@ -680,8 +758,11 @@ func (r *Runner) Backfill(ctx context.Context, zone config.Zone, days int, pace 
 		if done%24 == 0 {
 			log.Printf("zone %s: backfill %d/%d windows (back to %s)", zone.Name, done+skipped, n, w.From.Format("2006-01-02 15:04"))
 		}
-		if err := r.sleep(ctx, pace); err != nil {
-			return err
+		// Pace counts the queries' own latency: only wait out the rest.
+		if rest := pace - time.Since(started); rest > 0 {
+			if err := r.sleep(ctx, rest); err != nil {
+				return err
+			}
 		}
 	}
 	log.Printf("zone %s: backfill finished: %d windows fetched, %d already archived", zone.Name, done, skipped)

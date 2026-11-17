@@ -24,7 +24,9 @@ type CF struct {
 	Origins        []netip.Addr
 	FailCreateList bool
 	FailDNS        bool
-	Limit          int // custom-rule quota enforced on add
+	DenyLists      bool // token lacks Account Filter Lists
+	DenyAccess     bool // token lacks Firewall Services
+	Limit          int  // custom-rule quota enforced on add
 	Calls          []string
 	seq            int
 }
@@ -97,7 +99,12 @@ func (c *CF) DeleteRule(_ context.Context, _, _, id string) (cfapi.Ruleset, erro
 	}
 	return cfapi.Ruleset{}, &cfapi.APIError{Status: http.StatusNotFound}
 }
-func (c *CF) Lists(context.Context, string) ([]cfapi.List, error) { return slices.Clone(c.ListsV), nil }
+func (c *CF) Lists(context.Context, string) ([]cfapi.List, error) {
+	if c.DenyLists {
+		return nil, &cfapi.APIError{Status: 403, Code: 10000, Message: "Authentication error"}
+	}
+	return slices.Clone(c.ListsV), nil
+}
 func (c *CF) CreateList(_ context.Context, _, name, _ string) (cfapi.List, error) {
 	if c.FailCreateList {
 		return cfapi.List{}, &cfapi.APIError{Status: 400, Message: "list limit"}
@@ -129,6 +136,9 @@ func (c *CF) DeleteListItems(_ context.Context, _, id string, ids []string) erro
 	return nil
 }
 func (c *CF) AccessRules(context.Context, string, string) ([]cfapi.AccessRule, error) {
+	if c.DenyAccess {
+		return nil, &cfapi.APIError{Status: 403, Code: 10000, Message: "Authentication error"}
+	}
 	return slices.Clone(c.Access), nil
 }
 func (c *CF) CreateAccessRule(_ context.Context, _, mode, target, value, notes string) (cfapi.AccessRule, error) {

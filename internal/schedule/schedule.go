@@ -20,7 +20,7 @@ type Window struct{ From, To time.Time }
 func (w Window) Shift(d time.Duration) Window { return Window{w.From.Add(d), w.To.Add(d)} }
 
 func (w Window) String() string {
-	if w.To.Sub(w.From) <= 24*time.Hour && w.From.UTC().YearDay() == w.To.Add(-time.Nanosecond).UTC().YearDay() {
+	if w.To.Sub(w.From) < 24*time.Hour && w.From.UTC().YearDay() == w.To.Add(-time.Nanosecond).UTC().YearDay() {
 		return fmt.Sprintf("%s–%s", w.From.UTC().Format("2006-01-02 15:04"), w.To.UTC().Format("15:04 UTC"))
 	}
 	return fmt.Sprintf("%s → %s", w.From.UTC().Format("2006-01-02 15:04"), w.To.UTC().Format("2006-01-02 15:04 UTC"))

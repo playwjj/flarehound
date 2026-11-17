@@ -157,7 +157,8 @@ Full specification: [SPEC.md](SPEC.md) (Chinese).
 
 ## Limitations
 
-- Cloudflare's GraphQL Analytics is sampled and has no host / country / referer dimensions; very large sites will find attribution too coarse. FlareHound targets small-to-medium sites.
+- Cloudflare's GraphQL Analytics is sampled and has no referer dimension; very large sites will find attribution too coarse. FlareHound targets small-to-medium sites.
+- What analytics expose depends on the plan. FlareHound probes each zone at startup and degrades instead of failing: on **Free**, there is no ASN breakdown (new-ASN detection and ASN suggestions are off) and no firewall events (block attempts show "n/a"); crawlers are verified with Cloudflare's own `verifiedBotCategory` instead.
 - Analytics ingestion lag (~5–10 min) sets the detection floor. This is a watchdog, not a real-time shield — edge rules remain the shield.
 - The local archive stores hourly aggregates, not raw request logs; it cannot reconstruct individual requests, and history starts accumulating only from the day you deploy.
 - No AI sits in the detection path: findings are deterministic and reproducible from the same data. An optional bring-your-own-key AI explainer that narrates findings is on the long-term roadmap — it will never gate, suppress or act on an alert.

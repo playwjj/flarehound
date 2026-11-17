@@ -61,6 +61,10 @@ type State struct {
 	List          *cfapi.List
 	ListItems     []cfapi.ListItem
 	Access        []cfapi.AccessRule
+	// Mechanisms the write token cannot use (missing permission); planning
+	// avoids them and says why.
+	NoLists  bool // Account Filter Lists
+	NoAccess bool // Firewall Services (IP Access Rules)
 }
 
 // RulesUsed counts every rule in the custom-rules phase (the user's too:
@@ -112,7 +116,9 @@ func (m *Manager) Load(ctx context.Context) (State, error) {
 	}
 	if m.AccountID != "" {
 		lists, err := m.API.Lists(ctx, m.AccountID)
-		if err != nil {
+		if cfapi.IsPermission(err) {
+			st.NoLists = true
+		} else if err != nil {
 			return st, fmt.Errorf("IP lists: %w", err)
 		}
 		for i := range lists {
@@ -125,8 +131,12 @@ func (m *Manager) Load(ctx context.Context) (State, error) {
 				return st, fmt.Errorf("IP list items: %w", err)
 			}
 		}
+	} else {
+		st.NoLists = true
 	}
-	if st.Access, err = m.API.AccessRules(ctx, m.ZoneID, AccessNotes); err != nil {
+	if st.Access, err = m.API.AccessRules(ctx, m.ZoneID, AccessNotes); cfapi.IsPermission(err) {
+		st.NoAccess = true
+	} else if err != nil {
 		return st, fmt.Errorf("IP access rules: %w", err)
 	}
 	return st, nil
@@ -251,7 +261,7 @@ func (s State) PlanBlock(t Target, a Action) (Plan, error) {
 			p.Note = fmt.Sprintf("add to IP list %s (applied by rule %s); no extra rule needed", ListName, ref)
 			return p, nil
 		}
-		if _, ok := s.Rules[ref]; !ok && s.quotaLeft() > 0 {
+		if _, ok := s.Rules[ref]; !ok && s.quotaLeft() > 0 && !s.NoLists {
 			p.Op, p.Mechanism, p.RuleRef, p.Expression = OpCreateListRule, MechList, ref, ListExpression
 			p.Note = fmt.Sprintf("create IP list %s (account-wide) if missing, plus rule %s applying it — uses 1 custom rule once; %s", ListName, ref, quota)
 			return p, nil
@@ -276,10 +286,13 @@ func (s State) PlanBlock(t Target, a Action) (Plan, error) {
 		p.Note = fmt.Sprintf("create rule %s — uses 1 custom rule; %s", ref, quota)
 		return p, nil
 	}
-	if _, _, err := AccessRuleTarget(t); err == nil {
+	if _, _, err := AccessRuleTarget(t); err == nil && !s.NoAccess {
 		p.Op, p.Mechanism = OpCreateAccessRule, MechAccess
 		p.Note = fmt.Sprintf("custom-rule quota is full (%s): falling back to an IP Access Rule (no rule quota; no condition logic, so verified bots are NOT exempt)", quota)
 		return p, nil
+	}
+	if _, _, err := AccessRuleTarget(t); err == nil && s.NoAccess {
+		return p, fmt.Errorf("custom-rule quota is full (%s) and the write token has no Firewall Services: Edit for the IP Access Rule fallback; free a rule first", quota)
 	}
 	return p, fmt.Errorf("custom-rule quota is full (%s) and %s cannot use IP Access Rules; free a rule or merge existing ones first", quota, t)
 }
