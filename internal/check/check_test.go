@@ -105,6 +105,10 @@ func (f *fakeAPI) MitigatedIPs(context.Context, string, time.Time, time.Time, in
 	return []cfapi.Face{{Name: "45.13.7.7", Count: 812}, {Name: "45.13.7.9", Count: 40}}, nil
 }
 
+func (f *fakeAPI) RuleHits(context.Context, string, time.Time, time.Time) (map[string]int64, error) {
+	return map[string]int64{"r-login": 10}, nil
+}
+
 func (f *fakeAPI) Capabilities(context.Context, string) (cfapi.Caps, error) {
 	if f.caps != nil {
 		return *f.caps, nil
@@ -501,7 +505,7 @@ func TestLabelRules(t *testing.T) {
 	cfg.RuleNames = map[string]string{"a3c36f59e1d2": "WordPress probes"}
 	r := &Runner{Cfg: cfg}
 	in := []cfapi.Face{{Name: "block firewallCustom:a3c36f59e1d2", Count: 9}, {Name: "block firewallCustom:other", Count: 1}}
-	got := r.labelRules(in)
+	got := r.labelRules(cfg.Cloudflare.Zones[0], in)
 	if got[0].Name != "block firewallCustom:WordPress probes (a3c36f59)" || got[1].Name != in[1].Name {
 		t.Fatalf("got %+v", got)
 	}
@@ -524,5 +528,89 @@ func TestPathRuleDynamicOnly(t *testing.T) {
 	}
 	if m.Paths["all"] != w.total/10 || m.Paths["dyn"] != w.dynamic/10 {
 		t.Fatalf("paths %+v", m.Paths)
+	}
+}
+
+type fakeRules struct {
+	rs     cfapi.Ruleset
+	denied bool
+}
+
+func (f *fakeRules) Entrypoint(context.Context, string) (cfapi.Ruleset, bool, error) {
+	if f.denied {
+		return cfapi.Ruleset{}, false, &cfapi.APIError{Status: 403, Code: 10000, Message: "Authentication error"}
+	}
+	return f.rs, true, nil
+}
+func (f *fakeRules) AccessRules(context.Context, string, string) ([]cfapi.AccessRule, error) {
+	return nil, &cfapi.APIError{Status: 403, Code: 10000}
+}
+func (f *fakeRules) ZonePlan(context.Context, string) (string, error) { return "free", nil }
+
+func auditRules(version string) cfapi.Ruleset {
+	old := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	return cfapi.Ruleset{ID: "rs", Version: version, Rules: []cfapi.Rule{
+		{ID: "r-skip", Action: "skip", Description: "let monitors in", Enabled: true, LastUpdated: old,
+			Expression: `http.user_agent contains "Monitor"`, ActionParameters: &cfapi.ActionParameters{Ruleset: "current"}},
+		{ID: "r-login", Action: "managed_challenge", Description: "challenge login", Enabled: true, LastUpdated: old,
+			Expression: `starts_with(http.request.uri.path, "/login")`},
+	}}
+}
+
+func TestAuditInDailyAndOnRulesetChange(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Report.Language = "en"
+	cfg.WAFAudit.SensitivePaths = []string{"/login*", "/search*"}
+	cfg.RuleNames = nil
+	api := &fakeAPI{windows: map[time.Time]*window{}, reads: map[time.Time]int{}}
+	rules := &fakeRules{rs: auditRules("7")}
+	out := &sink{}
+	end := time.Date(2026, 11, 17, 8, 0, 0, 0, time.UTC)
+	now := end.Add(7 * time.Minute)
+	r := &Runner{API: api, Cfg: cfg, Sender: out, Rules: rules, Now: func() time.Time { return now },
+		Sleep: func(context.Context, time.Duration) error { return nil }}
+	zone := cfg.Cloudflare.Zones[0]
+	for h := -48; h < 24; h++ {
+		api.windows[end.Add(time.Duration(h)*time.Hour)] = normal()
+	}
+
+	if err := r.Daily(context.Background(), zone); err != nil {
+		t.Fatal(err)
+	}
+	msg := out.msgs[0]
+	for _, want := range []string{"WAF audit: 2 custom rules", "⚠ /search*: no challenge/block rule covers it\n",
+		"may exempt", "anyone can forge it", "can be bypassed on /login*"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("daily lacks %q:\n%s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "zombie") {
+		t.Errorf("rule with hits called a zombie:\n%s", msg)
+	}
+
+	// Intraday rounds: first records the version, a change re-audits.
+	out.msgs, out.meta = nil, nil
+	if err := r.Intraday(context.Background(), zone); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.msgs) != 0 {
+		t.Fatalf("first version must only be recorded: %v", out.msgs)
+	}
+	rules.rs = auditRules("8")
+	now = now.Add(time.Hour)
+	if err := r.Intraday(context.Background(), zone); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.meta) != 1 || out.meta[0].Kind != "audit" || !strings.Contains(out.msgs[0], "version 7 → 8") {
+		t.Fatalf("re-audit: %+v", out.meta)
+	}
+}
+
+func TestAuditWithoutPermission(t *testing.T) {
+	cfg := testConfig(t)
+	r := &Runner{API: &fakeAPI{windows: map[time.Time]*window{}, reads: map[time.Time]int{}}, Cfg: cfg, Rules: &fakeRules{denied: true}}
+	d, err := r.Audit(context.Background(), cfg.Cloudflare.Zones[0])
+	if err != nil || !strings.Contains(d.NA, "WAF: Read") {
+		t.Fatalf("%+v %v", d, err)
 	}
 }

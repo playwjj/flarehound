@@ -45,6 +45,11 @@
   },
   "report": { "language": "en" },
   "rule_names": {},
+  "waf_audit": {
+    "disabled": false,
+    "hosts": [],
+    "sensitive_paths": ["/admin*", "/wp-login.php"]
+  },
   "notify": {
     "webhook_url_env": "FLAREHOUND_WEBHOOK_URL",
     "telegram_bot_token_env": "",

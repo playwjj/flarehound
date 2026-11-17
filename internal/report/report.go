@@ -472,6 +472,7 @@ type DailyData struct {
 	Artifacts         []ArtifactCount
 	Suggestions       []suggest.Suggestion
 	Archive           *ArchiveInfo
+	Audit             *AuditData
 	Blocks            []BlockStatus
 	ActiveSince       time.Time
 	ActiveFingerprint string
@@ -578,6 +579,11 @@ func Daily(language string, d DailyData) string {
 	}
 
 	l.suggestions(&b, d.Suggestions)
+
+	if d.Audit != nil {
+		b.WriteString("\n")
+		l.auditBody(&b, *d.Audit, false)
+	}
 
 	if !d.ActiveSince.IsZero() {
 		fmt.Fprintf(&b, "\n"+l.t("Intraday anomaly still open since %s: %s\n", "日内异常仍在持续，始于 %s：%s\n"),

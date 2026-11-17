@@ -134,6 +134,15 @@ type Config struct {
 		NeverBlock     []string `json:"never_block"`      // CIDRs / IPs that are never blocked
 		NeverBlockASNs []int    `json:"never_block_asns"` // ASNs that are never blocked
 	} `json:"blocking"`
+	WAFAudit struct {
+		Disabled bool `json:"disabled"`
+		// Hosts to probe (default: the zone name). Rules often pin
+		// http.host, so coverage is judged per host.
+		Hosts []string `json:"hosts"`
+		// SensitivePaths adds patterns to path_rules and daily.paths,
+		// which are always checked for coverage.
+		SensitivePaths []string `json:"sensitive_paths"`
+	} `json:"waf_audit"`
 	Archive struct {
 		Disabled            bool   `json:"disabled"`
 		File                string `json:"file"`                  // default: <data dir>/archive.db

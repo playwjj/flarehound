@@ -14,12 +14,18 @@ import (
 	"github.com/playwjj/flarehound/internal/block"
 	"github.com/playwjj/flarehound/internal/blockcli"
 	"github.com/playwjj/flarehound/internal/cfapi"
+	"github.com/playwjj/flarehound/internal/check"
 	"github.com/playwjj/flarehound/internal/config"
 	"github.com/playwjj/flarehound/internal/logx"
+	"github.com/playwjj/flarehound/internal/report"
 	"github.com/playwjj/flarehound/internal/store"
 )
 
-const blockUsage = `Blocking commands (separate write token, see README):
+const blockUsage = `Commands:
+
+  flarehound audit                                 WAF rule audit now (read token; needs Zone → WAF: Read)
+
+Blocking commands (separate write token, see README):
 
   flarehound block <ip|asn|country|ua> <value> [--action block|challenge] [--for 24h|7d] [--reason TEXT] [--yes]
   flarehound unblock <ip|asn|country|ua> <value> [--yes]
@@ -30,7 +36,7 @@ Common flags: -config PATH, --zone NAME|ID (required when several zones are conf
 `
 
 // subcommands lists the verbs main dispatches here.
-var subcommands = map[string]bool{"block": true, "unblock": true, "blocks": true, "enforce": true, "help": true}
+var subcommands = map[string]bool{"audit": true, "block": true, "unblock": true, "blocks": true, "enforce": true, "help": true}
 
 // splitArgs separates leading positionals from flags so flags may follow
 // the positionals ("block asn 207990 --for 24h").
@@ -110,6 +116,32 @@ func runSubcommand(ctx context.Context, cfgPath, verb string, args []string, red
 		return 1
 	}
 	redactor.Add(cfg.Secrets()...)
+
+	if verb == "audit" { // read-only: never touches the write token
+		runner := &check.Runner{API: cfapi.New(cfg.APIToken), Cfg: cfg, Rules: cfapi.NewREST(cfg.APIToken)}
+		zs := cfg.Cloudflare.Zones
+		if *zoneArg != "" {
+			z, err := pickZone(cfg, *zoneArg)
+			if err != nil {
+				log.Print(err)
+				return 1
+			}
+			zs = []config.Zone{z}
+		}
+		code := 0
+		for _, z := range zs {
+			d, err := runner.Audit(ctx, z)
+			if err != nil {
+				log.Printf("zone %s: %v", z.Name, err)
+				code = 1
+				continue
+			}
+			fmt.Println(report.Audit(cfg.Report.Language, d, ""))
+			fmt.Println()
+		}
+		return code
+	}
+
 	wt, err := cfg.WriteToken()
 	if err != nil {
 		log.Print(err)

@@ -1,8 +1,8 @@
 # FlareHound 规格说明书（SPEC）
 
-- 版本：0.5（v0.2 每日报告、v0.3 日内看守、v0.4 建议引擎与本地归档、v0.5 一键封锁落地；2026-11-17 补订 WAF 规则体检与可选执行模块）
+- 版本：0.6（v0.2 每日报告、v0.3 日内看守、v0.4 建议引擎与本地归档、v0.5 一键封锁、v0.6 WAF 规则体检落地）
 - 日期：2026-11-17
-- 状态：v0.5 已实现（封锁模块待真实 zone 验证），v0.6 WAF 规则体检待开发
+- 状态：v0.6 已实现（Free zone 实测），v0.7 通用执行模块待开发
 - 许可证：MIT
 
 > 英文说明见 [README.md](README.md)。本文档是给贡献者与维护者看的完整规格，定义产品边界、数据口径、检测规则与路线图。实现与本文冲突时，先改本文再改代码。
@@ -252,6 +252,19 @@
 
 体检结论并入每日报告（有问题才展开，无问题一行带过）；规则集发生变更后自动复检一次。
 
+**v0.6 实现口径**：
+
+- **表达式引擎**：自带 Cloudflare 规则语言解析器（逻辑 and / or / xor / not 及符号写法、比较 eq / ne / lt / le / gt / ge / contains / matches(~) / wildcard / strict wildcard / in、集合（字符串 / 数字 / IP / CIDR / 范围）、`$list` 名单、函数调用（含 `any(...)` 的布尔参数）、原始字符串 `r"…"` / `r#"…"#`、请求头等 map / 数组访问）。求值采用**三值逻辑**：探针请求只固定 `http.host` 与 `http.request.uri.path`，其余字段未知，规则结果为「必中 / 必不中 / 取决于其他字段」；`lower` / `upper` / `starts_with` / `ends_with` 在已知字段上精确求值。无法解析的规则单列「解析失败」，不参与其他检查（不因未知而误判）。
+- **覆盖缺口**：敏感路径 = `path_rules` + `daily.paths` + `waf_audit.sensitive_paths`；每个模式取一个代表路径（`/login*` → `/login`，`/u/*/edit` → `/u/x/edit`），对 `waf_audit.hosts`（默认 zone 名）逐个探测。按执行顺序扫描已启用规则：先遇到必中的「跳过其后全部自定义规则」类 skip 规则 → **整体豁免**；先遇到必中的防护规则（block / challenge / js_challenge / managed_challenge）→ **已覆盖**（若其前有条件性 skip，加注「可能豁免部分请求」）；只有条件性防护 → **部分覆盖**；否则 **缺口**。
+- **顺序与冗余**（结构推理，宁缺毋滥：只报能证明的）：条件展开为析取范式（上限 256 项）后比较合取项集合判断蕴含。① 后续防护规则被前置 skip 规则完全蕴含 → 永不生效；② 前置 skip 与后续防护在某个敏感路径探针上可同时命中 → 在该路径可被绕过；③ 被前面的 Block 规则完全蕴含 → 永不触发（只认 Block 为遮蔽者，挑战类不算）；④ 条件规范化后相同且动作相同 → 重复。
+- **豁免面**：列出全部 skip 规则及其跳过范围（其后自定义规则 / 指定阶段 / 指定产品）与条件字段；条件只用客户端可任意伪造的公开字段（UA、Referer、Host、路径 / URI / 查询串、方法、协议版本、X-Forwarded-For）时标「任何人都能伪造」，建议绑定 `ip.src` / `ip.geoip.asnum` / 秘密请求头，爬虫用 `cf.client.bot`。Cookie 与请求头不计为可伪造（可能承载秘密）。IP 访问规则中的放行项单列（整体绕过 WAF），读不到时说明缺 Firewall Services: Read。
+- **命中统计**：防火墙数据集可用时按 `ruleId` 逐日查询 30 天，给出每条规则 7 / 30 天命中；30 天零命中且 30 天内未改动（`last_updated`）的防护规则列为僵尸规则（只报告，并提醒「安静不等于没用」）；skip / log 规则不判僵尸。数据集不可用时整节注明不可用，不做零命中推断。
+- **额度对照**：规则数 ≥ 套餐上限 80% 时提示接近上限，并把动作相同的防护规则（不含 FlareHound 自有规则与带参数的规则）列为可用 `or` 合并的一组。
+- **规则名**：读取规则集时同时取得规则描述，防火墙事件中的 ruleId 自动显示为描述（`rule_names` 配置仍可覆盖）。
+- **复检**：每轮日内看守读取规则集版本号（1 次 REST 调用）；版本变化即复检，有问题时单独推送一条 `kind: "audit"` 消息；首次见到的版本只记录不推送（由日报覆盖）。
+- **入口**：日报内嵌（无问题一行，有问题只展开需要关注的项）；`flarehound audit` 打印完整体检（含规则清单、全部覆盖结果、命中表），只用只读 Token。
+- **权限**：只读 Token 追加 Zone → WAF: Read（必需，读规则集）；Zone → Zone: Read（可选，额度对照）；Zone → Firewall Services: Read（可选，IP 访问规则放行项）。缺 WAF Read 时体检显示「不可用」并说明原因，不影响看守。
+
 ## 11. 通知
 
 - **渠道**：v1 = 通用 Webhook（任意可接收 POST JSON 的端点，含各 IM 的桥接服务）+ Telegram Bot；后续 Slack、Discord、邮件（SMTP）、企业微信/飞书 Webhook 机器人（均为 Webhook 模板变体）。
@@ -271,7 +284,7 @@
   - Zone 级：Analytics Read（必需）；
   - Account 级：Account Analytics Read（可选，仅在配置了 `workers` 时需要——`workersInvocationsAdaptive` 是账户级数据集）。
   - （v0.5.2 依代码调用点复核后收窄：旧版列出的 Logs Read、Zone Read、Workers Scripts Read 无任何代码路径使用；Zone Read 只在写 Token 侧用于读取套餐。用户反馈 + 代码核对，最小 Token 的实测待补。）
-  - Zone 级（启用 WAF 体检时追加）：WAF Read（读取自定义规则集，Rulesets API 的权限名）与 Firewall Services Read（IP 访问规则）。
+  - Zone 级（WAF 体检，第 10 节）：WAF Read（必需，读取自定义规则集）；Zone Read（可选，套餐额度对照）；Firewall Services Read（可选，IP 访问规则放行项）。
 - **写 Token**（仅封锁模块，第 13 节）：Account 级 Account Filter Lists Edit（IP 名单）；Zone 级 WAF Edit（自定义规则，Rulesets API）、Firewall Services Edit（IP 访问规则兜底）、DNS Read（读取源站 IP 作护栏）、Zone Read（读取套餐以判断规则额度）。
   （以实际授权结果为准，README 中给出创建步骤与逐项说明。）
 - Token 只从环境变量（如 `CF_API_TOKEN`）读取；禁止写入配置文件与日志；日志中出现 Token 特征串必须脱敏。实现：全部日志经脱敏写入器，已加载的密钥值、`Bearer …` 串与 Telegram `/bot<token>` 段一律替换为 `[REDACTED]`。
@@ -346,12 +359,13 @@
 - `known_faces`：已知模式库 `asns[]` / `user_agents[]`（第 7.3、17 节）；
 - `report.language`：`en` / `zh`；
 - `notify`：渠道与端点（敏感值只写环境变量名，不写明文）：`webhook_url_env`、`telegram_bot_token_env` + `telegram_chat_id`、`jsonl_file`；
-- `rule_names`：防火墙规则 ID → 名称映射（第 11 节）；
+- `rule_names`：防火墙规则 ID → 名称映射（第 11 节；有 WAF Read 时自动取规则描述，此项只做覆盖）；
+- `waf_audit`：`disabled`、`hosts`（探测用主机名，默认 zone 名）、`sensitive_paths`（追加的敏感路径模式）；
 - `state_file`：状态文件路径（Docker 形态下挂载到 /app/data）；多 zone 时自动派生每 zone 一个状态文件；通知待发箱 `outbox.json` 与其同目录；
 - `archive`：`disabled`（默认 false）、`file`（默认与状态文件同目录的 `archive.db`）、`hourly_retention_days`（默认 400）；
 - `blocking`：`write_token_env`（默认 `CF_WRITE_TOKEN`，不得与只读 Token 同名）、`never_block`（IP / CIDR）、`never_block_asns`。
 
-命令行：`-config`、`-once`（跑一轮日内看守后退出）、`-daily`（立即生成日报后退出）、`-dry-run`（消息打印到标准输出，不发送）、`-backfill N`（回填近 N 天归档后退出）、`-version`；子命令 `block` / `unblock` / `blocks` / `enforce` / `help`（第 13 节，只有子命令读取写 Token）。
+子命令 `audit`：立即打印 WAF 体检（只读 Token）。命令行：`-config`、`-once`（跑一轮日内看守后退出）、`-daily`（立即生成日报后退出）、`-dry-run`（消息打印到标准输出，不发送）、`-backfill N`（回填近 N 天归档后退出）、`-version`；子命令 `block` / `unblock` / `blocks` / `enforce` / `help`（第 13 节，只有子命令读取写 Token）。
 
 ## 15. 路线图
 
@@ -362,7 +376,7 @@
 | v0.3 ✅ | 日内看守全量落地（新面孔检测、升级/恢复状态机、归因查询） |
 | v0.4 ✅ | 建议引擎（封禁/挑战/限速/缓存四类候选）；本地 SQLite 归档（小时 / 日快照、长基线、新面孔历史、报警历史、回填） |
 | v0.5 ✅ | 一键封锁（IP / 网段 / ASN / 国家 / UA：告警内直接封、CLI、TTL 临时封锁、护栏与审计） |
-| v0.6 | WAF 规则体检（覆盖缺口 / 顺序与冗余 / 命中统计 / 豁免面审计） |
+| v0.6 ✅ | WAF 规则体检（覆盖缺口 / 顺序与冗余 / 命中统计 / 豁免面审计） |
 | v0.7 | 通用执行模块（任意规则变更：独立写 Token、逐项确认、改前备份、回读验证） |
 | v0.8 | 通知渠道补齐（Slack/Discord/邮件）；多 zone 并行 |
 | v1.0 | 口径校准工具（与面板数字对照）、文档站、首个正式版 |

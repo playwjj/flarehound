@@ -327,6 +327,21 @@ func (c *Client) MitigatedIPs(ctx context.Context, zoneID string, from, to time.
 	return out, nil
 }
 
+// RuleHits returns firewall-event counts per rule ID in the window.
+func (c *Client) RuleHits(ctx context.Context, zoneID string, from, to time.Time) (map[string]int64, error) {
+	rows, err := c.zoneRows(ctx, zoneID, "firewallEventsAdaptiveGroups", "count dimensions{ruleId}", 1000, true, Filter{}.render(from, to))
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]int64{}
+	for _, r := range rows {
+		if id, _ := r.Dimensions["ruleId"].(string); id != "" {
+			out[id] += r.Count
+		}
+	}
+	return out, nil
+}
+
 // ASNName returns one ASN's registered name ("" if unknown).
 func (c *Client) ASNName(ctx context.Context, zoneID string, from, to time.Time, asn int) (string, error) {
 	rows, err := c.zoneRows(ctx, zoneID, "httpRequestsAdaptiveGroups", "count dimensions{clientAsn clientASNDescription}", 1, true, Filter{ASN: asn}.render(from, to))

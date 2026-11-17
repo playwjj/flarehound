@@ -205,11 +205,22 @@ type Rule struct {
 	Expression  string `json:"expression"`
 	Description string `json:"description"`
 	Enabled     bool   `json:"enabled"`
+	// Read-side only (the audit); never sent by FlareHound's writes.
+	ActionParameters *ActionParameters `json:"action_parameters,omitempty"`
+	LastUpdated      time.Time         `json:"last_updated,omitzero"`
+}
+
+// ActionParameters of a skip rule: what it skips.
+type ActionParameters struct {
+	Ruleset  string   `json:"ruleset,omitempty"` // "current": the remaining custom rules
+	Phases   []string `json:"phases,omitempty"`
+	Products []string `json:"products,omitempty"`
 }
 
 type Ruleset struct {
-	ID    string `json:"id"`
-	Rules []Rule `json:"rules"`
+	ID      string `json:"id"`
+	Version string `json:"version,omitempty"`
+	Rules   []Rule `json:"rules"`
 }
 
 // Entrypoint returns the zone's custom-rules entrypoint ruleset; found is

@@ -34,7 +34,16 @@ type API interface {
 	FirewallTop(ctx context.Context, zoneID string, from, to time.Time, ruleID, dim string, limit int) ([]cfapi.Face, error)
 	Capabilities(ctx context.Context, zoneID string) (cfapi.Caps, error)
 	MitigatedIPs(ctx context.Context, zoneID string, from, to time.Time, limit int) ([]cfapi.Face, error)
+	RuleHits(ctx context.Context, zoneID string, from, to time.Time) (map[string]int64, error)
 	WorkerStats(ctx context.Context, accountID, script string, from, to time.Time) (int64, float64, error)
+}
+
+// RulesAPI is the read-only REST surface of the WAF audit (read token:
+// Zone → WAF: Read; optionally Zone: Read and Firewall Services: Read).
+type RulesAPI interface {
+	Entrypoint(ctx context.Context, zoneID string) (cfapi.Ruleset, bool, error)
+	AccessRules(ctx context.Context, zoneID, notesContains string) ([]cfapi.AccessRule, error)
+	ZonePlan(ctx context.Context, zoneID string) (string, error)
 }
 
 // Sender delivers a rendered message.
@@ -47,9 +56,11 @@ type Runner struct {
 	Cfg    *config.Config
 	Sender Sender
 	Store  *store.Store // nil: archive disabled
+	Rules  RulesAPI     // nil: WAF audit disabled
 
 	caps        map[string]cfapi.Caps                            // per zone, probed once per process
 	archiveDays int                                              // depth of the archive at the last faceHistory lookup
+	ruleNames   map[string]map[string]string                     // zone → rule id → description, from the last ruleset read
 	Now         func() time.Time                                 // default time.Now
 	Sleep       func(ctx context.Context, d time.Duration) error // default: timer
 }
@@ -375,14 +386,21 @@ func (r *Runner) attribute(ctx context.Context, zone config.Zone, w, bw schedule
 		a.ASNNames, err = r.API.ASNNames(ctx, z, w.From, w.To, currentTop)
 		logErr("ASN names", err)
 	}
-	a.Firewall = r.labelRules(a.Firewall)
+	a.Firewall = r.labelRules(zone, a.Firewall)
 }
 
 // labelRules returns a copy of firewall-event rows with configured rule
 // names in place of bare rule IDs ("block firewallCustom:<id>" →
 // "block firewallCustom:<name> (<id prefix>)"). The archive keeps raw IDs.
-func (r *Runner) labelRules(fs []cfapi.Face) []cfapi.Face {
-	if len(r.Cfg.RuleNames) == 0 || len(fs) == 0 {
+func (r *Runner) labelRules(zone config.Zone, fs []cfapi.Face) []cfapi.Face {
+	names := map[string]string{}
+	for id, n := range r.ruleNames[zone.ZoneID] { // from the ruleset (WAF audit access)
+		names[id] = n
+	}
+	for id, n := range r.Cfg.RuleNames { // config wins
+		names[id] = n
+	}
+	if len(names) == 0 || len(fs) == 0 {
 		return fs
 	}
 	out := make([]cfapi.Face, len(fs))
@@ -393,7 +411,7 @@ func (r *Runner) labelRules(fs []cfapi.Face) []cfapi.Face {
 			continue
 		}
 		id := f.Name[j+1:]
-		if name, ok := r.Cfg.RuleNames[id]; ok {
+		if name, ok := names[id]; ok {
 			short := id
 			if len(short) > 8 {
 				short = short[:8]
@@ -527,6 +545,8 @@ func (r *Runner) Intraday(ctx context.Context, zone config.Zone) error {
 			}
 		}
 	}
+
+	r.rulesetChanged(ctx, zone, st)
 
 	// State first: if delivery fails the message is already in the
 	// outbox, and the episode must not re-alert next round.
@@ -671,7 +691,15 @@ func (r *Runner) Daily(ctx context.Context, zone config.Zone) error {
 		d.ActiveFingerprint = st.Fingerprint
 	}
 
-	d.Firewall = r.labelRules(d.Firewall)
+	if r.auditEnabled() {
+		ad, err := r.Audit(ctx, zone)
+		if err != nil {
+			logErr("WAF audit", err)
+		} else {
+			d.Audit = &ad
+		}
+	}
+	d.Firewall = r.labelRules(zone, d.Firewall)
 	text := report.Daily(cfg.Report.Language, d)
 	log.Printf("zone %s: daily report %s (findings=%d)", zone.Name, w, len(d.Findings))
 	return r.Sender.Send(ctx, notify.Message{Kind: "daily", Zone: zone.Name,

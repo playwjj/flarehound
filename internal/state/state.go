@@ -27,6 +27,9 @@ type State struct {
 	// LastWindow is the end of the last evaluated window; a restart must
 	// not evaluate (and count) the same window twice.
 	LastWindow time.Time `json:"last_window,omitzero"`
+	// RulesetVersion is the custom-rules ruleset version last audited; a
+	// change triggers a re-audit (SPEC 10).
+	RulesetVersion string `json:"ruleset_version,omitempty"`
 }
 
 type Decision int
@@ -89,8 +92,8 @@ func Decide(st *State, findings []analyze.Finding, escPct float64, cleanRoundsNe
 		}
 		st.CleanRounds++
 		if st.CleanRounds >= cleanRoundsNeeded {
-			lw := st.LastWindow
-			*st = State{LastWindow: lw}
+			lw, rv := st.LastWindow, st.RulesetVersion
+			*st = State{LastWindow: lw, RulesetVersion: rv}
 			return DecRecovered
 		}
 		return DecNone

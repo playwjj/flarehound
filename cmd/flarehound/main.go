@@ -72,7 +72,7 @@ func main() {
 	defer stop()
 
 	disp := buildDispatcher(cfg, *dryRun)
-	runner := &check.Runner{API: cfapi.New(cfg.APIToken), Cfg: cfg, Sender: disp}
+	runner := &check.Runner{API: cfapi.New(cfg.APIToken), Cfg: cfg, Sender: disp, Rules: cfapi.NewREST(cfg.APIToken)}
 	if !cfg.Archive.Disabled {
 		st, err := store.Open(cfg.Archive.File)
 		if err != nil {

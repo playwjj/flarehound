@@ -4,7 +4,7 @@
 
 Cloudflare gives you data. FlareHound gives you the conclusion.
 
-> Status: **v0.5** — hourly watch, daily report, suggestion engine, local archive and one-click blocking are complete. The detection model, thresholds and alert discipline are ported from a real incident response (a residential-proxy crawler flood, 2026-11-17). Next up: one-click blocking (v0.5). See [SPEC.md](SPEC.md) (in Chinese) for the full design.
+> Status: **v0.6** — hourly watch, daily report, suggestion engine, local archive, one-click blocking and the WAF rule audit are complete. The detection model, thresholds and alert discipline are ported from a real incident response (a residential-proxy crawler flood, 2026-11-17). Next up: one-click blocking (v0.5). See [SPEC.md](SPEC.md) (in Chinese) for the full design.
 
 ## Why
 
@@ -94,7 +94,7 @@ Optional add-ons — grant only when you enable the feature:
 
 - **Worker metrics** (`workers` listed in the config): add **Account** → **Account Analytics: Read**.
 
-- **WAF rule audit** (v0.6): add **Zone** → **WAF: Read** and **Firewall Services: Read** to the same token.
+- **WAF rule audit** (v0.6): add **Zone** → **WAF: Read** to the same token (optionally **Zone: Read** for the quota check and **Firewall Services: Read** to see IP Access Rule allow-lists).
 - **One-click blocking** (v0.5): create a *separate* write token — **Account** → **Account Filter Lists: Edit**; **Zone** → **WAF: Edit**, **Firewall Services: Edit**, **DNS: Read**, **Zone: Read**. Put it in `CF_WRITE_TOKEN`. Never merge it into the read token; the watchdog process never holds it.
 
 The watchdog makes GraphQL Analytics calls only (`api.cloudflare.com/client/v4/graphql`), which is why Analytics: Read is enough; older versions of this README also asked for Logs, Zone and Workers Scripts read access, which no code path uses. (This minimum is derived from the code's call sites; a quick check with your own token: create one with only Zone → Analytics: Read and run `flarehound -once -dry-run`.) The audit will additionally read rulesets through the REST API on the same host. Your token never leaves your machine and is never written to disk or logs by the program.
@@ -116,6 +116,18 @@ flarehound enforce           # long-running: lifts blocks whose --for has passed
 Before anything changes you see the exact plan — the rule it edits and the expression afterwards, the custom-rule quota, the target's measured share of the last hour's excess, and every warning — and confirm once. FlareHound only ever edits its own objects (rules named `flarehound-…`, the IP list `flarehound_block`), merges each target type into one rule so your quota is barely touched, keeps verified search bots allowed on ASN and country rules, and reads the result back to verify. It refuses to block Cloudflare's ranges, your origin IPs (from DNS), private ranges and anything on your `blocking.never_block` list. Blocking a residential/backbone ASN or a whole country requires retyping the ASN or country code. Every action lands in an append-only audit log, and the daily report lists each block's attempts — lift a block when the attempts stop, not when it gets quiet.
 
 In Docker: `docker compose --profile admin up -d` starts the enforcer with the write token, and `docker compose run --rm flarehound-admin block …` runs commands.
+
+## WAF rule audit
+
+`flarehound audit` (and a section of every daily report) reads your custom rules — read-only — and checks them like a reviewer would:
+
+- **Coverage gaps**: is each sensitive path (`path_rules`, `daily.paths`, `waf_audit.sensitive_paths`) covered by a block/challenge rule? Fully, only conditionally (e.g. only for one user agent), or not at all — or exempted by a skip rule placed ahead of it.
+- **Ordering**: rules that can never fire because an earlier Block rule already matches everything they match, exact duplicates, and protections a skip rule ahead of them lets traffic around.
+- **Exemptions**: skip rules whose condition uses only fields any client can forge (user agent, referer, path…) — "anyone who sends `MyMonitor` in the UA skips your WAF".
+- **Hits and zombies** (plans with firewall events): 7- and 30-day hits per rule; rules with no hits in 30 days are reported (not removed — quiet is not useless).
+- **Quota**: near the plan's custom-rule limit, which rules can be merged.
+
+It ships its own parser for the Cloudflare rules language and evaluates rules with three-valued logic against probe requests, so it only claims what it can show. When the ruleset version changes, the next hourly round re-audits and reports any problem.
 
 ## How it decides
 
@@ -150,7 +162,7 @@ The primary form factor is a single Go binary in a Docker container, running on 
 - ~~v0.3~~ — full intraday watch (new-face detection, escalation/recovery state machine, attribution queries) ✅
 - ~~v0.4~~ — suggestion engine (block / challenge / rate-limit / cache candidates) + local SQLite archive ✅
 - ~~v0.5~~ — one-click blocking (IP / CIDR / ASN / country / user-agent — block from an alert or the CLI, expiring blocks, guard rails, audit log) ✅
-- **v0.6** — WAF rule audit (coverage gaps on sensitive paths, ordering/redundancy issues, per-rule hit stats, over-broad exemptions)
+- ~~v0.6~~ — WAF rule audit (coverage gaps on sensitive paths, ordering/redundancy issues, per-rule hit stats, over-broad exemptions) ✅
 - **v0.7** — general action module (execute approved suggestions with a separate write token, pre-change backup, read-back verification)
 - **v0.8** — more notification channels, multi-zone
 - **v1.0** — calibration tooling against dashboard numbers, docs site
