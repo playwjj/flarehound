@@ -68,7 +68,7 @@ The channel is active only when the token variable is non-empty **and** a chat I
 "notify": { "jsonl_file": "data/alerts.jsonl" }
 ```
 
-Every message is appended as one JSON line — for a bridge that tails the file into a chat, or a log shipper. Relative paths are relative to the working directory (in Docker use `/app/data/…` or `data/…` so it lands on the volume). The directory is created if needed; the file is created with mode `0600`, and each record is a single `O_APPEND` write, so a reader never sees half a record.
+Every message is appended as one JSON line — for a bridge that tails the file into a chat, or a log shipper. Relative paths are relative to the working directory (in Docker use `/app/data/…` or `data/…` so it lands on the volume). The directory is created if needed; the file is created with mode `0644` (alerts hold no secrets, and a bridge often runs as a different user than the container), and each record is a single `O_APPEND` write, so a reader never sees half a record.
 
 Record fields:
 
@@ -76,13 +76,24 @@ Record fields:
 |---|---|
 | `ts` | Time written (UTC, RFC 3339) |
 | `source` | Always `"flarehound"` |
-| `kind` | `intraday`, `daily` or `audit` |
+| `kind` | `intraday`, `daily`, `audit` or `heartbeat` |
 | `zone` | Zone name |
 | `decision` | Intraday only: `alert`, `changed`, `escalate` or `recovered` (omitted when empty) |
 | `window_from`, `window_to` | The evaluated window (zero time for `audit` messages) |
-| `rules` | Signal keys that fired, e.g. `dynamic_up`, `worker_calls_up:web` (omitted when empty) |
+| `rules` | Signal keys that fired, e.g. `dynamic_up`, `worker_calls_up:web` (omitted when empty); for `heartbeat`, the zones that errored |
+| `severity` | Intraday alerts: `low` (a flood absorbed at the edge) or `high` |
 | `delayed` | `true` when re-sent from the outbox (omitted otherwise) |
 | `text` | The rendered message |
+
+### Heartbeat (dead-man switch)
+
+A dead watchdog and a quiet site look the same from outside. So every hourly round — anomaly or not — FlareHound proves it is alive:
+
+- writes `data/heartbeat` (time, version, zones checked, errors, next run);
+- appends a `kind: "heartbeat"` record to the JSONL file, if configured;
+- pings `notify.heartbeat_url_env` (a [healthchecks.io](https://healthchecks.io)-style URL, from an environment variable) — `GET <url>` on success, `GET <url>/fail` when a zone errored. When the pings stop, the external service alerts you.
+
+Heartbeats never go to chat channels. The Docker image's `HEALTHCHECK` runs `flarehound health`, which fails when the heartbeat is older than two rounds plus 20 minutes; the admin container checks its own `heartbeat-enforce`. `-dry-run` writes no heartbeat.
 
 ## Slack
 

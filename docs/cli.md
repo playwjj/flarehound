@@ -31,6 +31,8 @@ flarehound -config config.json -backfill 28
 
 | Command | Token | Page |
 |---|---|---|
+| `doctor` | read (+ write, to test it) | Self-check — see below |
+| `health [--file heartbeat] [--max-age D]` | — | Exit 0 if the heartbeat is fresh ([heartbeat](channels.md#heartbeat-dead-man-switch)) |
 | `audit` | read | [WAF audit](audit.md) |
 | `calibrate [--days 7]` | read | [Calibration](archive.md#calibration) |
 | `block <ip|asn|country|ua> <value> […]` | write | [Blocking](blocking.md) |
@@ -41,6 +43,17 @@ flarehound -config config.json -backfill 28
 | `ratelimit add` | write | [Rule changes](rules.md) |
 | `cache add` | write | [Rule changes](rules.md) |
 | `help` | — | Print command usage |
+
+### `flarehound doctor`
+
+Run it first after installing. It prints, read-only:
+
+- the version and whether the configuration validates; configured channels; whether a heartbeat URL is set;
+- per zone: analytics reachable (with the last hour's request count), the plan's capabilities (ASN breakdown, firewall events and how long they are kept), Worker metrics;
+- a **capability matrix** — hourly watch, WAF audit, calibration, one-click blocking, rule changes, cache rules — each ✓ or ✗ **with the missing permission named**;
+- the last evaluated window, any open anomaly, the next hourly round and daily report, the heartbeat age, the archive span and pending outbox messages.
+
+Exit code 1 when something required is missing. Write permissions are probed with read-only calls, so an edit right is only proven by a real change.
 
 Positional arguments come first, flags after them: `flarehound block asn 207990 --for 24h`. `-config` may be given before the command or among its flags.
 

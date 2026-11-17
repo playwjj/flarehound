@@ -1,6 +1,8 @@
 # Troubleshooting
 
-FlareHound logs to stderr; in Docker use `docker compose logs -f flarehound`. Secrets are redacted from all log output.
+Start with **`flarehound doctor`**: it checks the configuration, what each token can reach (naming any missing permission), the plan's capabilities, the heartbeat and the archive in one go.
+
+FlareHound logs to stderr; in Docker use `docker compose logs -f flarehound`. Secrets are redacted from all log output. If the container shows `unhealthy`, the watch loop's heartbeat is stale — see the log.
 
 ## Startup errors
 

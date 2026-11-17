@@ -109,6 +109,10 @@ type Notify struct {
 	FeishuSecretEnv      string `json:"feishu_secret_env"`
 
 	Email *EmailConfig `json:"email,omitempty"`
+
+	// HeartbeatURLEnv names the variable holding a healthchecks.io-style
+	// URL pinged after every watch round (url/fail when a zone errored).
+	HeartbeatURLEnv string `json:"heartbeat_url_env"`
 }
 
 // EmailConfig is the SMTP channel. The password comes from PasswordEnv.
@@ -184,6 +188,7 @@ type Config struct {
 	TelegramBotToken string   `json:"-"`
 	WebhookURL       string   `json:"-"`
 	Chan             Channels `json:"-"`
+	HeartbeatURL     string   `json:"-"`
 
 	Location *time.Location `json:"-"`
 }
@@ -191,7 +196,7 @@ type Config struct {
 // Secrets returns every secret value, for log redaction.
 func (c *Config) Secrets() []string {
 	return []string{c.APIToken, c.TelegramBotToken, c.WebhookURL,
-		c.Chan.Slack, c.Chan.Discord, c.Chan.WeCom, c.Chan.Feishu, c.Chan.FeishuSecret, c.Chan.EmailPassword}
+		c.Chan.Slack, c.Chan.Discord, c.Chan.WeCom, c.Chan.Feishu, c.Chan.FeishuSecret, c.Chan.EmailPassword, c.HeartbeatURL}
 }
 
 var hhmm = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
@@ -249,6 +254,11 @@ func (c *Config) resolve() error {
 		"wecom_webhook_url_env": n.WeComWebhookURLEnv, "feishu_webhook_url_env": n.FeishuWebhookURLEnv} {
 		if v != "" && os.Getenv(v) == "" {
 			return fmt.Errorf("config: notify.%s names %s, but that environment variable is empty", name, v)
+		}
+	}
+	if n.HeartbeatURLEnv != "" {
+		if c.HeartbeatURL = os.Getenv(n.HeartbeatURLEnv); c.HeartbeatURL == "" {
+			return fmt.Errorf("config: notify.heartbeat_url_env names %s, but that environment variable is empty", n.HeartbeatURLEnv)
 		}
 	}
 	if e := n.Email; e != nil {

@@ -2,6 +2,19 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.1.0 — 2026-11-17
+
+From the first days on a production Pro zone.
+
+- **Heartbeat / dead-man switch**: every round writes `data/heartbeat`, a `kind: "heartbeat"` JSONL record and, with `notify.heartbeat_url_env`, pings a healthchecks.io-style URL (`/fail` on zone errors). `flarehound health` + Docker `HEALTHCHECK`; the admin container checks its own heartbeat.
+- **`flarehound doctor`**: configuration, a per-zone capability matrix (watch, audit, calibration, blocking, rule changes, cache rules) naming each missing permission, plan capabilities and firewall-event retention, last/next run, heartbeat, archive span, outbox.
+- **Edge-absorbed floods** are their own low-severity verdict (real rendering < +15%, nothing expensive crossed), shown first; JSONL carries `severity`.
+- Findings carry **dashboard equivalents** from calibration, and new ASNs their **name and network type**.
+- WAF audit: coverage reported at **block and challenge level**; the probe is a non-verified client (`not cf.client.bot` rules now count as full coverage); rules that apply to every path alike are no longer "partial coverage" of a path; skip-rule bypasses grouped per skip rule.
+- Fix: firewall-event windows aligned to the hour inside the retention edge; if the oldest day is still rejected, the newer days are kept.
+- Fix: the first alert after a start labels firewall events with rule names.
+- JSONL file mode 0644. Docs: IP Access Rule permissions differ by account (optional; FlareHound degrades).
+
 ## v1.0.0 — 2026-11-17
 
 First stable release.

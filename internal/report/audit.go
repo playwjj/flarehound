@@ -87,12 +87,25 @@ func (l lang) auditBody(b *strings.Builder, d AuditData, full bool) {
 			case waf.Exempted:
 				line = fmt.Sprintf(l.t("⚠ %s: always exempted by skip rule %s ahead of every protection", "⚠ %s：被前置跳过规则 %s 整体豁免，防护全部失效"), where, l.ruleRef(*c.By))
 			case waf.Partial:
-				line = fmt.Sprintf(l.t("◐ %s: covered only conditionally by %s (depends on UA/IP/other fields)", "◐ %s：仅在部分条件下覆盖，%s（取决于 UA / IP 等其他字段）"), where, l.ruleRef(*c.By))
+				line = fmt.Sprintf(l.t("◐ %s: covered only conditionally, %s level, by %s (depends on UA/IP/other fields)", "◐ %s：仅部分条件下覆盖（%s级），%s（取决于 UA / IP 等其他字段）"),
+					where, l.level(c.Level), l.ruleRef(*c.By))
 			case waf.Covered:
 				if c.MaySkipBy == nil && !full {
 					continue
 				}
-				line = fmt.Sprintf(l.t("✓ %s: %s", "✓ %s：%s"), where, l.ruleRef(*c.By))
+				line = fmt.Sprintf(l.t("✓ %s: %s-level coverage by %s", "✓ %s：%s级覆盖，%s"), where, l.level(c.Level), l.ruleRef(*c.By))
+			}
+			// A challenge-level verdict says nothing about blocking: state the
+			// block level too, so nobody reads "covered" as "blocked".
+			if c.Level == "challenge" && (c.Status == waf.Covered || c.Status == waf.Partial) {
+				switch c.BlockStatus {
+				case waf.Covered:
+					line += fmt.Sprintf(l.t("; block level: %s", "；拦截级：%s"), l.ruleRef(*c.BlockBy))
+				case waf.Partial:
+					line += fmt.Sprintf(l.t("; block level: conditional, %s", "；拦截级：部分条件，%s"), l.ruleRef(*c.BlockBy))
+				default:
+					line += l.t("; block level: none (humans pass the challenge)", "；拦截级：无（真人可通过挑战）")
+				}
 			}
 			if c.MaySkipBy != nil && (c.Status == waf.Covered || c.Status == waf.Partial) {
 				line += fmt.Sprintf(l.t("; skip rule %s ahead may exempt some of its requests", "；前置跳过规则 %s 可能豁免其中部分请求"), l.ruleRef(*c.MaySkipBy))
@@ -110,6 +123,15 @@ func (l lang) auditBody(b *strings.Builder, d AuditData, full bool) {
 	// order
 	if len(r.Order) > 0 {
 		b.WriteString(l.t("Ordering and redundancy:\n", "顺序与冗余：\n"))
+		// Skip overlaps are grouped per skip rule: one forgeable skip ahead
+		// of ten protections is one finding, not ten lines.
+		type group struct {
+			cause waf.RuleRef
+			rules []string
+			path  string
+		}
+		var groups []*group
+		byCause := map[string]*group{}
 		for _, f := range r.Order {
 			switch f.Kind {
 			case waf.Shadowed:
@@ -122,9 +144,19 @@ func (l lang) auditBody(b *strings.Builder, d AuditData, full bool) {
 				fmt.Fprintf(b, l.t("- %s never applies: skip rule %s ahead exempts every request it matches\n",
 					"- %s 永不生效：前置跳过规则 %s 豁免了它匹配的全部请求\n"), l.ruleRef(f.Rule), l.ruleRef(f.Cause))
 			case waf.SkipOverlap:
-				fmt.Fprintf(b, l.t("- %s can be bypassed on %s: skip rule %s sits ahead of it and can match the same requests\n",
-					"- %s 在 %s 上可被绕过：前置跳过规则 %s 能匹配同样的请求\n"), l.ruleRef(f.Rule), f.Path, l.ruleRef(f.Cause))
+				g := byCause[f.Cause.ID]
+				if g == nil {
+					g = &group{cause: f.Cause, path: f.Path}
+					byCause[f.Cause.ID] = g
+					groups = append(groups, g)
+				}
+				g.rules = append(g.rules, fmt.Sprintf("#%d", f.Rule.Pos))
 			}
+		}
+		for _, g := range groups {
+			fmt.Fprintf(b, l.t("- skip rule %s sits ahead of %d protective rule(s) (%s) and can match the same requests — e.g. on %s, its traffic bypasses them\n",
+				"- 前置跳过规则 %s 排在 %d 条防护规则（%s）之前且能匹配同样的请求——例如在 %s 上，命中它的流量会绕过这些防护\n"),
+				l.ruleRef(g.cause), len(g.rules), strings.Join(g.rules, " "), g.path)
 		}
 	}
 
@@ -210,6 +242,13 @@ func (l lang) auditBody(b *strings.Builder, d AuditData, full bool) {
 	for _, pe := range r.ParseErrors {
 		fmt.Fprintf(b, l.t("- could not parse %s: %s (excluded from the checks above)\n", "- 无法解析 %s：%s（未纳入以上检查）\n"), l.ruleRef(pe.Rule), pe.Err)
 	}
+}
+
+func (l lang) level(lv string) string {
+	if lv == "block" {
+		return l.t("block", "拦截")
+	}
+	return l.t("challenge", "挑战")
 }
 
 func (l lang) skipScope(s string) string {

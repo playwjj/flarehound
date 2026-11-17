@@ -17,6 +17,7 @@ import (
 	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/check"
 	"github.com/playwjj/flarehound/internal/config"
+	"github.com/playwjj/flarehound/internal/health"
 	"github.com/playwjj/flarehound/internal/logx"
 	"github.com/playwjj/flarehound/internal/report"
 	"github.com/playwjj/flarehound/internal/ruleexec"
@@ -27,6 +28,8 @@ const blockUsage = `Commands:
 
   flarehound audit                                 WAF rule audit now (read token; needs Zone → WAF: Read)
   flarehound calibrate [--days 7]                  compare FlareHound's counts with the Cloudflare dashboard (read token)
+  flarehound doctor                                self-check: config, what each token can do, capabilities, archive, heartbeat
+  flarehound health [--file heartbeat]             exit 0 if the watch loop's heartbeat is fresh (Docker HEALTHCHECK)
 
 Blocking commands (separate write token, see README):
 
@@ -39,7 +42,7 @@ Common flags: -config PATH, --zone NAME|ID (required when several zones are conf
 `
 
 // subcommands lists the verbs main dispatches here.
-var subcommands = map[string]bool{"audit": true, "calibrate": true, "block": true, "unblock": true, "blocks": true, "enforce": true, "help": true,
+var subcommands = map[string]bool{"audit": true, "calibrate": true, "doctor": true, "health": true, "block": true, "unblock": true, "blocks": true, "enforce": true, "help": true,
 	"rules": true, "ratelimit": true, "cache": true}
 
 // splitArgs separates leading positionals from flags so flags may follow
@@ -118,6 +121,8 @@ func runSubcommand(ctx context.Context, cfgPath, verb string, args []string, red
 	fs.IntVar(&rf.period, "period", 10, "ratelimit add: period in seconds")
 	fs.IntVar(&rf.timeout, "timeout", 10, "ratelimit add: mitigation timeout in seconds")
 	fs.DurationVar(&rf.observe, "observe", 0, "rules: watch the changed rule's firewall events for this long")
+	hbFile := fs.String("file", health.WatchFile, "health: heartbeat file in the data directory (heartbeat or heartbeat-enforce)")
+	hbAge := fs.Duration("max-age", 0, "health: maximum heartbeat age (default: two rounds + 20m, or 15m for the enforcer)")
 	once := fs.Bool("once", false, "enforce: one pass, then exit")
 	interval := fs.Duration("interval", 5*time.Minute, "enforce: time between passes")
 	if err := fs.Parse(rest); err != nil {
@@ -142,6 +147,24 @@ func runSubcommand(ctx context.Context, cfgPath, verb string, args []string, red
 		}
 		log.Print(err)
 		return 1
+	}
+
+	if verb == "health" { // Docker HEALTHCHECK: quiet unless unhealthy
+		limit := *hbAge
+		if limit == 0 {
+			limit = heartbeatLimit(cfg)
+			if *hbFile == health.EnforceFile {
+				limit = 15 * time.Minute
+			}
+		}
+		if _, err := health.Check(cfg.DataDir(), *hbFile, limit, time.Now()); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return 0
+	}
+	if verb == "doctor" { // read-only probes; reads the write token only to test it
+		return runDoctor(ctx, cfg, cfgPath, os.Stdout)
 	}
 
 	if verb == "calibrate" { // read-only: never touches the write token
@@ -299,6 +322,12 @@ func runSubcommand(ctx context.Context, cfgPath, verb string, args []string, red
 
 	case "enforce":
 		pass := func() {
+			defer func() {
+				b := health.Beat{At: time.Now().UTC(), Version: version, Role: "enforce", Zones: len(cfg.Cloudflare.Zones), Next: time.Now().Add(*interval)}
+				if err := health.Write(cfg.DataDir(), health.EnforceFile, b); err != nil {
+					log.Printf("heartbeat: %v", err)
+				}
+			}()
 			for _, z := range cfg.Cloudflare.Zones {
 				n, err := env(z, "ttl").Expire(ctx)
 				if n > 0 {

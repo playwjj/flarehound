@@ -101,6 +101,15 @@ func value(o Operand, p Probe) (string, bool) {
 }
 
 func evalTruthy(o Operand, p Probe) Tri {
+	if f, ok := o.(Field); ok { // boolean field fixed by the probe (cf.client.bot)
+		switch p[f.Name] {
+		case "true":
+			return True
+		case "false":
+			return False
+		}
+		return Unknown
+	}
 	c, ok := o.(Call)
 	if !ok || len(c.Args) != 2 {
 		return Unknown

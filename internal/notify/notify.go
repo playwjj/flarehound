@@ -30,7 +30,8 @@ type Message struct {
 	Decision   string    `json:"decision,omitempty"` // intraday: alert | changed | escalate | recovered
 	WindowFrom time.Time `json:"window_from"`
 	WindowTo   time.Time `json:"window_to"`
-	Rules      []string  `json:"rules,omitempty"` // signal keys that fired
+	Rules      []string  `json:"rules,omitempty"`    // signal keys that fired
+	Severity   string    `json:"severity,omitempty"` // intraday: "low" (edge-absorbed) | "high"
 	Delayed    bool      `json:"delayed,omitempty"`
 	Text       string    `json:"text"`
 }
@@ -147,9 +148,14 @@ func (f File) Send(_ context.Context, m Message) error {
 	if err := os.MkdirAll(filepath.Dir(f.Path), 0o755); err != nil {
 		return err
 	}
-	fh, err := os.OpenFile(f.Path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	// 0644: alerts carry no secrets, and a bridge tailing the file often
+	// runs as a different user than the container (UID 65534).
+	fh, err := os.OpenFile(f.Path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
 	if err != nil {
 		return err
+	}
+	if st, err := fh.Stat(); err == nil && st.Mode().Perm() != 0o644 {
+		_ = fh.Chmod(0o644) // files created by older versions were 0600
 	}
 	if _, err := fh.Write(append(raw, '\n')); err != nil {
 		fh.Close()

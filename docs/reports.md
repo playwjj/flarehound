@@ -40,6 +40,14 @@ The parts, in order:
 5. **Block candidates** — see below.
 6. **Suggestions** — see below. Recovery messages carry no suggestions.
 
+### Severity: is it loud, or does it hurt?
+
+A flood that the edge absorbs — zone requests or Worker calls up, new faces, but **real rendering (`dynamic`) up less than 15%** and no dynamic, CPU, origin 5xx, collapse or path line crossed — is reported as its own verdict at **low severity**: *"edge-absorbed flood: the extra traffic is absorbed at the edge, real rendering +1.0%, CPU and origin errors unchanged — watch it, no action needed."* Anything expensive or broken makes it **high**. The JSONL record carries `severity: "low" | "high"`.
+
+### Dashboard terms and network labels
+
+Once [calibration](archive.md#calibration) has data, every count in "lines crossed" carries its dashboard equivalent — *"new user agent … 18,521 requests (≈ 9,080 in dashboard terms)"* — because people think in dashboard numbers. A new ASN is labelled with its registered name and network type — *"AS45102 [ALIBABA-CN-NET, hosting/cloud network]"* — so nobody has to look it up before deciding (name lookup needs the `clientASNDescription` dimension; the built-in table works without it).
+
 ### Expensive vs. cheap
 
 Traffic is split by `cacheStatus`: `hit`, `stale`, `updating` and `revalidated` are **cheap**; everything else (`dynamic`, `miss`, `bypass`, `expired`, unknown values) is **expensive**. Real rendering (`dynamic`) is shown first and separately from other cache misses — it is the number an on-call human watches.

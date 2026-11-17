@@ -19,6 +19,7 @@ import (
 	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/check"
 	"github.com/playwjj/flarehound/internal/config"
+	"github.com/playwjj/flarehound/internal/health"
 	"github.com/playwjj/flarehound/internal/logx"
 	"github.com/playwjj/flarehound/internal/notify"
 	"github.com/playwjj/flarehound/internal/schedule"
@@ -102,7 +103,8 @@ func main() {
 		return
 	}
 
-	forEachZone := func(kind string, fn func(context.Context, config.Zone) error) {
+	forEachZone := func(kind string, fn func(context.Context, config.Zone) error) []string {
+		var failed []string
 		rctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 		defer cancel()
 		if err := disp.Flush(rctx); err != nil {
@@ -113,17 +115,49 @@ func main() {
 			if err == nil {
 				continue
 			}
+			failed = append(failed, zones[i].Name+": "+err.Error())
 			if check.IsAccessError(err) {
 				log.Printf("zone %s: %s: %v — the token cannot see this zone/account", zones[i].Name, kind, err)
 			} else {
 				log.Printf("zone %s: %s: %v", zones[i].Name, kind, err)
 			}
 		}
+		return failed
+	}
+
+	// Dead-man switch: every watch round says it is alive — anomaly or not —
+	// in data/heartbeat, the JSONL file and the optional ping URL. Never on
+	// chat channels: a heartbeat there would be noise.
+	interval, offset := cfg.IntradayInterval(), cfg.IntradayOffset()
+	intraday := func() {
+		failed := forEachZone("intraday", runner.Intraday)
+		if *dryRun {
+			return
+		}
+		b := health.Beat{At: time.Now().UTC(), Version: version, Role: "watch", Zones: len(cfg.Cloudflare.Zones),
+			Errors: failed, Next: schedule.NextIntraday(time.Now(), interval, offset)}
+		if err := health.Write(cfg.DataDir(), health.WatchFile, b); err != nil {
+			log.Printf("heartbeat: %v", err)
+		}
+		if cfg.Notify.JSONLFile != "" {
+			text := fmt.Sprintf("FlareHound alive: %d zone(s) checked, %d error(s); next run %s", b.Zones, len(failed), b.Next.Format(time.RFC3339))
+			m := notify.Message{Kind: "heartbeat", Text: text, Rules: failed}
+			if err := (notify.File{Path: cfg.Notify.JSONLFile}).Send(ctx, m); err != nil {
+				log.Printf("heartbeat: %v", err)
+			}
+		}
+		if cfg.HeartbeatURL != "" {
+			pctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			if err := health.Ping(pctx, cfg.HeartbeatURL, len(failed) > 0); err != nil {
+				log.Printf("%v", err)
+			}
+			cancel()
+		}
 	}
 
 	if *once || *daily {
 		if *once {
-			forEachZone("intraday", runner.Intraday)
+			intraday()
 		}
 		if *daily {
 			if cfg.Schedule.DailyReportAt == "" {
@@ -137,9 +171,8 @@ func main() {
 
 	// Catch up on the newest settled window right away; the state file's
 	// last-window marker keeps a restart from double-counting it.
-	forEachZone("intraday", runner.Intraday)
+	intraday()
 
-	interval, offset := cfg.IntradayInterval(), cfg.IntradayOffset()
 	for {
 		now := time.Now()
 		next := schedule.NextIntraday(now, interval, offset)
@@ -159,12 +192,12 @@ func main() {
 		}
 		// When both fall on the same minute, run both: intraday first.
 		if kind == "daily" && schedule.NextIntraday(now, interval, offset).Equal(next) {
-			forEachZone("intraday", runner.Intraday)
+			intraday()
 		}
 		if kind == "daily" {
 			forEachZone("daily", runner.Daily)
 		} else {
-			forEachZone("intraday", runner.Intraday)
+			intraday()
 		}
 	}
 }

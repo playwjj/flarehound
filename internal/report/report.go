@@ -157,6 +157,29 @@ func (l lang) short(f analyze.Finding) string {
 	return f.Rule
 }
 
+// findingLine is a finding for the "lines crossed" list: the finding,
+// what a new ASN is (name and network type, so nobody looks it up by
+// hand), and — once calibrated — what its count means in dashboard terms.
+func (l lang) findingLine(f analyze.Finding, ratio float64, names map[int]string) string {
+	s := l.finding(f)
+	if f.Rule == analyze.RuleNewFaceASN && f.ASN > 0 {
+		name := names[f.ASN]
+		kind := map[suggest.Network]string{
+			suggest.Hosting: l.t("hosting/cloud network", "机房/云网络"),
+			suggest.Eyeball: l.t("residential/mobile network", "宽带/移动网络"),
+			suggest.Unknown: l.t("network type unknown", "网络类型未知"),
+		}[suggest.Classify(f.ASN, name)]
+		if name != "" {
+			kind = clip(name, 40) + l.t(", ", "，") + kind
+		}
+		s += fmt.Sprintf(l.t(" [%s]", "【%s】"), kind)
+	}
+	if ratio > 0 && f.Rule != analyze.RuleCPUUp && f.Rule != analyze.RuleOrigin5xx && f.Cur > 0 {
+		s += fmt.Sprintf(l.t(" (≈ %s in dashboard terms)", "（≈ 面板 %s 次）"), n(int64(f.Cur/ratio)))
+	}
+	return s
+}
+
 // headline is the one-line conclusion: which lines were crossed, the
 // most consequential first (drops and errors, then expensive traffic,
 // then volume, then new faces).
@@ -281,6 +304,8 @@ type IntradayData struct {
 	Since       time.Time        // episode start
 	Long        *analyze.Metrics // 4-week same-hour median, when the archive has enough samples
 	LongN       int              // samples behind Long (or collected so far)
+	Severity    analyze.Severity
+	DashRatio   float64 // FlareHound/dashboard request ratio from calibration; 0 = unknown
 }
 
 // Intraday renders an intraday alert / escalation / recovery message.
@@ -296,7 +321,14 @@ func Intraday(language string, d IntradayData) string {
 		state.DecChanged:  l.t("anomaly changed (new signal)", "异常变化（出现新信号）"),
 		state.DecEscalate: l.t("anomaly ESCALATED", "异常升级"),
 	}[d.Decision]
+	if d.Severity.Level == analyze.SevLow && d.Decision == state.DecAlert {
+		head = l.t("low severity: edge-absorbed flood", "低严重度：边缘吸收的流量洪水")
+	}
 	fmt.Fprintf(&b, "FlareHound · %s — %s\n", d.Zone, head)
+	if d.Severity.Kind == analyze.EdgeAbsorbed {
+		fmt.Fprintf(&b, l.t("The extra traffic is absorbed at the edge: real rendering %s, CPU and origin errors unchanged — no pressure on the origin or Worker rendering. Watch it, no action needed.\n",
+			"增量在边缘被吸收：真实渲染 %s，CPU 与源站错误未越线——源站与 Worker 渲染无压力。观察即可，无需处置。\n"), l.pct(d.Severity.DynPct))
+	}
 	fmt.Fprintf(&b, "%s\n", l.headline(d.Findings))
 	fmt.Fprintf(&b, "%s %s", l.t("Window", "窗口"), l.window(d.Window, d.Loc))
 	if d.Decision != state.DecAlert && !d.Since.IsZero() {
@@ -306,7 +338,7 @@ func Intraday(language string, d IntradayData) string {
 
 	b.WriteString(l.t("Lines crossed:\n", "越线：\n"))
 	for _, f := range d.Findings {
-		fmt.Fprintf(&b, "- %s\n", l.finding(f))
+		fmt.Fprintf(&b, "- %s\n", l.findingLine(f, d.DashRatio, d.Attr.ASNNames))
 	}
 	b.WriteString("\n")
 	l.twoWindows(&b, d.Cur, d.Base, l.t("vs same hour yesterday", "对比昨日同时段"))
@@ -482,6 +514,7 @@ type DailyData struct {
 	Archive           *ArchiveInfo
 	Audit             *AuditData
 	Calibration       *calibrate.Summary
+	ASNNames          map[int]string
 	Blocks            []BlockStatus
 	ActiveSince       time.Time
 	ActiveFingerprint string
@@ -517,8 +550,12 @@ func Daily(language string, d DailyData) string {
 
 	if len(d.Findings) > 0 {
 		b.WriteString("\n" + l.t("Lines crossed:\n", "越线：\n"))
+		ratio := 0.0
+		if d.Calibration != nil {
+			ratio = d.Calibration.Requests
+		}
 		for _, f := range d.Findings {
-			fmt.Fprintf(&b, "- %s\n", l.finding(f))
+			fmt.Fprintf(&b, "- %s\n", l.findingLine(f, ratio, d.ASNNames))
 		}
 	}
 

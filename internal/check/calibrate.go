@@ -94,3 +94,28 @@ func (r *Runner) Calibrate(ctx context.Context, zone config.Zone, days int) (cal
 	}
 	return calibrate.Summarize(all, r.Cfg.Thresholds.MinCount), nil
 }
+
+// dashRatio is the latest stored calibration ratio (FlareHound requests
+// per dashboard request) for a zone, from the archive only — no queries.
+// 0 when nothing is calibrated yet.
+func (r *Runner) dashRatio(zone config.Zone) float64 {
+	if r.Store == nil {
+		return 0
+	}
+	rows, err := r.Store.CalibrationDays(zone.ZoneID, 7)
+	if err != nil || len(rows) == 0 {
+		return 0
+	}
+	var days []calibrate.Day
+	for _, raw := range rows {
+		var d calibrate.Day
+		if json.Unmarshal(raw, &d) == nil {
+			days = append(days, d)
+		}
+	}
+	s := calibrate.Summarize(days, r.Cfg.Thresholds.MinCount)
+	if s.Verdict == calibrate.NoData {
+		return 0
+	}
+	return s.Requests
+}

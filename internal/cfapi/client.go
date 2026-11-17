@@ -426,7 +426,15 @@ func (c Caps) FirewallFrom(from, now time.Time) time.Time {
 	if c.FirewallMaxAge <= 0 {
 		return from
 	}
-	if earliest := now.Add(-c.FirewallMaxAge + retentionMargin); from.Before(earliest) {
+	// Rounded up to the next full hour: the retention edge has been seen
+	// to be enforced on hour boundaries (a window a few minutes past the
+	// edge was rejected even though it was inside notOlderThan by the
+	// clock).
+	earliest := now.Add(-c.FirewallMaxAge + retentionMargin)
+	if t := earliest.Truncate(time.Hour); t.Before(earliest) {
+		earliest = t.Add(time.Hour)
+	}
+	if from.Before(earliest) {
 		return earliest
 	}
 	return from

@@ -104,7 +104,8 @@ All channels are optional and can be combined; with none configured, findings ap
 | `notify.webhook_url` | string | `""` | Plain-text webhook URL, kept for compatibility. Prefer `webhook_url_env`. |
 | `notify.telegram_bot_token_env` | string | `""` | Variable holding the Telegram bot token. |
 | `notify.telegram_chat_id` | string | `""` | Telegram chat ID. Telegram is active only when both are set. |
-| `notify.jsonl_file` | string | `""` | Append every message as one JSON line to this file. |
+| `notify.jsonl_file` | string | `""` | Append every message as one JSON line to this file (mode 0644). Also receives a `heartbeat` record every round. |
+| `notify.heartbeat_url_env` | string | `""` | Variable holding a healthchecks.io-style URL pinged after every round (`/fail` when a zone errored). Startup fails if named but empty. See [heartbeat](channels.md#heartbeat-dead-man-switch). |
 | `notify.slack_webhook_url_env` | string | `""` | Variable holding a Slack incoming-webhook URL. |
 | `notify.discord_webhook_url_env` | string | `""` | Variable holding a Discord webhook URL. |
 | `notify.wecom_webhook_url_env` | string | `""` | Variable holding a WeCom (企业微信) group-bot URL. |
@@ -162,4 +163,4 @@ For Slack, Discord, WeCom and Feishu, naming a variable that is empty is a start
 |---|---|---|
 | `CF_API_TOKEN` | `cloudflare.api_token_env` | Watchdog and all commands |
 | `CF_WRITE_TOKEN` | `blocking.write_token_env` | `block`, `unblock`, `blocks`, `enforce`, `rules`, `ratelimit`, `cache` |
-| *(your names)* | `notify.*_env`, `notify.email.password_env` | Notification channels |
+| *(your names)* | `notify.*_env`, `notify.email.password_env` | Notification channels; `notify.heartbeat_url_env` for the heartbeat ping |

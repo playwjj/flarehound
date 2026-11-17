@@ -239,3 +239,24 @@ func TestRouteBugHypothesis(t *testing.T) {
 		t.Fatalf("%+v", hs)
 	}
 }
+
+func TestAssessEdgeAbsorbedFlood(t *testing.T) {
+	// The field case: total +249%, Worker calls up, dynamic flat, CPU down.
+	base := Metrics{Total: 100_000, Dynamic: 30_000}
+	cur := Metrics{Total: 349_000, Dynamic: 30_300}
+	fs := []Finding{{Rule: RuleTotalUp}, {Rule: RuleWorkerCallsUp, Subject: "web"}}
+	if s := Assess(cur, base, fs); s.Level != SevLow || s.Kind != EdgeAbsorbed {
+		t.Fatalf("%+v", s)
+	}
+	// Real rendering up: it hurts.
+	if s := Assess(Metrics{Total: 349_000, Dynamic: 60_000}, base, fs); s.Level != SevHigh {
+		t.Fatalf("%+v", s)
+	}
+	// Any expensive signal makes it high.
+	if s := Assess(cur, base, append(fs, Finding{Rule: RuleCPUUp})); s.Level != SevHigh {
+		t.Fatalf("%+v", s)
+	}
+	if s := Assess(cur, base, nil); s.Level != "" {
+		t.Fatal("no findings, no severity")
+	}
+}

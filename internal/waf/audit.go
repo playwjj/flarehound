@@ -49,13 +49,40 @@ const (
 	Exempted = "exempted" // a skip rule ahead always lets it through
 )
 
+// Coverage is judged at two levels: any protection (challenge or block)
+// and block level alone. An unconditional Managed Challenge covers a path
+// — as a challenge: humans pass it, so the report must say which level.
 type Coverage struct {
 	Path      Path     `json:"path"`
 	Host      string   `json:"host"`
-	Status    string   `json:"status"`
+	Status    string   `json:"status"`                // any protective action
 	By        *RuleRef `json:"by,omitempty"`          // the protecting (or exempting) rule
 	MaySkipBy *RuleRef `json:"may_skip_by,omitempty"` // a skip rule ahead that applies conditionally
+	Level     string   `json:"level,omitempty"`       // "block" | "challenge": the action of By
+	// Block level on its own (equal to Status when By already blocks).
+	BlockStatus string   `json:"block_status"`
+	BlockBy     *RuleRef `json:"block_by,omitempty"`
 }
+
+// probeFor is the request a coverage check asks about: an attacker on the
+// path — by definition not a Cloudflare-verified bot, so conditions like
+// "and not cf.client.bot" do not make a rule look conditional.
+func probeFor(host, pattern string) Probe {
+	return Probe{"http.host": host, "http.request.uri.path": ProbePath(pattern), "cf.client.bot": "false"}
+}
+
+// neutral is the probe moved to a path no rule targets.
+func neutral(p Probe) Probe {
+	q := Probe{}
+	for k, v := range p {
+		q[k] = v
+	}
+	q["http.request.uri.path"] = "/__flarehound_neutral_probe__"
+	return q
+}
+
+// Blocking reports whether an action stops a request outright.
+func Blocking(action string) bool { return action == "block" }
 
 // Order finding kinds.
 const (
@@ -210,45 +237,60 @@ func Audit(in Input) Result {
 	}
 
 	// ---- coverage ----
+	// scan walks the rules in order for one probe and one notion of
+	// "protective"; a skip rule that always matches ends the walk.
+	scan := func(probe Probe, protects func(string) bool) (status string, by, maySkip *RuleRef) {
+		var partial *RuleRef
+		for _, p := range rules {
+			if p.node == nil {
+				continue // reported as a parse error; no claim either way
+			}
+			t := eval(p, probe)
+			if t == False {
+				continue
+			}
+			ref := p.ref
+			if skipsCurrent(p.r) {
+				if t == True {
+					return Exempted, &ref, maySkip
+				}
+				if maySkip == nil {
+					maySkip = &ref
+				}
+				continue
+			}
+			if !protects(p.r.Action) {
+				continue
+			}
+			if t == True {
+				return Covered, &ref, maySkip
+			}
+			// Conditional coverage only counts for rules the path selects: a
+			// rule that is just as "conditional" on an unrelated path (an IP
+			// list, a crawler-UA block with a robots.txt exception) applies
+			// to every path alike and protects none of them in particular.
+			if partial == nil && eval(p, neutral(probe)) == False {
+				partial = &ref
+			}
+		}
+		if partial != nil {
+			return Partial, partial, maySkip
+		}
+		return Gap, nil, maySkip
+	}
 	hosts := in.Hosts
 	for _, sp := range in.Sensitive {
 		for _, h := range hosts {
-			probe := Probe{"http.host": h, "http.request.uri.path": ProbePath(sp.Pattern)}
-			c := Coverage{Path: sp, Host: h, Status: Gap}
-			var partial *RuleRef
-			for _, p := range rules {
-				if p.node == nil {
-					continue // reported as a parse error; no claim either way
-				}
-				t := eval(p, probe)
-				if t == False {
-					continue
-				}
-				ref := p.ref
-				if skipsCurrent(p.r) {
-					if t == True {
-						c.Status, c.By = Exempted, &ref
-						break
-					}
-					if c.MaySkipBy == nil {
-						c.MaySkipBy = &ref
-					}
-					continue
-				}
-				if !Protective(p.r.Action) {
-					continue
-				}
-				if t == True {
-					c.Status, c.By = Covered, &ref
-					break
-				}
-				if partial == nil {
-					partial = &ref
+			probe := probeFor(h, sp.Pattern)
+			c := Coverage{Path: sp, Host: h}
+			c.Status, c.By, c.MaySkipBy = scan(probe, Protective)
+			if c.By != nil && Protective(c.By.Action) {
+				c.Level = "challenge"
+				if Blocking(c.By.Action) {
+					c.Level = "block"
 				}
 			}
-			if c.Status == Gap && partial != nil {
-				c.Status, c.By = Partial, partial
-			}
+			c.BlockStatus, c.BlockBy, _ = scan(probe, Blocking)
 			res.Coverage = append(res.Coverage, c)
 		}
 	}
@@ -278,7 +320,7 @@ func Audit(in Input) Result {
 				}
 				for _, sp := range in.Sensitive {
 					for _, h := range hosts {
-						probe := Probe{"http.host": h, "http.request.uri.path": ProbePath(sp.Pattern)}
+						probe := probeFor(h, sp.Pattern)
 						if eval(a, probe) != False && eval(b, probe) != False {
 							add(OrderFinding{Kind: SkipOverlap, Rule: b.ref, Cause: a.ref, Path: sp.Pattern})
 						}

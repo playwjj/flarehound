@@ -23,6 +23,10 @@ services:
     profiles: ["admin"]
     restart: unless-stopped
     command: ["-config", "/app/config.json", "enforce"]
+    healthcheck:
+      test: ["CMD", "flarehound", "-config", "/app/config.json", "health", "--file", "heartbeat-enforce"]
+      interval: 5m
+      start_period: 2m
     environment:
       CF_API_TOKEN: ${CF_API_TOKEN:-}
       CF_WRITE_TOKEN: ${CF_WRITE_TOKEN:-}  # the separate blocking token

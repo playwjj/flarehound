@@ -407,6 +407,14 @@ func (r *Runner) attribute(ctx context.Context, zone config.Zone, w, bw schedule
 		a.ASNNames, err = r.API.ASNNames(ctx, z, w.From, w.To, currentTop)
 		logErr("ASN names", err)
 	}
+	// First round after a start: the ruleset (and its rule names) has not
+	// been read yet — read it now so the first alert is labelled too.
+	r.mu.Lock()
+	_, haveNames := r.ruleNames[zone.ZoneID]
+	r.mu.Unlock()
+	if !haveNames && r.auditEnabled() && len(a.Firewall) > 0 {
+		_, _ = r.readRuleset(ctx, zone)
+	}
 	a.Firewall = r.labelRules(zone, a.Firewall)
 }
 
@@ -542,6 +550,7 @@ func (r *Runner) Intraday(ctx context.Context, zone config.Zone) error {
 	ex := r.archiveRound(ctx, zone, w, bw, cur, base)
 
 	var text string
+	var sev analyze.Severity
 	if decision.Notify() {
 		if decision != state.DecRecovered {
 			r.attribute(ctx, zone, w, bw, findings, &attr, ex)
@@ -555,7 +564,9 @@ func (r *Runner) Intraday(ctx context.Context, zone config.Zone) error {
 				Hypotheses: hyps, Block: advice, ASNNames: attr.ASNNames, Protected: r.guard().ASNProtected,
 				Sensitive: sensitive(cfg), MinCount: th.MinCount})
 		}
+		sev = analyze.Assess(cur, base, findings)
 		text = report.Intraday(cfg.Report.Language, report.IntradayData{
+			Severity: sev, DashRatio: r.dashRatio(zone),
 			Zone: zone.Name, Window: w, Loc: cfg.Location, Decision: decision,
 			Cur: cur, Base: base, Findings: findings, Attr: attr,
 			Hypotheses: hyps, Block: advice, Suggestions: sugs,
@@ -583,7 +594,7 @@ func (r *Runner) Intraday(ctx context.Context, zone config.Zone) error {
 	}
 	log.Printf("zone %s: %s decision=%s findings=%d", zone.Name, w, decision, len(findings))
 	return r.Sender.Send(ctx, notify.Message{Kind: "intraday", Zone: zone.Name, Decision: decision.String(),
-		WindowFrom: w.From, WindowTo: w.To, Rules: keys(findings), Text: text})
+		WindowFrom: w.From, WindowTo: w.To, Rules: keys(findings), Severity: sev.Level, Text: text})
 }
 
 // Daily builds and sends the daily report (SPEC 7.1 / 7.4): the last
@@ -653,6 +664,7 @@ func (r *Runner) Daily(ctx context.Context, zone config.Zone) error {
 	attr := analyze.Attribution{CacheCur: cacheCur, CacheBase: cacheBase, DynamicPaths: d.DynamicPaths}
 	if len(d.Findings) > 0 && caps.HasDim("clientASNDescription") {
 		attr.ASNNames, err = r.API.ASNNames(ctx, z, w.From, w.To, currentTop)
+		d.ASNNames = attr.ASNNames
 		logErr("ASN names", err)
 	}
 	d.Suggestions = suggest.Suggest(suggest.Input{Cur: cur, Base: base, Findings: d.Findings, Attr: attr,

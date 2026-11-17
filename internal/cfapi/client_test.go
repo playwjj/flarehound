@@ -138,3 +138,18 @@ func TestASNIsAString(t *testing.T) {
 		t.Fatalf("names %v %v", names, err)
 	}
 }
+
+func TestFirewallFromRoundsUpToTheHour(t *testing.T) {
+	c := Caps{FirewallEnabled: true, FirewallMaxAge: 72 * time.Hour}
+	now := time.Date(2026, 11, 17, 13, 44, 0, 0, time.UTC)
+	got := c.FirewallFrom(now.Add(-30*24*time.Hour), now)
+	if want := time.Date(2026, 11, 14, 14, 0, 0, 0, time.UTC); !got.Equal(want) {
+		t.Fatalf("earliest %s, want %s", got, want)
+	}
+	if got := c.FirewallFrom(now.Add(-time.Hour), now); !got.Equal(now.Add(-time.Hour)) {
+		t.Fatal("windows inside retention must not move")
+	}
+	if got := (Caps{}).FirewallFrom(now.Add(-100*time.Hour), now); !got.Equal(now.Add(-100 * time.Hour)) {
+		t.Fatal("unknown retention leaves the window alone")
+	}
+}

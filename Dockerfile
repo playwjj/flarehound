@@ -13,5 +13,10 @@ WORKDIR /app
 COPY --from=build /out/flarehound /usr/local/bin/flarehound
 VOLUME ["/app/data"]
 USER 65534
+# Dead-man switch: the watch loop writes data/heartbeat every round; a stale
+# heartbeat marks the container unhealthy. (The admin/enforce container
+# overrides this to check data/heartbeat-enforce.)
+HEALTHCHECK --interval=5m --timeout=30s --start-period=15m --retries=2 \
+  CMD ["flarehound", "-config", "/app/config.json", "health"]
 ENTRYPOINT ["flarehound"]
 CMD ["-config", "/app/config.json"]

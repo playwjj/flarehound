@@ -39,6 +39,7 @@ type fakeAPI struct {
 	// than that long before now (a zone keeping 3 days of events).
 	retention time.Duration
 	now       time.Time
+	firewall  []cfapi.Face
 }
 
 func (f *fakeAPI) w(from time.Time) *window {
@@ -101,7 +102,7 @@ func (f *fakeAPI) Top(_ context.Context, _ string, from, _ time.Time, dim string
 }
 
 func (f *fakeAPI) FirewallByRule(context.Context, string, time.Time, time.Time, int) ([]cfapi.Face, error) {
-	return nil, nil
+	return f.firewall, nil
 }
 
 func (f *fakeAPI) ASNNames(context.Context, string, time.Time, time.Time, int) (map[int]string, error) {
@@ -605,7 +606,7 @@ func TestAuditInDailyAndOnRulesetChange(t *testing.T) {
 	}
 	msg := out.msgs[0]
 	for _, want := range []string{"WAF audit: 2 custom rules", "⚠ /search*: no challenge/block rule covers it\n",
-		"may exempt", "anyone can forge it", "can be bypassed on /login*"} {
+		"may exempt", "anyone can forge it", "sits ahead of 1 protective rule(s) (#2)"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("daily lacks %q:\n%s", want, msg)
 		}
@@ -774,5 +775,38 @@ func TestDryRunLeavesNoTrace(t *testing.T) {
 	}
 	if as, _ := st.Alerts(cfg.Cloudflare.Zones[0].ZoneID, from, from.Add(24*time.Hour)); len(as) != 0 {
 		t.Fatal("dry run recorded alert history")
+	}
+}
+
+// TestRuleHitsKeepNewerDaysOnRejection: if the oldest day is still
+// rejected, the newer days are kept and coverage says so.
+func TestRuleHitsKeepNewerDaysOnRejection(t *testing.T) {
+	cfg := testConfig(t)
+	now := time.Date(2026, 11, 17, 8, 7, 0, 0, time.UTC)
+	caps := cfapi.Caps{FirewallEnabled: true} // retention unknown: no clamp
+	api := &fakeAPI{windows: map[time.Time]*window{}, reads: map[time.Time]int{}, caps: &caps, retention: 50 * time.Hour, now: now}
+	r := &Runner{API: api, Cfg: cfg, Now: func() time.Time { return now }}
+	hits, days := r.ruleHits(context.Background(), cfg.Cloudflare.Zones[0])
+	if hits == nil || days != 2 || hits["r-login"].D30 != 20 {
+		t.Fatalf("hits %v days %d", hits, days)
+	}
+}
+
+// TestFirstAlertLabelsRules: the first round after a start reads the
+// ruleset before rendering, so firewall events carry rule names at once.
+func TestFirstAlertLabelsRules(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Cloudflare.Zones[0].Workers = nil
+	api := &fakeAPI{windows: map[time.Time]*window{}, reads: map[time.Time]int{}, firewall: []cfapi.Face{{Name: "block firewallCustom:r-login", Count: 9}}}
+	from := time.Date(2026, 11, 17, 8, 0, 0, 0, time.UTC)
+	api.windows[from.Add(-24*time.Hour)] = normal()
+	api.windows[from] = surge()
+	out := &sink{}
+	r := &Runner{API: api, Cfg: cfg, Sender: out, Rules: &fakeRules{rs: auditRules("1")}, Now: func() time.Time { return from.Add(67 * time.Minute) }}
+	if err := r.Intraday(context.Background(), cfg.Cloudflare.Zones[0]); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.msgs[0], "firewallCustom:challenge login (r-login)") {
+		t.Fatalf("first alert not labelled:\n%s", out.msgs[0])
 	}
 }

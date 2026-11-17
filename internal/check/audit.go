@@ -91,8 +91,13 @@ func (r *Runner) ruleHits(ctx context.Context, zone config.Zone) (map[string]waf
 		}
 		hits, err := r.API.RuleHits(ctx, zone.ZoneID, start, end)
 		if err != nil {
-			log.Printf("zone %s: audit rule hits: %v", zone.Name, err)
-			return nil, 0
+			log.Printf("zone %s: audit rule hits (%s–%s): %v", zone.Name, start.Format(time.RFC3339), end.Format(time.RFC3339), err)
+			if d == 0 {
+				return nil, 0
+			}
+			// The newer days are good: keep them and report what they cover
+			// rather than throwing the whole statistic away.
+			return out, int(math.Round(to.Sub(end).Hours() / 24))
 		}
 		for id, n := range hits {
 			h := out[id]

@@ -29,8 +29,12 @@ Sensitive paths = `path_rules` + `daily.paths` + `waf_audit.sensitive_paths`. Ea
 |---|---|
 | **exempted** | A skip rule that skips all later custom rules always matches first |
 | **covered** | A block / challenge / js_challenge / managed_challenge rule always matches (noted if a conditional skip rule ahead may exempt some requests) |
-| **partial** | Only conditional protection (e.g. only for one user agent) |
-| **gap** | No protective rule applies |
+| **partial** | Only conditional protection that the path selects (e.g. a crawler-UA block written for this path) |
+| **gap** | No protective rule applies to this path in particular |
+
+Coverage is reported at **two levels**: the first protecting rule's level (*block* or *challenge*), and — when that is a challenge — the block level on its own, e.g. `✓ /fake-follower*: challenge-level coverage by #13; block level: none (humans pass the challenge)`. A covered path is not necessarily a blocked one.
+
+The probe request is an attacker on the path, so it is **not a Cloudflare-verified bot**: a rule like `(path contains "/ranking") and not cf.client.bot` covers `/ranking` fully. Rules that apply to every path alike — an IP list, a crawler-UA block with a `robots.txt` exception — do not count as coverage of any particular path: a rule only counts as conditional coverage if it does **not** match a neutral, unrelated path.
 
 ### Ordering and redundancy
 

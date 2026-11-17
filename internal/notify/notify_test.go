@@ -111,7 +111,7 @@ func TestFileChannel(t *testing.T) {
 	if !strings.Contains(lines[1], `"delayed":true`) {
 		t.Fatal("delayed flag missing")
 	}
-	if st, _ := os.Stat(p); st.Mode().Perm() != 0o600 {
+	if st, _ := os.Stat(p); st.Mode().Perm() != 0o644 {
 		t.Fatalf("mode %v", st.Mode())
 	}
 }

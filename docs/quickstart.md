@@ -56,7 +56,15 @@ docker compose logs -f flarehound
 
 The container runs `flarehound -config /app/config.json`; state, the notification outbox and the archive live in `./data`. If you add more channels, pass their environment variables to the container too (see [Channels](channels.md)).
 
-## 4. Try it before going live
+## 4. Check the installation
+
+```bash
+docker compose run --rm flarehound -config /app/config.json doctor
+```
+
+It tells you what each token can do — the watch, the audit, blocking — and names any missing permission.
+
+## 5. Try it before going live
 
 `-dry-run` prints messages to stdout instead of sending them:
 
@@ -68,7 +76,7 @@ docker compose run --rm flarehound -config /app/config.json -daily -dry-run   # 
 !!! note
     The watchdog records the last evaluated window in its state file, so a window that `-once` has already evaluated is skipped by the next run (`window … already evaluated, skipping` in the log).
 
-## 5. Optional: fill the archive now
+## 6. Optional: fill the archive now
 
 Cloudflare keeps about 31 days of analytics. Backfilling the last four weeks lets the 4-week median baseline work from day one instead of week five:
 

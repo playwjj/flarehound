@@ -1,6 +1,6 @@
 # FlareHound 规格说明书（SPEC）
 
-- 版本：1.0（首个正式版：v0.2–v0.8 全部落地，v1.0 补齐口径校准与文档站）
+- 版本：1.1（v1.0 首个正式版；v1.1 补订：心跳 / doctor / 严重度分级 / 覆盖分档等，来自生产 zone 的值守反馈）
 - 日期：2026-11-17
 - 状态：v1.0 已发布；后续见第 15 节「远期」
 - 许可证：MIT
@@ -265,6 +265,7 @@
 **v0.6 实现口径**：
 
 - **表达式引擎**：自带 Cloudflare 规则语言解析器（逻辑 and / or / xor / not 及符号写法、比较 eq / ne / lt / le / gt / ge / contains / matches(~) / wildcard / strict wildcard / in、集合（字符串 / 数字 / IP / CIDR / 范围）、`$list` 名单、函数调用（含 `any(...)` 的布尔参数）、原始字符串 `r"…"` / `r#"…"#`、请求头等 map / 数组访问）。求值采用**三值逻辑**：探针请求只固定 `http.host` 与 `http.request.uri.path`，其余字段未知，规则结果为「必中 / 必不中 / 取决于其他字段」；`lower` / `upper` / `starts_with` / `ends_with` 在已知字段上精确求值。无法解析的规则单列「解析失败」，不参与其他检查（不因未知而误判）。
+- **覆盖分档与探针语义**（v1.1 补订，生产 zone 实测）：覆盖按两档报告——首个防护规则的级别（拦截 / 挑战），以及挑战级时单独给出的拦截级状态（「挑战级覆盖；拦截级：无（真人可通过挑战）」），避免把「覆盖」读成「拦截」。探针请求代表攻击者，固定 `cf.client.bot = false`：`… and not cf.client.bot` 的规则对该路径是全量覆盖，而非「部分覆盖」。「部分覆盖」只认路径选中的规则——在一个无关的中性路径上不命中（求值为假）才算；对所有路径一视同仁的规则（IP 名单、带 robots.txt 例外的爬虫 UA 封禁）不算任何路径的覆盖。前置跳过规则的「可被绕过」按跳过规则合并为一行。
 - **覆盖缺口**：敏感路径 = `path_rules` + `daily.paths` + `waf_audit.sensitive_paths`；每个模式取一个代表路径（`/login*` → `/login`，`/u/*/edit` → `/u/x/edit`），对 `waf_audit.hosts`（默认 zone 名）逐个探测。按执行顺序扫描已启用规则：先遇到必中的「跳过其后全部自定义规则」类 skip 规则 → **整体豁免**；先遇到必中的防护规则（block / challenge / js_challenge / managed_challenge）→ **已覆盖**（若其前有条件性 skip，加注「可能豁免部分请求」）；只有条件性防护 → **部分覆盖**；否则 **缺口**。
 - **顺序与冗余**（结构推理，宁缺毋滥：只报能证明的）：条件展开为析取范式（上限 256 项）后比较合取项集合判断蕴含。① 后续防护规则被前置 skip 规则完全蕴含 → 永不生效；② 前置 skip 与后续防护在某个敏感路径探针上可同时命中 → 在该路径可被绕过；③ 被前面的 Block 规则完全蕴含 → 永不触发（只认 Block 为遮蔽者，挑战类不算）；④ 条件规范化后相同且动作相同 → 重复。
 - **豁免面**：列出全部 skip 规则及其跳过范围（其后自定义规则 / 指定阶段 / 指定产品）与条件字段；条件只用客户端可任意伪造的公开字段（UA、Referer、Host、路径 / URI / 查询串、方法、协议版本、X-Forwarded-For）时标「任何人都能伪造」，建议绑定 `ip.src` / `ip.geoip.asnum` / 秘密请求头，爬虫用 `cf.client.bot`。Cookie 与请求头不计为可伪造（可能承载秘密）。IP 访问规则中的放行项单列（整体绕过 WAF），读不到时说明缺 Firewall Services: Read。
@@ -290,6 +291,9 @@
 - **JSONL 文件通道**（`notify.jsonl_file`）：每条消息追加为一行 JSON（另含 `ts` 与 `source: "flarehound"`），单次 `O_APPEND` 写入、文件权限 0600——给与 FlareHound 同机运行的桥接器 / 日志采集器消费（tail 即可），是接入既有值守流程的通用出口。
 - **规则名映射**（`rule_names`，ruleId → 名称）：防火墙事件中以名称 + ID 前缀展示规则；归档仍存原始 ID。v0.6 读取规则集后可自动获得名称。
 - **静默纪律**：无异常不发消息；恢复只发一行；同一异常不重复打扰（见 7.3）。通知频率本身是产品质量指标。
+- **严重度**（v1.1）：只有总量 / Worker 调用量 / 新面孔越线、真实渲染（dynamic）涨幅 < 15%、且无 dynamic / CPU / 源站 5xx / 塌量 / 路径线越线时，判为**低严重度「边缘吸收的流量洪水」**——单独成为结论放在首行（「增量在边缘被吸收……观察即可，无需处置」），而不是留两条越线让人自己读出「不疼」；其余为高。JSONL 带 `severity`。这是第 3.4 节「贵与便宜分开算」的一等公民化。
+- **面板等效数与网络定性**（v1.1）：校准有数据后，越线清单中的每个计数附「≈ 面板 N 次」（读归档中最近 7 天的中位比值，不额外查询）；新面孔 ASN 附登记名与网络类型（机房 / 宽带 / 未知，同第 9 节的分类）。
+- **心跳 / 死人开关**（v1.1）：看守死了与天下太平在外部看来一样，因此每轮日内看守（无论有无异常）都写 `data/heartbeat`、向 JSONL 追加 `kind: "heartbeat"` 记录，并在配置了 `notify.heartbeat_url_env` 时 ping 一个 healthchecks.io 式地址（有 zone 出错时 ping `/fail`）。心跳不发往聊天渠道。镜像 `HEALTHCHECK` 以 `flarehound health` 检查心跳新鲜度（两轮 + 20 分钟），admin 容器检查自己的 `heartbeat-enforce`。JSONL 文件权限改为 0644（告警不含密钥，桥接器常以其他用户运行）。
 
 ## 12. 安全模型
 
@@ -298,7 +302,7 @@
   - Account 级：Account Analytics Read（可选，仅在配置了 `workers` 时需要——`workersInvocationsAdaptive` 是账户级数据集）。
   - （v0.5.2 依代码调用点复核后收窄：旧版列出的 Logs Read、Zone Read、Workers Scripts Read 无任何代码路径使用；Zone Read 只在写 Token 侧用于读取套餐。用户反馈 + 代码核对，最小 Token 的实测待补。）
   - Zone 级（WAF 体检，第 10 节）：WAF Read（必需，读取自定义规则集与 IP 访问规则）；Zone Read（可选，套餐额度对照）。
-  - **权限名称**（2026-11-17 用户实测）：Cloudflare 现以 **Zone → WAF** 同时授权自定义规则（Rulesets API）与 IP 访问规则；旧文档中的 **Firewall Services** 是 IP 访问规则的旧权限名，新账号上已无法授予。文档与提示一律两个名字都列、优先写 Zone → WAF。
+  - **权限名称**（2026-11-17 两个账户实测，结论因账户而异）：自定义规则（Rulesets API）一律是 **Zone → WAF**。IP 访问规则则不同：一个账户上 Zone → WAF 即可访问；另一个账户上 Zone → WAF 不覆盖、**Firewall Services** 又无法授予——即该账户的 Token 根本拿不到 IP 访问规则。因此 IP 访问规则定位为可选能力（体检的放行项检查、额度满时的封锁兜底），缺失即降级并说明；文档与提示两个名字都列，`flarehound doctor` 给出实际可达情况。
 - **写 Token**（封锁模块与执行模块，第 13 节；执行模块的缓存规则另需 Zone → Cache Rules: Edit）：Account 级 Account Filter Lists Edit（IP 名单）；Zone 级 WAF Edit（自定义规则与 IP 访问规则兜底；老账号上后者叫 Firewall Services Edit）、DNS Read（读取源站 IP 作护栏）、Zone Read（读取套餐以判断规则额度）。
   （以实际授权结果为准，README 中给出创建步骤与逐项说明。）
 - Token 只从环境变量（如 `CF_API_TOKEN`）读取；禁止写入配置文件与日志；日志中出现 Token 特征串必须脱敏。实现：全部日志经脱敏写入器，已加载的密钥值、`Bearer …` 串与 Telegram `/bot<token>` 段一律替换为 `[REDACTED]`。
@@ -393,7 +397,7 @@
 - `archive`：`disabled`（默认 false）、`file`（默认与状态文件同目录的 `archive.db`）、`hourly_retention_days`（默认 400）；
 - `blocking`：`write_token_env`（默认 `CF_WRITE_TOKEN`，不得与只读 Token 同名）、`never_block`（IP / CIDR）、`never_block_asns`。
 
-子命令 `audit`：立即打印 WAF 体检（只读 Token）。命令行：`-config`、`-once`（跑一轮日内看守后退出）、`-daily`（立即生成日报后退出）、`-dry-run`（消息打印到标准输出，不发送；不写状态文件与报警历史，不消耗窗口）、`-backfill N`（回填近 N 天归档后退出）、`-version`。子命令：只读 Token——`audit`（WAF 体检）、`calibrate`（口径校准）；写 Token——`block` / `unblock` / `blocks` / `enforce`（第 13.1 节）、`rules` / `ratelimit` / `cache`（第 13.2 节）；`help`。只有写类子命令读取写 Token。
+子命令 `audit`：立即打印 WAF 体检（只读 Token）。命令行：`-config`、`-once`（跑一轮日内看守后退出）、`-daily`（立即生成日报后退出）、`-dry-run`（消息打印到标准输出，不发送；不写状态文件与报警历史，不消耗窗口）、`-backfill N`（回填近 N 天归档后退出）、`-version`。子命令：只读 Token——`doctor`（一条命令自检：配置、两个 Token 的能力矩阵并点名缺失权限、套餐能力与防火墙事件保留期、上次 / 下次运行、心跳、归档跨度、待发箱）、`health`（心跳检查，供 HEALTHCHECK）、`audit`（WAF 体检）、`calibrate`（口径校准）；写 Token——`block` / `unblock` / `blocks` / `enforce`（第 13.1 节）、`rules` / `ratelimit` / `cache`（第 13.2 节）；`help`。只有写类子命令读取写 Token。
 
 ## 15. 路线图
 

@@ -19,6 +19,7 @@ FlareHound watches the traffic itself:
 - **Hourly anomaly watch** — the last full clock hour vs. the same hour yesterday: zone requests, uncached (`dynamic`) responses, origin 5xx, Worker invocations and CPU P50.
 - **Attribution before conclusions** — every spike is split by path, ASN, user agent and cache status first, and "expensive" traffic (Worker renders, origin hits) is reported separately from cheap edge volume.
 - **New-face detection** — user agents and ASNs that suddenly enter your Top 10 and weren't in yesterday's Top 25.
+- **Alive, provably** — every round writes a heartbeat (file, JSONL, optional healthchecks.io-style ping) and the container has a `HEALTHCHECK`, so a dead watchdog never looks like a quiet site.
 - **Quiet by design** — no anomaly, no message. The same anomaly never alerts twice unless it grows another 25%; two clean rounds earn a single "recovered" line.
 - **Suggestions, never actions** — the watchdog core is read-only. It may suggest blocking an ASN or challenging a path, with evidence and expected impact, but it never changes your Cloudflare configuration. Acting on a finding — blocking an IP, range, ASN, country or user agent, or applying a rule change — is a separate, explicitly confirmed command behind its own write token; the watchdog itself never holds that token.
 - **A memory Cloudflare doesn't keep** — Cloudflare retains only ~31 days of analytics, and raw logs are a metered add-on. FlareHound snapshots every check into a local SQLite file (`data/archive.db`, ~13 months of hourly snapshots, daily rollups forever), building the long memory the platform lacks. Once four weeks are archived, a spike must beat both yesterday *and* the 4-week same-hour median before it alerts — one odd yesterday no longer pages you. New ASNs and user agents are reported with their first-seen date, and every alert is kept in a history table.
@@ -48,6 +49,12 @@ Optionally fill the local archive with the last four weeks right away (Cloudflar
 
 ```bash
 flarehound -config config.json -backfill 28
+```
+
+Check the installation — what each token can do, with any missing permission named:
+
+```bash
+flarehound -config config.json doctor
 ```
 
 Try it before going live — this prints the messages instead of sending them:
@@ -97,10 +104,10 @@ Optional add-ons — grant only when you enable the feature:
 
 - **Worker metrics** (`workers` listed in the config): add **Account** → **Account Analytics: Read**.
 
-- **WAF rule audit** (v0.6): add **Zone** → **WAF: Read** to the same token — it covers the rulesets and the IP Access Rules allow-list check (optionally **Zone: Read** for the quota check).
-- **One-click blocking** (v0.5) and **rule changes** (v0.7): create a *separate* write token — **Account** → **Account Filter Lists: Edit**; **Zone** → **WAF: Edit** (custom rules and IP Access Rules; older accounts call the latter *Firewall Services: Edit*), **DNS: Read**, **Zone: Read** (+ **Cache Rules: Edit** for cache rules). Put it in `CF_WRITE_TOKEN`. Never merge it into the read token; the watchdog process never holds it.
+- **WAF rule audit** (v0.6): add **Zone** → **WAF: Read** to the same token (optionally **Zone: Read** for the quota check).
+- **One-click blocking** (v0.5) and **rule changes** (v0.7): create a *separate* write token — **Account** → **Account Filter Lists: Edit**; **Zone** → **WAF: Edit** (custom rules; IP Access Rules too on some accounts), **DNS: Read**, **Zone: Read** (+ **Cache Rules: Edit** for cache rules). Put it in `CF_WRITE_TOKEN`. Never merge it into the read token; the watchdog process never holds it.
 
-Permission names: Cloudflare now offers **Zone → WAF** for custom rules *and* IP Access Rules; older accounts show the IP Access Rules permission as **Firewall Services**, which newer accounts cannot grant — use Zone → WAF wherever it exists.
+Permission names: custom rules always need **Zone → WAF**. IP Access Rules vary by account — covered by Zone → WAF on some, **Firewall Services** on others, not grantable on some; they are optional and FlareHound degrades without them. `flarehound doctor` shows what your tokens can actually reach.
 
 The watchdog makes GraphQL Analytics calls only (`api.cloudflare.com/client/v4/graphql`), which is why Analytics: Read is enough; older versions of this README also asked for Logs, Zone and Workers Scripts read access, which no code path uses. (This minimum is derived from the code's call sites; a quick check with your own token: create one with only Zone → Analytics: Read and run `flarehound -once -dry-run`.) The audit will additionally read rulesets through the REST API on the same host. Your token never leaves your machine and is never written to disk or logs by the program.
 

@@ -50,3 +50,21 @@ func TestThousands(t *testing.T) {
 		}
 	}
 }
+
+func TestEdgeAbsorbedFloodAndDashboardTerms(t *testing.T) {
+	msg := Intraday("zh", IntradayData{Zone: "z", Window: w, Decision: state.DecAlert,
+		Findings: []analyze.Finding{
+			{Rule: analyze.RuleTotalUp, Cur: 349_000, Base: 100_000, Pct: 249},
+			{Rule: analyze.RuleNewFaceASN, Subject: "AS45102", ASN: 45102, Cur: 75_330, Pct: 999},
+		},
+		Attr:      analyze.Attribution{ASNNames: map[int]string{45102: "ALIBABA-CN-NET"}},
+		Severity:  analyze.Severity{Level: analyze.SevLow, Kind: analyze.EdgeAbsorbed, DynPct: 1.0},
+		DashRatio: 2.04,
+	})
+	for _, want := range []string{"低严重度：边缘吸收的流量洪水", "增量在边缘被吸收：真实渲染 +1.0%",
+		"【ALIBABA-CN-NET，机房/云网络】", "（≈ 面板 36,926 次）", "（≈ 面板 171,078 次）"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("lacks %q:\n%s", want, msg)
+		}
+	}
+}

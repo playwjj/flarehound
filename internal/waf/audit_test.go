@@ -129,8 +129,10 @@ func TestRealZone(t *testing.T) {
 	if len(res.ParseErrors) != 0 || len(res.Order) != 0 {
 		t.Fatalf("parse %+v order %+v", res.ParseErrors, res.Order)
 	}
-	if res.Coverage[0].Status != Covered || res.Coverage[1].Status != Partial {
-		t.Fatalf("coverage %+v", res.Coverage) // /login is only covered for AhrefsBot
+	// /login is only touched by the AhrefsBot UA rule, which applies to
+	// every path alike: that is no coverage of /login.
+	if res.Coverage[0].Status != Covered || res.Coverage[0].Level != "block" || res.Coverage[1].Status != Gap {
+		t.Fatalf("coverage %+v", res.Coverage)
 	}
 	if !res.HitsNA || len(res.Zombies) != 0 {
 		t.Fatal("no hit data must mean no zombie claims")
@@ -144,5 +146,23 @@ func TestRealZone(t *testing.T) {
 			rule("x", "managed_challenge", `http.request.uri.path eq "/x"`)}})
 	if !res.Quota.Near || len(res.Quota.Mergeable) != 1 || len(res.Quota.Mergeable[0]) != 3 {
 		t.Fatalf("quota %+v", res.Quota)
+	}
+}
+
+// TestCoverageLevels: an unconditional Managed Challenge on a path (with
+// "and not cf.client.bot") is full coverage at challenge level, not
+// "partial"; general rules (IP list, crawler UA) are not path coverage.
+func TestCoverageLevels(t *testing.T) {
+	res := Audit(Input{Hosts: []string{"e.com"}, Now: now, Sensitive: []Path{{Name: "ff", Pattern: "/fake-follower*"}, {Name: "api", Pattern: "/v1/x/*"}}, Rules: []cfapi.Rule{
+		rule("iplist", "block", `ip.src in $blocked`),
+		rule("ua", "block", `http.user_agent contains "GPTBot" and http.request.uri.path ne "/robots.txt"`),
+		rule("pages", "managed_challenge", `(http.request.uri.path contains "/fake-follower") and not cf.client.bot`),
+	}})
+	ff, api := res.Coverage[0], res.Coverage[1]
+	if ff.Status != Covered || ff.Level != "challenge" || ff.By.ID != "pages" || ff.BlockStatus != Gap {
+		t.Fatalf("fake-follower %+v", ff)
+	}
+	if api.Status != Gap || api.BlockStatus != Gap {
+		t.Fatalf("general rules counted as path coverage: %+v", api)
 	}
 }

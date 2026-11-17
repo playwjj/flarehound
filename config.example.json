@@ -60,7 +60,8 @@
     "discord_webhook_url_env": "",
     "wecom_webhook_url_env": "",
     "feishu_webhook_url_env": "",
-    "feishu_secret_env": ""
+    "feishu_secret_env": "",
+    "heartbeat_url_env": ""
   },
   "state_file": "data/state.json",
   "blocking": {
