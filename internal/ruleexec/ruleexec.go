@@ -539,7 +539,12 @@ func (x *Executor) PlanRestore(ctx context.Context, backupID int64) (State, Plan
 		return st, p, fmt.Errorf("the %s rules already match backup #%d", PhaseName(b.Phase), backupID)
 	}
 	p.Lines = append(p.Lines, changes...)
-	p.Warnings = append(p.Warnings, "restored rules get new rule IDs (refs are kept); per-rule hit history restarts")
+	for _, r := range rules {
+		if str(r, "ref") == "" {
+			p.Warnings = append(p.Warnings, "some backed-up rules have no ref: Cloudflare may give them new IDs, restarting their per-rule hit history")
+			break
+		}
+	}
 	for _, r := range st.Ruleset.Rules {
 		if Managed(r) {
 			p.Warnings = append(p.Warnings, "FlareHound blocking rules are restored too — run `flarehound blocks` afterwards to reconcile")
