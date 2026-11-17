@@ -43,10 +43,15 @@ export CF_API_TOKEN=...
 
 Create the token at *Cloudflare Dashboard → My Profile → API Tokens → Create Token → Custom token*:
 
-- **Zone** → **Analytics: Read**, **Logs: Read** (for each zone you monitor)
+- **Zone** → **Analytics: Read**, **Logs: Read**, **Zone: Read** (for each zone you monitor)
 - **Account** → **Workers Scripts: Read**, **Account Analytics: Read**
 
-FlareHound only ever calls `api.cloudflare.com/client/v4/graphql`. Your token never leaves your machine and is never written to disk or logs by the program.
+Optional add-ons — grant only when you enable the feature:
+
+- **WAF rule audit** (v0.6): add **Zone** → **Firewall Services: Read** to the same token.
+- **One-click blocking** (v0.5): create a *separate* write token — **Account** → **IP Lists: Edit**, **Zone** → **Firewall Services: Edit**. Never merge it into the read token; the watchdog process never holds it.
+
+The watchdog's analytics run through `api.cloudflare.com/client/v4/graphql`; the audit additionally reads rulesets through the REST API on the same host. Your token never leaves your machine and is never written to disk or logs by the program.
 
 ## How it decides
 

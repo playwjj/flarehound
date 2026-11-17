@@ -213,7 +213,7 @@
 ## 12. 安全模型
 
 - **Token 权限**：只读。已知够用的最小集：
-  - Zone 级：Analytics Read、Logs Read；
+  - Zone 级：Analytics Read、Logs Read、Zone Read（能力探测读取套餐与配额）；
   - Account 级：Workers Scripts Read（读取 Worker 调用量指标）、Account Analytics Read。
   - Zone 级（启用 WAF 体检时追加）：Firewall Services Read（只读读取规则集）。
   （以实际授权结果为准，README 中给出创建步骤与逐项说明。）
