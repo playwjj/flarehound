@@ -27,6 +27,7 @@ import (
 type ReadAPI interface {
 	Count(ctx context.Context, zoneID string, from, to time.Time, f cfapi.Filter) (int64, error)
 	ASNName(ctx context.Context, zoneID string, from, to time.Time, asn int) (string, error)
+	Capabilities(ctx context.Context, zoneID string) (cfapi.Caps, error)
 	block.FirewallAPI
 }
 
@@ -326,14 +327,22 @@ func (e *Env) List(ctx context.Context, days int) error {
 	}
 	to := e.now().UTC().Truncate(time.Hour)
 	from := to.Add(-time.Duration(days) * 24 * time.Hour)
+	caps, _ := e.Read.Capabilities(ctx, e.Zone.ZoneID)
+	attemptsNA := caps.Probed && !caps.FirewallEnabled
+	if c := caps.FirewallFrom(from, e.now()); c.After(from) {
+		from = c
+		e.printf("note: attempts cover only %.0f day(s) — the zone keeps firewall events that long\n", to.Sub(from).Hours()/24)
+	}
 	tw := tabwriter.NewWriter(e.Out, 0, 2, 2, ' ', 0)
 	fmt.Fprintf(tw, "TARGET\tACTION\tMECHANISM\tATTEMPTS %dd\tSINCE\tEXPIRES\tREASON\n", days)
 	seen := map[block.Target]bool{}
 	for _, x := range block.Sorted(entries) {
 		seen[x.Target] = true
 		attempts := "n/a"
-		if n, err := block.Attempts(ctx, e.Read, e.Zone.ZoneID, x.RuleID, x.Target, from, to); err == nil {
-			attempts = fmt.Sprint(n)
+		if !attemptsNA {
+			if n, err := block.Attempts(ctx, e.Read, e.Zone.ZoneID, x.RuleID, x.Target, from, to); err == nil {
+				attempts = fmt.Sprint(n)
+			}
 		}
 		since, expires, reason := "-", "never", "(no audit record: created by hand or elsewhere)"
 		if ev, ok := audit[x.Target]; ok {

@@ -1,8 +1,8 @@
 # FlareHound 规格说明书（SPEC）
 
-- 版本：0.8（v0.2 每日报告、v0.3 日内看守、v0.4 建议引擎与本地归档、v0.5 一键封锁、v0.6 WAF 规则体检、v0.7 通用执行模块、v0.8 通知渠道与多 zone 并行落地）
+- 版本：1.0（首个正式版：v0.2–v0.8 全部落地，v1.0 补齐口径校准与文档站）
 - 日期：2026-11-17
-- 状态：v0.8 已实现，v1.0 口径校准与文档站待开发
+- 状态：v1.0 已发布；后续见第 15 节「远期」
 - 许可证：MIT
 
 > 英文说明见 [README.md](README.md)。本文档是给贡献者与维护者看的完整规格，定义产品边界、数据口径、检测规则与路线图。实现与本文冲突时，先改本文再改代码。
@@ -95,7 +95,7 @@
 - **state**：持久化异常状态机（当前异常指纹、首次报警时间、已报峰值、连续干净轮数），保证去重与恢复逻辑跨重启有效。
 - **store**：本地数据归档（SQLite 单文件）。每小时把第 6 节查询集的结果落盘为快照，长期保存，弥补 Cloudflare 分析数据保留期短的短板（见第 6 节「本地数据归档」）。与 state 分工：state 管报警状态机，store 管历史事实。
 - **report**：把 Finding 渲染成人类可读的短报告（结论先行），中英文模板。
-- **notify**：通知渠道适配层。v1 支持通用 Webhook（POST JSON）与 Telegram Bot；Slack / Discord / 邮件在路线图内。发送失败重试 3 次（指数退避）后按渠道落盘到数据目录的 `outbox.json`，下轮开始时补发并标注「[delayed]」；积压超过 48 小时的消息丢弃并记日志（两天前的告警已是噪音）。错误信息永不包含端点 URL（Webhook URL 与 Telegram 端点均含密钥）。
+- **notify**：通知渠道适配层。支持通用 Webhook（POST JSON）、Telegram Bot、JSONL 文件、Slack、Discord、企业微信、飞书与 SMTP 邮件（第 11 节）。发送失败重试 3 次（指数退避）后按渠道落盘到数据目录的 `outbox.json`，下轮开始时补发并标注「[delayed]」；积压超过 48 小时的消息丢弃并记日志（两天前的告警已是噪音）。错误信息永不包含端点 URL（Webhook URL 与 Telegram 端点均含密钥）。
 - **explainer**（可选，默认关，远期）：AI 解释层。把 Finding 的结构化证据包交给用户自备的模型（API Key 自备或本地模型）生成自然语言解释与候选假设；只解释，不参与检测判定，不执行动作（定位与硬约束见第 17 节）。
 
 ## 6. 数据源与查询集
@@ -121,6 +121,15 @@
 - GraphQL 查询过长（约 320 字符以上）存在被截断风险：查询保持紧凑、单维度、带 `orderBy:[count_DESC]`（不带排序时返回的分组是任意的）。
 - 低量路径在采样下可能返回 0 行；0 不等于不存在。
 - `workersInvocationsAdaptive` 只有 CPU 分位数，没有 CPU 总量；成本估算需由分位数推算并标注为估算。
+
+### 口径校准（v1.0）
+
+自适应数据集（本工具全部检测所用）与 Cloudflare 面板的数字天然不同：前者是采样外推值，且计入 Worker 子请求与缓存操作条目。阈值全部按自适应口径设定；校准的目的不是「修正」数字，而是告诉用户差多少，避免拿告警数字去对面板、误判工具出错。
+
+- **对照源**：面板口径取 `httpRequests1dGroups`（不采样、按 UTC 自然日、全套餐可用、回溯一年）：`requests`、`cachedRequests`、`responseStatusMap` 中的 5xx。自适应侧取同一 UTC 日的 `count` 与 `avg{sampleInterval}`、`cacheStatus = hit` 的计数、`edgeResponseStatus` 500–599 的计数。
+- **汇总**：逐日比值取中位数（抗单日异常）；缓存命中与 5xx 只在面板量 ≥ 100 / ≥ 50 时计入比值（小数字比值无意义）；采样率 = 1 / 采样间隔中位数。比值 > 1.15 判「自适应偏高（预期：子请求与缓存操作）」，< 0.85 判「偏低（不常见：重采样或入库延迟）」，否则「一致」。并把 `min_count` 换算成面板口径展示。边缘 5xx 比值 > 1.5 时提示缓存操作记账假象（如 Cache API 未命中记为 504），引导配置 `daily.artifacts`。
+- **入口**：`flarehound calibrate [--days N]`（1–365，只读 Token）逐日表格 + 结论；每日报告自动校准前一个 UTC 日并附一行「FlareHound ≈ 面板 X 倍（N 天中位数）」。逐日结果存归档（`calibration_days`），已存的日期不重复查询；汇总取最近 max(N, 7) 天。
+- **实测**（2026-11-17，Free zone，7 天）：请求 1.23–1.35 倍，中位数 1.29；边缘缓存命中 1.09 倍；边缘 5xx 1.84 倍；采样率约 91%。
 
 ### 能力探测（v0.5 补订）
 
@@ -259,7 +268,7 @@
 - **覆盖缺口**：敏感路径 = `path_rules` + `daily.paths` + `waf_audit.sensitive_paths`；每个模式取一个代表路径（`/login*` → `/login`，`/u/*/edit` → `/u/x/edit`），对 `waf_audit.hosts`（默认 zone 名）逐个探测。按执行顺序扫描已启用规则：先遇到必中的「跳过其后全部自定义规则」类 skip 规则 → **整体豁免**；先遇到必中的防护规则（block / challenge / js_challenge / managed_challenge）→ **已覆盖**（若其前有条件性 skip，加注「可能豁免部分请求」）；只有条件性防护 → **部分覆盖**；否则 **缺口**。
 - **顺序与冗余**（结构推理，宁缺毋滥：只报能证明的）：条件展开为析取范式（上限 256 项）后比较合取项集合判断蕴含。① 后续防护规则被前置 skip 规则完全蕴含 → 永不生效；② 前置 skip 与后续防护在某个敏感路径探针上可同时命中 → 在该路径可被绕过；③ 被前面的 Block 规则完全蕴含 → 永不触发（只认 Block 为遮蔽者，挑战类不算）；④ 条件规范化后相同且动作相同 → 重复。
 - **豁免面**：列出全部 skip 规则及其跳过范围（其后自定义规则 / 指定阶段 / 指定产品）与条件字段；条件只用客户端可任意伪造的公开字段（UA、Referer、Host、路径 / URI / 查询串、方法、协议版本、X-Forwarded-For）时标「任何人都能伪造」，建议绑定 `ip.src` / `ip.geoip.asnum` / 秘密请求头，爬虫用 `cf.client.bot`。Cookie 与请求头不计为可伪造（可能承载秘密）。IP 访问规则中的放行项单列（整体绕过 WAF），读不到时说明缺 Firewall Services: Read。
-- **命中统计**：防火墙数据集可用时按 `ruleId` 逐日查询 30 天，给出每条规则 7 / 30 天命中；30 天零命中且 30 天内未改动（`last_updated`）的防护规则列为僵尸规则（只报告，并提醒「安静不等于没用」）；skip / log 规则不判僵尸。数据集不可用时整节注明不可用，不做零命中推断。
+- **命中统计**：防火墙数据集可用时按 `ruleId` 逐日查询最多 30 天，给出每条规则 7 天与整窗命中。窗口按能力探测得到的防火墙事件保留期（`notOlderThan`）钳制并留 15 分钟余量——部分套餐只保留 3 天，越界的查询会被整个拒绝（v1.0 用户实测：越界约 3.5 分钟即导致命中统计整体降级）；报告注明实际覆盖天数。覆盖满 30 天时，30 天零命中且 30 天内未改动（`last_updated`）的防护规则列为僵尸规则（只报告，并提醒「安静不等于没用」）；覆盖不足 30 天不判僵尸；`flarehound blocks` 与日报的封锁项尝试量同样钳制在保留期内；skip / log 规则不判僵尸。数据集不可用时整节注明不可用，不做零命中推断。
 - **额度对照**：规则数 ≥ 套餐上限 80% 时提示接近上限，并把动作相同的防护规则（不含 FlareHound 自有规则与带参数的规则）列为可用 `or` 合并的一组。
 - **规则名**：读取规则集时同时取得规则描述，防火墙事件中的 ruleId 自动显示为描述（`rule_names` 配置仍可覆盖）。
 - **复检**：每轮日内看守读取规则集版本号（1 次 REST 调用）；版本变化即复检，有问题时单独推送一条 `kind: "audit"` 消息；首次见到的版本只记录不推送（由日报覆盖）。
@@ -284,7 +293,7 @@
 
 ## 12. 安全模型
 
-- **Token 权限**：只读。看守侧只发 GraphQL Analytics 查询（含能力探测的 `settings` 节点），不调用任何 REST 接口，因此最小集为：
+- **Token 权限**：只读。看守侧的度量只发 GraphQL Analytics 查询（含能力探测的 `settings` 节点）；唯一的 REST 调用是 WAF 体检开启时每轮读取一次规则集版本（需 WAF Read，缺权限即静默跳过）。因此最小集为：
   - Zone 级：Analytics Read（必需）；
   - Account 级：Account Analytics Read（可选，仅在配置了 `workers` 时需要——`workersInvocationsAdaptive` 是账户级数据集）。
   - （v0.5.2 依代码调用点复核后收窄：旧版列出的 Logs Read、Zone Read、Workers Scripts Read 无任何代码路径使用；Zone Read 只在写 Token 侧用于读取套餐。用户反馈 + 代码核对，最小 Token 的实测待补。）
@@ -327,6 +336,7 @@
 
 **v0.5 实现口径**：
 
+- **IP 名单依赖 `cloudflare.account_id`**：名单是账户级对象，未配置 account_id 时 IP 封禁直接使用表达式规则。
 - **自有对象**：每个「对象类型 × 动作」一条自定义规则，`ref` 与描述均为 `flarehound-<类型>-<动作>`（如 `flarehound-asn-challenge`）；IP 封禁另用账户级 IP 名单 `flarehound_block` 与引用它的规则 `flarehound-ip-block`（表达式 `ip.src in $flarehound_block`）；IP 访问规则兜底项的备注以 `flarehound:` 开头。工具只识别、只修改这些对象。
 - **表达式**：IP `(ip.src in {…})`；ASN `(ip.geoip.asnum in {…}) and not cf.client.bot`；国家 `(ip.geoip.country in {"XX" …}) and not cf.client.bot`（国家规则同样保留已验证机器人——整国规则不应顺带屏蔽搜索引擎）；UA `(http.user_agent contains "…" or …)`。格式固定，可反解析；规则被手工改成无法识别的形状时，工具拒绝修改并报错，绝不覆盖。单条表达式超过 4,096 字符时拒绝追加。
 - **Cloudflare 是事实来源**：当前封锁集合每次从 Cloudflare 读取（规则表达式 + 名单条目 + 访问规则）；本地审计日志记录谁、为何、何时、到期时间。`flarehound blocks` 对账两者：有远端无审计（手工创建）、有审计无远端（被手工删除）都会标出。
@@ -375,7 +385,7 @@
 - `daily`：日报固定检查点 `paths[]` 与记账假象 `artifacts[]`（第 7.4 节）；
 - `known_faces`：已知模式库 `asns[]` / `user_agents[]`（第 7.3、17 节）；
 - `report.language`：`en` / `zh`；
-- `notify`：渠道与端点（敏感值只写环境变量名，不写明文）：`webhook_url_env`、`telegram_bot_token_env` + `telegram_chat_id`、`jsonl_file`、`slack_webhook_url_env`、`discord_webhook_url_env`、`wecom_webhook_url_env`、`feishu_webhook_url_env` + `feishu_secret_env`、`email`（`smtp_host`、`smtp_port`、`tls`、`username`、`password_env`、`from`、`to[]`）；配置了环境变量名但变量为空时启动即报错；
+- `notify`：渠道与端点（敏感值只写环境变量名，不写明文）：`webhook_url_env`、`telegram_bot_token_env` + `telegram_chat_id`、`jsonl_file`、`slack_webhook_url_env`、`discord_webhook_url_env`、`wecom_webhook_url_env`、`feishu_webhook_url_env` + `feishu_secret_env`、`email`（`smtp_host`、`smtp_port`、`tls`、`username`、`password_env`、`from`、`to[]`）；Slack / Discord / 企业微信 / 飞书配置了环境变量名但变量为空时启动即报错（通用 Webhook 与 Telegram 为空时只是不启用该渠道，以免示例配置里的变量名未设置就无法启动）；邮件配置了 `username` 时 `password_env` 必须非空；
 - `schedule.max_parallel_zones`：同时巡检的 zone 数（默认 4，1–16）；
 - `rule_names`：防火墙规则 ID → 名称映射（第 11 节；有 WAF Read 时自动取规则描述，此项只做覆盖）；
 - `waf_audit`：`disabled`、`hosts`（探测用主机名，默认 zone 名）、`sensitive_paths`（追加的敏感路径模式）；
@@ -383,7 +393,7 @@
 - `archive`：`disabled`（默认 false）、`file`（默认与状态文件同目录的 `archive.db`）、`hourly_retention_days`（默认 400）；
 - `blocking`：`write_token_env`（默认 `CF_WRITE_TOKEN`，不得与只读 Token 同名）、`never_block`（IP / CIDR）、`never_block_asns`。
 
-子命令 `audit`：立即打印 WAF 体检（只读 Token）。命令行：`-config`、`-once`（跑一轮日内看守后退出）、`-daily`（立即生成日报后退出）、`-dry-run`（消息打印到标准输出，不发送）、`-backfill N`（回填近 N 天归档后退出）、`-version`；子命令 `block` / `unblock` / `blocks` / `enforce` / `help`（第 13 节，只有子命令读取写 Token）。
+子命令 `audit`：立即打印 WAF 体检（只读 Token）。命令行：`-config`、`-once`（跑一轮日内看守后退出）、`-daily`（立即生成日报后退出）、`-dry-run`（消息打印到标准输出，不发送；不写状态文件与报警历史，不消耗窗口）、`-backfill N`（回填近 N 天归档后退出）、`-version`。子命令：只读 Token——`audit`（WAF 体检）、`calibrate`（口径校准）；写 Token——`block` / `unblock` / `blocks` / `enforce`（第 13.1 节）、`rules` / `ratelimit` / `cache`（第 13.2 节）；`help`。只有写类子命令读取写 Token。
 
 ## 15. 路线图
 
@@ -397,7 +407,7 @@
 | v0.6 ✅ | WAF 规则体检（覆盖缺口 / 顺序与冗余 / 命中统计 / 豁免面审计） |
 | v0.7 ✅ | 通用执行模块（任意规则变更：独立写 Token、逐项确认、改前备份、回读验证） |
 | v0.8 ✅ | 通知渠道补齐（Slack/Discord/企业微信/飞书/邮件）；多 zone 并行 |
-| v1.0 | 口径校准工具（与面板数字对照）、文档站、首个正式版 |
+| v1.0 ✅ | 口径校准工具（与面板数字对照）、文档站、首个正式版 |
 | 远期 | Cloudflare Workers 部署适配（Cron Triggers + D1 状态）评估；成本估算模块（按 Workers 计费口径估算异常烧掉的钱）；AI 解释层（可选，见第 17 节） |
 
 ## 16. 已知限制

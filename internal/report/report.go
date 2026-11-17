@@ -15,6 +15,7 @@ import (
 
 	"github.com/playwjj/flarehound/internal/analyze"
 	"github.com/playwjj/flarehound/internal/block"
+	"github.com/playwjj/flarehound/internal/calibrate"
 	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/schedule"
 	"github.com/playwjj/flarehound/internal/state"
@@ -480,6 +481,7 @@ type DailyData struct {
 	Suggestions       []suggest.Suggestion
 	Archive           *ArchiveInfo
 	Audit             *AuditData
+	Calibration       *calibrate.Summary
 	Blocks            []BlockStatus
 	ActiveSince       time.Time
 	ActiveFingerprint string
@@ -608,6 +610,9 @@ func Daily(language string, d DailyData) string {
 		}
 		fmt.Fprintf(&b, "\n"+l.t("Archive: %s hourly + %s daily snapshots since %s; %s\n", "归档：%s 个小时快照 + %s 个日快照，始于 %s；%s\n"),
 			n(a.Hours), n(a.Days), oldest, long)
+	}
+	if d.Calibration != nil {
+		fmt.Fprintf(&b, "\n%s\n", l.calibrationLine(*d.Calibration))
 	}
 	if len(d.Gaps) > 0 {
 		fmt.Fprintf(&b, "\n"+l.t("Data gaps (queries failed): %s\n", "数据缺口（查询失败）：%s\n"), strings.Join(d.Gaps, ", "))

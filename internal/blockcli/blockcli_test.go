@@ -35,6 +35,10 @@ func (fakeRead) Count(_ context.Context, _ string, from, _ time.Time, f cfapi.Fi
 func (fakeRead) ASNName(_ context.Context, _ string, _, _ time.Time, asn int) (string, error) {
 	return map[int]string{24940: "HETZNER-AS", 4134: "CHINANET-BACKBONE"}[asn], nil
 }
+func (fakeRead) Capabilities(context.Context, string) (cfapi.Caps, error) {
+	return cfapi.Caps{FirewallEnabled: true, FirewallMaxAge: 72 * time.Hour}, nil
+}
+
 func (fakeRead) FirewallTop(_ context.Context, _ string, _, _ time.Time, _, _ string, _ int) ([]cfapi.Face, error) {
 	return []cfapi.Face{{Name: "AS24940", ASN: 24940, Count: 10}}, nil
 }
@@ -180,7 +184,7 @@ func TestListShowsAttemptsAndDrift(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := out.String()
-	for _, want := range []string{"AS24940", "challenge", "70", "flood", "MISSING in Cloudflare"} {
+	for _, want := range []string{"AS24940", "challenge", "30", "flood", "MISSING in Cloudflare", "attempts cover only 3 day(s)"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("list lacks %q:\n%s", want, s)
 		}

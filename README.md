@@ -4,7 +4,9 @@
 
 Cloudflare gives you data. FlareHound gives you the conclusion.
 
-> Status: **v0.8** — hourly watch, daily report, suggestion engine, local archive, one-click blocking, the WAF rule audit, the rule execution module, all notification channels and parallel multi-zone checks are complete. The detection model, thresholds and alert discipline are ported from a real incident response (a residential-proxy crawler flood, 2026-11-17). Next up: one-click blocking (v0.5). See [SPEC.md](SPEC.md) (in Chinese) for the full design.
+> Status: **v1.0** — first stable release. Documentation: **https://playwjj.github.io/flarehound/** · Changelog: [CHANGELOG.md](CHANGELOG.md)
+>
+> The detection model, thresholds and alert discipline are ported from a real incident response (a residential-proxy crawler flood, 2026-11-17). See [SPEC.md](SPEC.md) (in Chinese) for the full design.
 
 ## Why
 
@@ -18,7 +20,7 @@ FlareHound watches the traffic itself:
 - **Attribution before conclusions** — every spike is split by path, ASN, user agent and cache status first, and "expensive" traffic (Worker renders, origin hits) is reported separately from cheap edge volume.
 - **New-face detection** — user agents and ASNs that suddenly enter your Top 10 and weren't in yesterday's Top 25.
 - **Quiet by design** — no anomaly, no message. The same anomaly never alerts twice unless it grows another 25%; two clean rounds earn a single "recovered" line.
-- **Suggestions, never actions** — the watchdog core is read-only. It may suggest blocking an ASN or challenging a path, with evidence and expected impact, but it never changes your Cloudflare configuration. (Blocking an IP, range, ASN, country or user-agent becomes a one-click, separately authorized action in v0.5; a general action module follows in v0.7 — both behind their own write token and per-action confirmation; the core stays read-only.)
+- **Suggestions, never actions** — the watchdog core is read-only. It may suggest blocking an ASN or challenging a path, with evidence and expected impact, but it never changes your Cloudflare configuration. Acting on a finding — blocking an IP, range, ASN, country or user agent, or applying a rule change — is a separate, explicitly confirmed command behind its own write token; the watchdog itself never holds that token.
 - **A memory Cloudflare doesn't keep** — Cloudflare retains only ~31 days of analytics, and raw logs are a metered add-on. FlareHound snapshots every check into a local SQLite file (`data/archive.db`, ~13 months of hourly snapshots, daily rollups forever), building the long memory the platform lacks. Once four weeks are archived, a spike must beat both yesterday *and* the 4-week same-hour median before it alerts — one odd yesterday no longer pages you. New ASNs and user agents are reported with their first-seen date, and every alert is kept in a history table.
 
 ## Quick start
@@ -151,6 +153,10 @@ Every change is shown in full (field-by-field old → new for edits), confirmed 
 
 It ships its own parser for the Cloudflare rules language and evaluates rules with three-valued logic against probe requests, so it only claims what it can show. When the ruleset version changes, the next hourly round re-audits and reports any problem.
 
+## Calibration: why FlareHound's numbers differ from the dashboard
+
+FlareHound reads Cloudflare's *adaptive* analytics, which are sampled and also count Worker subrequests and cache operations; the dashboard does not. Expect FlareHound to count more — on a live zone ≈ 1.29× the dashboard's requests. All thresholds are in FlareHound's units. `flarehound calibrate --days 7` shows the ratio per day (requests, cache hits, edge 5xx, sampling) and what `min_count` means in dashboard terms; every daily report carries a one-line ratio.
+
 ## How it decides
 
 Default alert lines (all configurable — these are the battle-tested values from the incident the tool is based on):
@@ -187,7 +193,7 @@ The primary form factor is a single Go binary in a Docker container, running on 
 - ~~v0.6~~ — WAF rule audit (coverage gaps on sensitive paths, ordering/redundancy issues, per-rule hit stats, over-broad exemptions) ✅
 - ~~v0.7~~ — general action module (execute approved suggestions with a separate write token, pre-change backup, read-back verification) ✅
 - ~~v0.8~~ — more notification channels (Slack, Discord, WeCom, Feishu, email), parallel multi-zone checks ✅
-- **v1.0** — calibration tooling against dashboard numbers, docs site
+- ~~v1.0~~ — calibration against the dashboard (`flarehound calibrate`), documentation site, first stable release ✅
 
 Full specification: [SPEC.md](SPEC.md) (Chinese).
 

@@ -14,6 +14,7 @@ import (
 	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/config"
 	"github.com/playwjj/flarehound/internal/notify"
+	"github.com/playwjj/flarehound/internal/report"
 	"github.com/playwjj/flarehound/internal/schedule"
 	"github.com/playwjj/flarehound/internal/store"
 )
@@ -34,6 +35,10 @@ type fakeAPI struct {
 	reads   map[time.Time]int
 	caps    *cfapi.Caps
 	asnUsed bool
+	// retention, when set, makes RuleHits reject windows starting more
+	// than that long before now (a zone keeping 3 days of events).
+	retention time.Duration
+	now       time.Time
 }
 
 func (f *fakeAPI) w(from time.Time) *window {
@@ -114,8 +119,19 @@ func (f *fakeAPI) MitigatedIPs(context.Context, string, time.Time, time.Time, in
 	return []cfapi.Face{{Name: "45.13.7.7", Count: 812}, {Name: "45.13.7.9", Count: 40}}, nil
 }
 
-func (f *fakeAPI) RuleHits(context.Context, string, time.Time, time.Time) (map[string]int64, error) {
+func (f *fakeAPI) RuleHits(_ context.Context, _ string, from, _ time.Time) (map[string]int64, error) {
+	if f.retention > 0 && from.Before(f.now.Add(-f.retention)) {
+		return nil, fmt.Errorf("cannot request data older than %s", f.retention)
+	}
 	return map[string]int64{"r-login": 10}, nil
+}
+
+func (f *fakeAPI) DashboardDay(context.Context, string, time.Time) (cfapi.Dashboard, error) {
+	return cfapi.Dashboard{Requests: 75_000, Cached: 50_000, Edge5xx: 10}, nil
+}
+
+func (f *fakeAPI) Sampling(_ context.Context, _ string, from, _ time.Time) (int64, float64, error) {
+	return 100_000, 1, nil
 }
 
 func (f *fakeAPI) Capabilities(context.Context, string) (cfapi.Caps, error) {
@@ -301,7 +317,7 @@ func TestDailyReport(t *testing.T) {
 	}
 	msg := out.msgs[0]
 	t.Logf("daily:\n%s", msg)
-	for _, want := range []string{"FlareHound 日报", "越线", "AS207990 45,000 [新]", "固定检查点", "登录"} {
+	for _, want := range []string{"FlareHound 日报", "越线", "AS207990 45,000 [新]", "固定检查点", "登录", "口径：FlareHound 请求数 ≈ 面板的 1.33 倍"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("daily lacks %q:\n%s", want, msg)
 		}
@@ -687,5 +703,76 @@ func TestParallelZones(t *testing.T) {
 		if _, err := os.Stat(StatePath(cfg, cfg.Cloudflare.Zones[i])); err != nil {
 			t.Fatalf("state file for zone %d: %v", i, err)
 		}
+	}
+}
+
+func TestCalibration(t *testing.T) {
+	cfg := testConfig(t)
+	api := &fakeAPI{windows: map[time.Time]*window{}, reads: map[time.Time]int{}}
+	now := time.Date(2026, 11, 17, 8, 7, 0, 0, time.UTC)
+	r := &Runner{API: api, Cfg: cfg, Now: func() time.Time { return now }}
+	st := withStore(t, r)
+	s, err := r.Calibrate(context.Background(), cfg.Cloudflare.Zones[0], 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Days) != 3 || s.Requests < 1.33 || s.Requests > 1.34 || s.MinCountDash != 750 {
+		t.Fatalf("%+v", s)
+	}
+	rows, _ := st.CalibrationDays(cfg.Cloudflare.Zones[0].ZoneID, 10)
+	if len(rows) != 3 {
+		t.Fatalf("stored %d days", len(rows))
+	}
+	// already-stored days are not re-queried
+	r.API = nil
+	if _, err := r.Calibrate(context.Background(), cfg.Cloudflare.Zones[0], 3); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestRuleHitsRespectRetention: a zone that keeps 3 days of firewall
+// events. The 30-day hit window must be clamped (an unclamped window got
+// the whole query rejected), and three quiet days must not make zombies.
+func TestRuleHitsRespectRetention(t *testing.T) {
+	cfg := testConfig(t)
+	now := time.Date(2026, 11, 17, 8, 7, 0, 0, time.UTC)
+	caps := cfapi.Caps{FirewallEnabled: true, FirewallMaxAge: 72 * time.Hour}
+	api := &fakeAPI{windows: map[time.Time]*window{}, reads: map[time.Time]int{}, caps: &caps, retention: 72 * time.Hour, now: now}
+	r := &Runner{API: api, Cfg: cfg, Rules: &fakeRules{rs: auditRules("1")}, Now: func() time.Time { return now }}
+	hits, days := r.ruleHits(context.Background(), cfg.Cloudflare.Zones[0])
+	if hits == nil || days != 3 {
+		t.Fatalf("hits %v days %d", hits, days)
+	}
+	d, err := r.Audit(context.Background(), cfg.Cloudflare.Zones[0])
+	if err != nil || d.Result.HitsNA || d.Result.HitsDays != 3 || len(d.Result.Zombies) != 0 {
+		t.Fatalf("audit %+v %v", d.Result, err)
+	}
+	if !strings.Contains(report.Audit("en", d, ""), "cover only 3 day(s)") {
+		t.Fatal("coverage not reported")
+	}
+}
+
+func TestDryRunLeavesNoTrace(t *testing.T) {
+	cfg := testConfig(t)
+	api := &fakeAPI{windows: map[time.Time]*window{}, reads: map[time.Time]int{}}
+	from := time.Date(2026, 11, 17, 8, 0, 0, 0, time.UTC)
+	api.windows[from.Add(-24*time.Hour)] = normal()
+	api.windows[from] = surge()
+	out := &sink{}
+	r := &Runner{API: api, Cfg: cfg, Sender: out, DryRun: true, Now: func() time.Time { return from.Add(67 * time.Minute) }}
+	st := withStore(t, r)
+	for i := 0; i < 2; i++ { // the same window twice: both print, nothing is consumed
+		if err := r.Intraday(context.Background(), cfg.Cloudflare.Zones[0]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(out.msgs) != 2 {
+		t.Fatalf("dry runs printed %d messages, want 2", len(out.msgs))
+	}
+	if _, err := os.Stat(cfg.StateFile); !os.IsNotExist(err) {
+		t.Fatal("dry run wrote the state file")
+	}
+	if as, _ := st.Alerts(cfg.Cloudflare.Zones[0].ZoneID, from, from.Add(24*time.Hour)); len(as) != 0 {
+		t.Fatal("dry run recorded alert history")
 	}
 }

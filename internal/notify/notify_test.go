@@ -125,3 +125,16 @@ func TestLegacyOutboxStillFlushes(t *testing.T) {
 		t.Fatalf("legacy outbox: %v %v", err, got.got)
 	}
 }
+
+func TestTelegramSplitsLongReports(t *testing.T) {
+	var n int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { n++ }))
+	defer srv.Close()
+	long := strings.Repeat(strings.Repeat("x", 99)+"\n", 100) // 10,000 characters
+	if err := (Telegram{BotToken: "1:a", ChatID: "1", APIBase: srv.URL}).Send(context.Background(), Plain(long)); err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("sent %d messages, want 3", n)
+	}
+}

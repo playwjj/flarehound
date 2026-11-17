@@ -11,3 +11,6 @@ data/
 .env
 .env.*
 *.env
+
+# docs build output
+site/

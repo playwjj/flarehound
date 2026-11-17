@@ -215,7 +215,7 @@ type Email struct {
 
 func (Email) Name() string { return "email" }
 
-// Subject is the message's first line, prefixed.
+// subject is the message's first line (already "FlareHound · zone — …").
 func subject(m Message) string {
 	first, _, _ := strings.Cut(m.body(), "\n")
 	if r := []rune(first); len(r) > 120 {

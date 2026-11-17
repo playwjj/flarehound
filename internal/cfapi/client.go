@@ -64,6 +64,8 @@ type Filter struct {
 	OriginStatusFrom  int    // inclusive
 	OriginStatusTo    int    // exclusive
 	EdgeStatus        int    // exact edge response status
+	EdgeStatusFrom    int    // inclusive
+	EdgeStatusTo      int    // exclusive
 	PathLike          string // SQL-like pattern, % wildcard
 	UserAgent         string // exact
 	ASN               int    // exact
@@ -88,6 +90,12 @@ func (f Filter) render(from, to time.Time) string {
 	}
 	if f.EdgeStatus > 0 {
 		parts = append(parts, fmt.Sprintf("edgeResponseStatus:%d", f.EdgeStatus))
+	}
+	if f.EdgeStatusFrom > 0 {
+		parts = append(parts, fmt.Sprintf("edgeResponseStatus_geq:%d", f.EdgeStatusFrom))
+	}
+	if f.EdgeStatusTo > 0 {
+		parts = append(parts, fmt.Sprintf("edgeResponseStatus_lt:%d", f.EdgeStatusTo))
 	}
 	if f.PathLike != "" {
 		parts = append(parts, "clientRequestPath_like:"+quote(f.PathLike))
@@ -153,33 +161,41 @@ type gqlResponse struct {
 }
 
 func (c *Client) query(ctx context.Context, q string) (*gqlResponse, error) {
-	body, _ := json.Marshal(map[string]string{"query": q})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("cloudflare API: HTTP %d: %s", resp.StatusCode, truncate(raw, 200))
-	}
 	var out gqlResponse
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, fmt.Errorf("cloudflare API: decode: %w", err)
+	if err := c.queryInto(ctx, q, &out); err != nil {
+		return nil, err
 	}
 	if len(out.Errors) > 0 {
 		return nil, fmt.Errorf("cloudflare API: %s", out.Errors[0].Message)
 	}
 	return &out, nil
+}
+
+// queryInto posts a GraphQL query and decodes the whole response into out.
+func (c *Client) queryInto(ctx context.Context, q string, out any) error {
+	body, _ := json.Marshal(map[string]string{"query": q})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("cloudflare API: HTTP %d: %s", resp.StatusCode, truncate(raw, 200))
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		return fmt.Errorf("cloudflare API: decode: %w", err)
+	}
+	return nil
 }
 
 func truncate(b []byte, n int) string {
@@ -393,7 +409,27 @@ func (c *Client) FirewallByRule(ctx context.Context, zoneID string, from, to tim
 type Caps struct {
 	HTTPFields      map[string]bool
 	FirewallEnabled bool
-	Probed          bool // false: probing failed, everything is assumed available
+	// FirewallMaxAge is how far back firewall events can be queried
+	// (notOlderThan; 0 = unknown). Queries reaching further are rejected.
+	FirewallMaxAge time.Duration
+	Probed         bool // false: probing failed, everything is assumed available
+}
+
+// retentionMargin keeps queries clear of the retention edge: the edge
+// moves while a long run of queries is in flight.
+const retentionMargin = 15 * time.Minute
+
+// FirewallFrom clamps the start of a firewall-events window to what the
+// zone retains (the dataset rejects windows starting earlier). Zero
+// retention (unknown) leaves from unchanged.
+func (c Caps) FirewallFrom(from, now time.Time) time.Time {
+	if c.FirewallMaxAge <= 0 {
+		return from
+	}
+	if earliest := now.Add(-c.FirewallMaxAge + retentionMargin); from.Before(earliest) {
+		return earliest
+	}
+	return from
 }
 
 // AllCaps is the optimistic profile used when probing fails.
@@ -409,7 +445,7 @@ func (c Caps) HasDim(dim string) bool {
 
 // Capabilities probes the zone's dataset settings.
 func (c *Client) Capabilities(ctx context.Context, zoneID string) (Caps, error) {
-	q := fmt.Sprintf(`{viewer{zones(filter:{zoneTag:%s}){settings{httpRequestsAdaptiveGroups{enabled availableFields}firewallEventsAdaptiveGroups{enabled}}}}}`, quote(zoneID))
+	q := fmt.Sprintf(`{viewer{zones(filter:{zoneTag:%s}){settings{httpRequestsAdaptiveGroups{enabled availableFields}firewallEventsAdaptiveGroups{enabled notOlderThan}}}}}`, quote(zoneID))
 	body, _ := json.Marshal(map[string]string{"query": q})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
 	if err != nil {
@@ -432,7 +468,8 @@ func (c *Client) Capabilities(ctx context.Context, zoneID string) (Caps, error) 
 							AvailableFields []string `json:"availableFields"`
 						} `json:"httpRequestsAdaptiveGroups"`
 						Firewall struct {
-							Enabled bool `json:"enabled"`
+							Enabled      bool  `json:"enabled"`
+							NotOlderThan int64 `json:"notOlderThan"` // seconds
 						} `json:"firewallEventsAdaptiveGroups"`
 					} `json:"settings"`
 				} `json:"zones"`
@@ -452,7 +489,8 @@ func (c *Client) Capabilities(ctx context.Context, zoneID string) (Caps, error) 
 		return AllCaps(), ErrNoAccess
 	}
 	st := out.Data.Viewer.Zones[0].Settings
-	caps := Caps{HTTPFields: map[string]bool{}, FirewallEnabled: st.Firewall.Enabled, Probed: true}
+	caps := Caps{HTTPFields: map[string]bool{}, FirewallEnabled: st.Firewall.Enabled, Probed: true,
+		FirewallMaxAge: time.Duration(st.Firewall.NotOlderThan) * time.Second}
 	for _, f := range st.HTTP.AvailableFields {
 		caps.HTTPFields[f] = true
 	}
@@ -506,4 +544,99 @@ func (c *Client) WorkerStats(ctx context.Context, accountID, script string, from
 		cpuP50ms = wsum / float64(requests) / 1000.0
 	}
 	return requests, cpuP50ms, nil
+}
+
+// ---- calibration (SPEC 15, v1.0) ----
+
+// Dashboard is one UTC day as the Cloudflare dashboard counts it
+// (httpRequests1dGroups: not sampled, no Worker subrequests).
+type Dashboard struct {
+	Requests int64
+	Cached   int64
+	Edge5xx  int64
+}
+
+// DashboardDay returns the dashboard-grade totals of one UTC date.
+func (c *Client) DashboardDay(ctx context.Context, zoneID string, date time.Time) (Dashboard, error) {
+	q := fmt.Sprintf(`{viewer{zones(filter:{zoneTag:%s}){httpRequests1dGroups(limit:1,filter:{date:%s}){sum{requests cachedRequests responseStatusMap{edgeResponseStatus requests}}}}}}`,
+		quote(zoneID), quote(date.UTC().Format("2006-01-02")))
+	var out struct {
+		Data struct {
+			Viewer struct {
+				Zones []struct {
+					Days []struct {
+						Sum struct {
+							Requests  int64 `json:"requests"`
+							Cached    int64 `json:"cachedRequests"`
+							StatusMap []struct {
+								Status   int   `json:"edgeResponseStatus"`
+								Requests int64 `json:"requests"`
+							} `json:"responseStatusMap"`
+						} `json:"sum"`
+					} `json:"httpRequests1dGroups"`
+				} `json:"zones"`
+			} `json:"viewer"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := c.queryInto(ctx, q, &out); err != nil {
+		return Dashboard{}, err
+	}
+	if len(out.Errors) > 0 {
+		return Dashboard{}, fmt.Errorf("cloudflare API: %s", out.Errors[0].Message)
+	}
+	if len(out.Data.Viewer.Zones) == 0 {
+		return Dashboard{}, ErrNoAccess
+	}
+	var d Dashboard
+	for _, day := range out.Data.Viewer.Zones[0].Days {
+		d.Requests += day.Sum.Requests
+		d.Cached += day.Sum.Cached
+		for _, s := range day.Sum.StatusMap {
+			if s.Status >= 500 && s.Status < 600 {
+				d.Edge5xx += s.Requests
+			}
+		}
+	}
+	return d, nil
+}
+
+// Sampling returns the adaptive count of a window and its average sample
+// interval (1 = unsampled; 10 = one request in ten was kept).
+func (c *Client) Sampling(ctx context.Context, zoneID string, from, to time.Time) (count int64, interval float64, err error) {
+	q := fmt.Sprintf(`{viewer{zones(filter:{zoneTag:%s}){httpRequestsAdaptiveGroups(limit:1,filter:{%s}){count avg{sampleInterval}}}}}`,
+		quote(zoneID), Filter{}.render(from, to))
+	var out struct {
+		Data struct {
+			Viewer struct {
+				Zones []struct {
+					Rows []struct {
+						Count int64 `json:"count"`
+						Avg   struct {
+							SampleInterval float64 `json:"sampleInterval"`
+						} `json:"avg"`
+					} `json:"httpRequestsAdaptiveGroups"`
+				} `json:"zones"`
+			} `json:"viewer"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := c.queryInto(ctx, q, &out); err != nil {
+		return 0, 0, err
+	}
+	if len(out.Errors) > 0 {
+		return 0, 0, fmt.Errorf("cloudflare API: %s", out.Errors[0].Message)
+	}
+	if len(out.Data.Viewer.Zones) == 0 {
+		return 0, 0, ErrNoAccess
+	}
+	for _, r := range out.Data.Viewer.Zones[0].Rows {
+		count += r.Count
+		interval = r.Avg.SampleInterval
+	}
+	return count, interval, nil
 }

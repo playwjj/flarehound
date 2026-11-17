@@ -160,11 +160,23 @@ func (l lang) auditBody(b *strings.Builder, d AuditData, full bool) {
 				"命中统计：不可用（本套餐无防火墙事件数据集，或无权限）。\n"))
 		}
 	} else {
+		if r.HitsDays < 30 {
+			fmt.Fprintf(b, l.t("Hit statistics cover only %d day(s) (the zone's firewall-event retention): no zombie-rule verdicts.\n",
+				"命中统计仅覆盖 %d 天（该 zone 的防火墙事件保留期），不判定僵尸规则。\n"), r.HitsDays)
+		}
 		if full {
-			b.WriteString(l.t("Hits (7d / 30d):\n", "命中（7 天 / 30 天）：\n"))
+			if r.HitsDays < 7 {
+				fmt.Fprintf(b, l.t("Hits (%dd):\n", "命中（%d 天）：\n"), r.HitsDays)
+			} else {
+				fmt.Fprintf(b, l.t("Hits (7d / %dd):\n", "命中（7 天 / %d 天）：\n"), r.HitsDays)
+			}
 			for _, ref := range r.RuleRefs {
 				h := r.Hits[ref.ID]
-				fmt.Fprintf(b, "- %s: %s / %s\n", l.ruleRef(ref), n(h.D7), n(h.D30))
+				if r.HitsDays < 7 {
+					fmt.Fprintf(b, "- %s: %s\n", l.ruleRef(ref), n(h.D30))
+				} else {
+					fmt.Fprintf(b, "- %s: %s / %s\n", l.ruleRef(ref), n(h.D7), n(h.D30))
+				}
 			}
 		}
 		for _, z := range r.Zombies {

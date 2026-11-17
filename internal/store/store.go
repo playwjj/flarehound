@@ -93,6 +93,12 @@ CREATE TABLE IF NOT EXISTS block_events (
 	actor      TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS block_events_target ON block_events (zone, type, value, id);
+CREATE TABLE IF NOT EXISTS calibration_days (
+	zone TEXT    NOT NULL,
+	date INTEGER NOT NULL, -- UTC midnight
+	data TEXT    NOT NULL, -- calibrate.Day as JSON
+	PRIMARY KEY (zone, date)
+);
 CREATE TABLE IF NOT EXISTS rule_backups (
 	id       INTEGER PRIMARY KEY AUTOINCREMENT,
 	at       INTEGER NOT NULL,
@@ -509,6 +515,31 @@ func (s *Store) RuleChanges(zone string, limit int) ([]RuleChange, error) {
 		}
 		c.At, c.Verified = time.Unix(at, 0).UTC(), v == 1
 		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// PutCalibrationDay stores (or replaces) one calibration day.
+func (s *Store) PutCalibrationDay(zone string, date time.Time, data []byte) error {
+	_, err := s.db.Exec(`INSERT INTO calibration_days (zone, date, data) VALUES (?, ?, ?)
+		ON CONFLICT (zone, date) DO UPDATE SET data = excluded.data`, zone, date.UTC().Unix(), string(data))
+	return err
+}
+
+// CalibrationDays returns the newest n calibration days, newest first.
+func (s *Store) CalibrationDays(zone string, n int) ([][]byte, error) {
+	rows, err := s.db.Query(`SELECT data FROM calibration_days WHERE zone = ? ORDER BY date DESC LIMIT ?`, zone, n)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out [][]byte
+	for rows.Next() {
+		var d string
+		if err := rows.Scan(&d); err != nil {
+			return nil, err
+		}
+		out = append(out, []byte(d))
 	}
 	return out, rows.Err()
 }

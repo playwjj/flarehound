@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"time"
 
 	"github.com/playwjj/flarehound/internal/cfapi"
@@ -67,18 +68,31 @@ func (r *Runner) readRuleset(ctx context.Context, zone config.Zone) (cfapi.Rules
 
 // ruleHits sums firewall events per rule over the last 7 and 30 days,
 // one day per query. nil when the dataset is unavailable or a query fails.
-func (r *Runner) ruleHits(ctx context.Context, zone config.Zone) map[string]waf.Hits {
-	if !r.Caps(ctx, zone).FirewallEnabled {
-		return nil
+// The window is clamped to the zone's firewall-event retention (3 days on
+// some plans): reaching past it gets the whole query rejected. days
+// reports how much was actually covered.
+func (r *Runner) ruleHits(ctx context.Context, zone config.Zone) (map[string]waf.Hits, int) {
+	caps := r.Caps(ctx, zone)
+	if !caps.FirewallEnabled {
+		return nil, 0
 	}
-	to := r.now().UTC().Truncate(time.Hour)
+	now := r.now().UTC()
+	to := now.Truncate(time.Hour)
+	earliest := caps.FirewallFrom(to.Add(-30*24*time.Hour), now)
 	out := map[string]waf.Hits{}
 	for d := 0; d < 30; d++ {
 		end := to.Add(-time.Duration(d) * 24 * time.Hour)
-		hits, err := r.API.RuleHits(ctx, zone.ZoneID, end.Add(-24*time.Hour), end)
+		if !end.After(earliest) {
+			break
+		}
+		start := end.Add(-24 * time.Hour)
+		if start.Before(earliest) {
+			start = earliest
+		}
+		hits, err := r.API.RuleHits(ctx, zone.ZoneID, start, end)
 		if err != nil {
 			log.Printf("zone %s: audit rule hits: %v", zone.Name, err)
-			return nil
+			return nil, 0
 		}
 		for id, n := range hits {
 			h := out[id]
@@ -89,7 +103,7 @@ func (r *Runner) ruleHits(ctx context.Context, zone config.Zone) map[string]waf.
 			out[id] = h
 		}
 	}
-	return out
+	return out, int(math.Round(to.Sub(earliest).Hours() / 24))
 }
 
 // Audit runs the WAF rule audit for one zone. A missing permission is not
@@ -109,7 +123,8 @@ func (r *Runner) Audit(ctx context.Context, zone config.Zone) (report.AuditData,
 		return d, fmt.Errorf("read rulesets: %w", err)
 	}
 	d.Plan, _ = r.Rules.ZonePlan(ctx, zone.ZoneID) // optional (Zone: Read)
-	in := waf.Input{Rules: rs.Rules, Sensitive: r.sensitivePaths(), Plan: d.Plan, Now: r.now(), Hits: r.ruleHits(ctx, zone)}
+	in := waf.Input{Rules: rs.Rules, Sensitive: r.sensitivePaths(), Plan: d.Plan, Now: r.now()}
+	in.Hits, in.HitsDays = r.ruleHits(ctx, zone)
 	in.Hosts = r.Cfg.WAFAudit.Hosts
 	if len(in.Hosts) == 0 {
 		in.Hosts = []string{zone.Name}

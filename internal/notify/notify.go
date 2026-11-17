@@ -1,6 +1,6 @@
-// Package notify delivers rendered reports to the user's channels.
-// v1 ships a generic webhook and Telegram; Slack/Discord/mail are
-// webhook-template variants on the roadmap (SPEC.md section 11).
+// Package notify delivers rendered reports to the user's channels:
+// generic webhook, Telegram, JSONL file, Slack, Discord, WeCom, Feishu
+// and SMTP email (SPEC.md section 11).
 //
 // Delivery is never silently dropped: each send is retried 3 times, and
 // a message that still fails goes to an on-disk outbox that is flushed
@@ -105,13 +105,16 @@ func (t Telegram) Send(ctx context.Context, m Message) error {
 	if base == "" {
 		base = "https://api.telegram.org"
 	}
-	// Telegram rejects messages over 4096 characters.
-	if r := []rune(text); len(r) > 4000 {
-		text = string(r[:4000]) + "\n…"
+	// Telegram rejects messages over 4096 characters: split, like every
+	// other channel, rather than cutting the report short.
+	for _, part := range Split(text, 4096, runes) {
+		if err := postJSON(ctx, base+"/bot"+t.BotToken+"/sendMessage", map[string]any{
+			"chat_id": t.ChatID, "text": part, "disable_web_page_preview": true,
+		}); err != nil {
+			return err
+		}
 	}
-	return postJSON(ctx, base+"/bot"+t.BotToken+"/sendMessage", map[string]any{
-		"chat_id": t.ChatID, "text": text, "disable_web_page_preview": true,
-	})
+	return nil
 }
 
 // Stdout prints messages instead of sending them (dry runs).

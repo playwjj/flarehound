@@ -26,6 +26,7 @@ import (
 const blockUsage = `Commands:
 
   flarehound audit                                 WAF rule audit now (read token; needs Zone → WAF: Read)
+  flarehound calibrate [--days 7]                  compare FlareHound's counts with the Cloudflare dashboard (read token)
 
 Blocking commands (separate write token, see README):
 
@@ -38,7 +39,7 @@ Common flags: -config PATH, --zone NAME|ID (required when several zones are conf
 `
 
 // subcommands lists the verbs main dispatches here.
-var subcommands = map[string]bool{"audit": true, "block": true, "unblock": true, "blocks": true, "enforce": true, "help": true,
+var subcommands = map[string]bool{"audit": true, "calibrate": true, "block": true, "unblock": true, "blocks": true, "enforce": true, "help": true,
 	"rules": true, "ratelimit": true, "cache": true}
 
 // splitArgs separates leading positionals from flags so flags may follow
@@ -134,6 +135,51 @@ func runSubcommand(ctx context.Context, cfgPath, verb string, args []string, red
 	}
 	redactor.Add(cfg.Secrets()...)
 
+	fail := func(err error) int {
+		if errors.Is(err, blockcli.ErrAborted) {
+			fmt.Println(err)
+			return 1
+		}
+		log.Print(err)
+		return 1
+	}
+
+	if verb == "calibrate" { // read-only: never touches the write token
+		runner := &check.Runner{API: cfapi.New(cfg.APIToken), Cfg: cfg}
+		if !cfg.Archive.Disabled {
+			st, err := store.Open(cfg.Archive.File)
+			if err != nil {
+				log.Printf("archive: %v", err)
+				return 1
+			}
+			defer st.Close()
+			runner.Store = st
+		}
+		if *days < 1 || *days > 365 {
+			return fail(errors.New("--days takes 1..365"))
+		}
+		zs := cfg.Cloudflare.Zones
+		if *zoneArg != "" {
+			z, err := pickZone(cfg, *zoneArg)
+			if err != nil {
+				return fail(err)
+			}
+			zs = []config.Zone{z}
+		}
+		code := 0
+		for _, z := range zs {
+			s, err := runner.Calibrate(ctx, z, *days)
+			if err != nil {
+				log.Printf("zone %s: %v", z.Name, err)
+				code = 1
+				continue
+			}
+			fmt.Println(report.Calibration(cfg.Report.Language, z.Name, s))
+			fmt.Println()
+		}
+		return code
+	}
+
 	if verb == "audit" { // read-only: never touches the write token
 		runner := &check.Runner{API: cfapi.New(cfg.APIToken), Cfg: cfg, Rules: cfapi.NewREST(cfg.APIToken)}
 		zs := cfg.Cloudflare.Zones
@@ -177,15 +223,6 @@ func runSubcommand(ctx context.Context, cfgPath, verb string, args []string, red
 	env := func(z config.Zone, actor string) *blockcli.Env {
 		return &blockcli.Env{Cfg: cfg, Zone: z, Read: cfapi.New(cfg.APIToken), Write: cfapi.NewREST(wt),
 			Store: st, In: os.Stdin, Out: os.Stdout, Actor: actor}
-	}
-
-	fail := func(err error) int {
-		if errors.Is(err, blockcli.ErrAborted) {
-			fmt.Println(err)
-			return 1
-		}
-		log.Print(err)
-		return 1
 	}
 
 	switch verb {

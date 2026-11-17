@@ -1,0 +1,52 @@
+site_name: FlareHound
+site_description: A self-hosted watchdog for websites behind Cloudflare
+site_url: https://playwjj.github.io/flarehound/
+repo_url: https://github.com/playwjj/flarehound
+repo_name: playwjj/flarehound
+edit_uri: edit/main/docs/
+copyright: MIT © 2026 playwjj
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle: { icon: material/weather-night, name: Dark mode }
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle: { icon: material/weather-sunny, name: Light mode }
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc: { permalink: true }
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.details
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Quick start: quickstart.md
+      - API tokens & permissions: permissions.md
+      - Configuration reference: configuration.md
+  - How it works:
+      - Detection: detection.md
+      - Alerts, daily report & suggestions: reports.md
+      - Notification channels: channels.md
+      - Local archive & calibration: archive.md
+  - Acting on findings:
+      - One-click blocking: blocking.md
+      - Rule changes: rules.md
+      - WAF rule audit: audit.md
+  - Reference:
+      - Command line: cli.md
+      - Limitations: limitations.md
+      - Troubleshooting: troubleshooting.md
+      - Changelog: changelog.md
+  - 中文简介: zh.md

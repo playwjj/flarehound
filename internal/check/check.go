@@ -16,6 +16,7 @@ import (
 
 	"github.com/playwjj/flarehound/internal/analyze"
 	"github.com/playwjj/flarehound/internal/block"
+	"github.com/playwjj/flarehound/internal/calibrate"
 	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/config"
 	"github.com/playwjj/flarehound/internal/notify"
@@ -36,6 +37,8 @@ type API interface {
 	Capabilities(ctx context.Context, zoneID string) (cfapi.Caps, error)
 	MitigatedIPs(ctx context.Context, zoneID string, from, to time.Time, limit int) ([]cfapi.Face, error)
 	RuleHits(ctx context.Context, zoneID string, from, to time.Time) (map[string]int64, error)
+	DashboardDay(ctx context.Context, zoneID string, date time.Time) (cfapi.Dashboard, error)
+	Sampling(ctx context.Context, zoneID string, from, to time.Time) (int64, float64, error)
 	WorkerStats(ctx context.Context, accountID, script string, from, to time.Time) (int64, float64, error)
 }
 
@@ -58,6 +61,10 @@ type Runner struct {
 	Sender Sender
 	Store  *store.Store // nil: archive disabled
 	Rules  RulesAPI     // nil: WAF audit disabled
+	// DryRun prints instead of sending (the Sender does that) and also
+	// leaves no trace: no state file write, no alert history — otherwise a
+	// dry run would consume the window and advance the alert state.
+	DryRun bool
 
 	caps      map[string]cfapi.Caps                            // per zone, probed once per process
 	mu        sync.Mutex                                       // guards caps and ruleNames: zones run in parallel
@@ -554,7 +561,7 @@ func (r *Runner) Intraday(ctx context.Context, zone config.Zone) error {
 			Hypotheses: hyps, Block: advice, Suggestions: sugs,
 			Since: firstAlert, Long: long, LongN: longN,
 		})
-		if r.Store != nil {
+		if r.Store != nil && !r.DryRun {
 			if err := r.Store.RecordAlert(zone.ZoneID, w.To, decision.String(), st.Fingerprint, findings); err != nil {
 				log.Printf("zone %s: archive alert: %v", zone.Name, err)
 			}
@@ -565,8 +572,10 @@ func (r *Runner) Intraday(ctx context.Context, zone config.Zone) error {
 
 	// State first: if delivery fails the message is already in the
 	// outbox, and the episode must not re-alert next round.
-	if err := st.Save(sp); err != nil {
-		return fmt.Errorf("state: %w", err)
+	if !r.DryRun {
+		if err := st.Save(sp); err != nil {
+			return fmt.Errorf("state: %w", err)
+		}
 	}
 	if text == "" {
 		log.Printf("zone %s: %s quiet (findings=%d, active=%v)", zone.Name, w, len(findings), st.Active)
@@ -687,7 +696,7 @@ func (r *Runner) Daily(ctx context.Context, zone config.Zone) error {
 				t := block.Target{Type: block.Type(ev.Type), Value: ev.Value}
 				bs := report.BlockStatus{Target: t.String(), Action: ev.Action, Since: ev.At, ExpiresAt: ev.ExpiresAt}
 				if caps.FirewallEnabled {
-					bs.Attempts, err = block.Attempts(ctx, r.API, z, ev.RuleID, t, w.From, w.To)
+					bs.Attempts, err = block.Attempts(ctx, r.API, z, ev.RuleID, t, caps.FirewallFrom(w.From, r.now()), w.To)
 				}
 				bs.AttemptsNA = !caps.FirewallEnabled || err != nil
 				d.Blocks = append(d.Blocks, bs)
@@ -713,6 +722,11 @@ func (r *Runner) Daily(ctx context.Context, zone config.Zone) error {
 		} else {
 			d.Audit = &ad
 		}
+	}
+	if s, err := r.Calibrate(ctx, zone, 1); err != nil {
+		logErr("calibration", err)
+	} else if s.Verdict != calibrate.NoData {
+		d.Calibration = &s
 	}
 	d.Firewall = r.labelRules(zone, d.Firewall)
 	text := report.Daily(cfg.Report.Language, d)

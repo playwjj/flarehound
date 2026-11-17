@@ -35,6 +35,7 @@ type Input struct {
 	Sensitive []Path
 	Plan      string          // "" when unknown
 	Hits      map[string]Hits // rule id → hits; nil when unavailable
+	HitsDays  int             // days the hit window covers (≤ 30; the zone's firewall-event retention)
 	Access    []cfapi.AccessRule
 	AccessNA  bool // IP Access Rules not readable
 	Now       time.Time
@@ -106,6 +107,7 @@ type Result struct {
 	Exemptions  []Exemption
 	HitsNA      bool
 	Hits        map[string]Hits
+	HitsDays    int
 	Zombies     []Zombie
 	Quota       Quota
 	Access      []cfapi.AccessRule // allow / whitelist access rules (also exemptions)
@@ -174,7 +176,10 @@ var limits = map[string]int{"free": 5, "pro": 20, "business": 100, "enterprise":
 
 // Audit runs every check.
 func Audit(in Input) Result {
-	res := Result{Rules: len(in.Rules), Hits: in.Hits, HitsNA: in.Hits == nil, Access: nil, AccessNA: in.AccessNA}
+	res := Result{Rules: len(in.Rules), Hits: in.Hits, HitsNA: in.Hits == nil, HitsDays: in.HitsDays, AccessNA: in.AccessNA}
+	if in.Hits != nil && in.HitsDays == 0 {
+		res.HitsDays = 30 // callers that do not report coverage mean the full window
+	}
 	if in.Now.IsZero() {
 		in.Now = time.Now()
 	}
@@ -313,7 +318,9 @@ func Audit(in Input) Result {
 	}
 
 	// ---- hits / zombies ----
-	if in.Hits != nil {
+	// Zombie claims need the full 30 days: on a zone that keeps 3 days of
+	// firewall events, three quiet days prove nothing.
+	if in.Hits != nil && res.HitsDays >= 30 {
 		for _, p := range rules {
 			if p.r.Action == "skip" || p.r.Action == "log" {
 				continue // their events are not counted the same way
