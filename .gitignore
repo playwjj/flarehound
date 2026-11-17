@@ -1,0 +1,8 @@
+# runtime state and local config (may contain zone IDs; token is env-only)
+config.json
+data/
+*.state.json
+
+# build output
+/flarehound
+*.test

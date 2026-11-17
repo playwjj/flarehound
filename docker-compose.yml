@@ -1,0 +1,11 @@
+services:
+  flarehound:
+    build: .
+    image: flarehound:latest
+    restart: unless-stopped
+    environment:
+      # Read-only Cloudflare API token. Never put it in config.json.
+      CF_API_TOKEN: ${CF_API_TOKEN:?set CF_API_TOKEN to a read-only Cloudflare API token}
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - ./data:/app/data
