@@ -12,51 +12,61 @@ import (
 	"github.com/playwjj/flarehound/internal/store"
 )
 
-func TestIPKey(t *testing.T) {
+func TestIPGroupKey(t *testing.T) {
 	for in, want := range map[string]string{
-		"203.0.113.7":          "203.0.113.7",
-		"::ffff:203.0.113.7":   "203.0.113.7",
+		"203.0.113.7":          "203.0.113.0/24",
+		"::ffff:203.0.113.7":   "203.0.113.0/24",
 		"2001:db8:1:2:aaaa::1": "2001:db8:1:2::/64",
-		"2001:db8:1:2:bbbb::9": "2001:db8:1:2::/64",
 		"not an address":       "not an address",
 	} {
-		if got, _ := ipKey(in); got != want {
-			t.Errorf("ipKey(%q) = %q, want %q", in, got, want)
+		if got, _, _ := ipGroupKey(in); got != want {
+			t.Errorf("ipGroupKey(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
 
 func TestIPAggregation(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.KnownFaces.ASNs = []int{15169}
+	cfg.KnownFaces.ASNs = []int{14061}
 	g := newIPAggregator(3)
 	g.add([]cfapi.Face{{Name: "203.0.113.7", ASN: 45102, Count: 100}, {Name: "2001:db8:1:2::a", ASN: 8075, Count: 40}, {Name: "2001:db8:1:2::b", ASN: 8075, Count: 30}}, 0)
-	g.add([]cfapi.Face{{Name: "203.0.113.7", ASN: 45102, Count: 100}, {Name: "66.249.66.1", ASN: 15169, Count: 900}}, 1)
-	g.add([]cfapi.Face{{Name: "198.51.100.2", ASN: 14061, Count: 5000}}, 2)
+	// A scraper walking a /24, and verified Googlebot addresses.
+	g.add([]cfapi.Face{{Name: "203.0.113.7", ASN: 45102, Count: 100}, {Name: "68.166.168.36", ASN: 30058, Count: 400},
+		{Name: "68.166.168.37", ASN: 30058, Count: 300}, {Name: "68.166.168.38", ASN: 30058, Count: 200}, {Name: "68.166.168.39", ASN: 30058, Count: 100}}, 1)
+	g.add([]cfapi.Face{{Name: "66.249.66.205", ASN: 15169, Count: 2400, Cat: "Search Engine Crawler"},
+		{Name: "66.249.66.206", ASN: 15169, Count: 2300, Cat: "Search Engine Crawler"}, {Name: "198.51.100.2", ASN: 14061, Count: 5000}}, 2)
 	g.addBlocked([]cfapi.Face{{Name: "203.0.113.7", Count: 150}, {Name: "192.0.2.1", Count: 999}})
 	b := &IPBoard{Total: 10000, SortHours: true}
 	g.finish(b, cfg, ipBlocks([]store.BlockEvent{{Type: "ip", Value: "2001:db8:1::/48"}, {Type: "asn", Value: "45102"}}))
 
-	if len(b.Rows) != 3 || len(b.Known) != 1 || b.Known[0].Name != "66.249.66.1" || b.KnownSum != 900 {
-		t.Fatalf("rows %+v known %+v", b.Rows, b.Known)
+	if len(b.Rows) != 3 {
+		t.Fatalf("rows %+v", b.Rows)
 	}
-	// Persistence first: two hours beats one hour with far more requests.
+	// Persistence first: two hours beats one hour with more requests.
 	top := b.Rows[0]
-	if top.Name != "203.0.113.7" || top.Hours != 2 || !top.Strip[0] || !top.Strip[1] || top.Strip[2] ||
+	if top.Name != "203.0.113.7" || top.Members != 0 || top.Hours != 2 || !top.Strip[0] || !top.Strip[1] || top.Strip[2] ||
 		top.Count != 200 || top.Share != 2 || top.BlockPct != 75 || !top.Drill || top.Listed {
 		t.Fatalf("top row %+v", top)
 	}
-	if b.Rows[1].Name != "198.51.100.2" {
-		t.Fatalf("second row %+v", b.Rows[1])
+	farm := b.Rows[1]
+	if farm.Name != "68.166.168.0/24" || farm.Members != 4 || farm.Count != 1000 || farm.Drill ||
+		len(farm.Top) != 3 || farm.Top[0] != "68.166.168.36" || farm.Hours != 1 {
+		t.Fatalf("/24 row %+v", farm)
 	}
 	v6 := b.Rows[2]
-	if v6.Name != "2001:db8:1:2::/64" || v6.Members != 2 || v6.Count != 70 || v6.Hours != 1 || v6.Drill ||
-		!v6.Listed || v6.Crawler != "Bingbot" {
+	if v6.Name != "2001:db8:1:2::/64" || v6.Members != 2 || v6.Count != 70 || v6.Drill || !v6.Listed || v6.Crawler != "Bingbot" {
 		t.Fatalf("v6 row %+v", v6)
+	}
+	// Verified bots folded as one /24, known network folded.
+	if len(b.Bots) != 1 || b.Bots[0].Name != "66.249.66.0/24" || b.Bots[0].Members != 2 || b.BotSum != 4700 || b.Bots[0].Cat == "" {
+		t.Fatalf("bots %+v", b.Bots)
+	}
+	if len(b.Known) != 1 || b.Known[0].Name != "198.51.100.2" || b.KnownSum != 5000 {
+		t.Fatalf("known %+v", b.Known)
 	}
 	// By requests instead.
 	b2 := &IPBoard{Total: 10000}
-	g.finish(b2, cfg, nil)
+	g.finish(b2, &config.Config{}, nil)
 	if b2.Rows[0].Name != "198.51.100.2" {
 		t.Fatalf("by count: %+v", b2.Rows)
 	}
@@ -67,8 +77,9 @@ type ipAnalytics struct{ fakeAnalytics }
 
 func (a *ipAnalytics) Top(ctx context.Context, z string, from, to time.Time, dim string, n int, fl cfapi.Filter) ([]cfapi.Face, error) {
 	switch dim {
-	case cfapi.DimClientIPASN:
-		return []cfapi.Face{{Name: "203.0.113.7", ASN: 45102, Count: 9000}, {Name: "66.249.66.1", ASN: 15169, Count: 800}}, nil
+	case cfapi.DimClientIPASNBot:
+		return []cfapi.Face{{Name: "203.0.113.7", ASN: 45102, Count: 9000}, {Name: "66.249.66.1", ASN: 15169, Count: 800, Cat: "Search Engine Crawler"},
+			{Name: "66.249.70.3", ASN: 15169, Count: 300}}, nil
 	case cfapi.DimClientIP:
 		if fl == cfapi.EdgeBlocked() {
 			return []cfapi.Face{{Name: "203.0.113.7", Count: 4500}}, nil
@@ -119,10 +130,13 @@ func TestIPBoardPages(t *testing.T) {
 
 	// Live hour: known network folded, crawler network labelled.
 	_, body, _ = c.do("GET", "/ips?span=1h", nil, nil)
-	for _, want := range []string{"203.0.113.7", "9,000", "50%", "Googlebot network"} {
+	for _, want := range []string{"203.0.113.7", "9,000", "50%", "Googlebot network", "Verified bots (rows: 1, requests: 800)", "verified bot: Search Engine Crawler"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("live board lacks %q:\n%s", want, body)
 		}
+	}
+	if strings.Contains(body, "value=66.249.66.1&") {
+		t.Fatal("a verified bot is offered for blocking")
 	}
 
 	// Drill into one address.

@@ -2,6 +2,13 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.14.1 — 2026-11-19
+
+- **IP board: crawlers no longer fill it.** On a busy site each real Googlebot address does thousands of requests an hour, so a run of `66.249.66.x` took the top places.
+  - Addresses Cloudflare verified as a known bot (`verifiedBotCategory`, every plan) are split off and folded at the bottom as *Verified bots*, with their total; no block link there. A fake crawler sending Googlebot's user agent is not verified and stays on the board. The watch now archives them apart (`bot_ips`); the query takes 100 addresses so the board still gets its 50 others.
+  - IPv4 addresses are summed per /24 when two or more of one /24 are listed (as IPv6 per /64), so a scraper walking a range is one row: "68.166.168.0/24 (4 addresses)", its largest addresses listed beneath and each drillable; *block…* blocks the /24.
+  - Hours archived by v1.14.0 have bots mixed in; an address verified in any later hour moves to *Verified bots* for the whole 24 h.
+
 ## v1.14.0 — 2026-11-19
 
 - **IP board** (new console tab *IPs*): which client addresses keep hitting the zone, at a glance.

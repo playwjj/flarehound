@@ -915,12 +915,13 @@ func (r *Runner) archiveRound(ctx context.Context, zone config.Zone, w, bw sched
 	logErr("dynamic paths", err)
 	// Client IPs for the console's IP board: who keeps hitting, hour by
 	// hour. A failure leaves the hour without IPs (shown as a gap).
-	ipDim := cfapi.DimClientIP
-	if r.Caps(ctx, zone).HasDim(cfapi.DimASN) {
-		ipDim = cfapi.DimClientIPASN
-	}
-	snap.TopIPs, err = r.API.Top(ctx, z, w.From, w.To, ipDim, archiveIPs, cfapi.Filter{})
+	// Verified bots (real Googlebot and the like) are split off so they
+	// do not fill the list; the query takes twice the list to leave room.
+	ips, err := r.API.Top(ctx, z, w.From, w.To, r.Caps(ctx, zone).ClientIPDim(), 2*archiveIPs, cfapi.Filter{})
 	logErr("top IPs", err)
+	if err == nil {
+		snap.TopIPs, snap.BotIPs = cfapi.SplitBots(ips, archiveIPs)
+	}
 	snap.BlockedIPs, err = r.API.Top(ctx, z, w.From, w.To, cfapi.DimClientIP, archiveIPs, cfapi.EdgeBlocked())
 	logErr("blocked IPs", err)
 	if r.Caps(ctx, zone).FirewallEnabled {

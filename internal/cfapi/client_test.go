@@ -86,17 +86,29 @@ func TestTopQuotesUntrustedStrings(t *testing.T) {
 func TestTopIPWithASN(t *testing.T) {
 	var q string
 	c := server(t, `{"data":{"viewer":{"zones":[{"httpRequestsAdaptiveGroups":[
-		{"count":5,"dimensions":{"clientIP":"2001:db8::1","clientAsn":"15169"}},
-		{"count":9,"dimensions":{"clientIP":"203.0.113.7","clientAsn":"45102"}}]}]}}}`, &q)
-	got, err := c.Top(context.Background(), "zone", from, to, DimClientIPASN, 50, EdgeBlocked())
+		{"count":5,"dimensions":{"clientIP":"2001:db8::1","clientAsn":"15169","verifiedBotCategory":"Search Engine Crawler"}},
+		{"count":9,"dimensions":{"clientIP":"203.0.113.7","clientAsn":"45102","verifiedBotCategory":""}}]}]}}}`, &q)
+	got, err := c.Top(context.Background(), "zone", from, to, DimClientIPASNBot, 50, EdgeBlocked())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(q, "dimensions{clientIP clientAsn}") || !strings.Contains(q, "edgeResponseStatus:403") {
+	if !strings.Contains(q, "dimensions{clientIP clientAsn verifiedBotCategory}") || !strings.Contains(q, "edgeResponseStatus:403") {
 		t.Errorf("query: %s", q)
 	}
-	if len(got) != 2 || got[0] != (Face{Name: "203.0.113.7", ASN: 45102, Count: 9}) || got[1].Name != "2001:db8::1" || got[1].ASN != 15169 {
+	if len(got) != 2 || got[0] != (Face{Name: "203.0.113.7", ASN: 45102, Count: 9}) || got[1].Name != "2001:db8::1" || got[1].ASN != 15169 || got[1].Cat != "Search Engine Crawler" {
 		t.Fatalf("faces = %+v", got)
+	}
+}
+
+func TestClientIPDimAndSplitBots(t *testing.T) {
+	full := Caps{Probed: true, HTTPFields: map[string]bool{"dimensions_clientAsn": true, "dimensions_verifiedBotCategory": true}}
+	free := Caps{Probed: true, HTTPFields: map[string]bool{"dimensions_verifiedBotCategory": true}}
+	if full.ClientIPDim() != DimClientIPASNBot || free.ClientIPDim() != DimClientIPBot || (Caps{Probed: true}).ClientIPDim() != DimClientIP {
+		t.Fatal("ClientIPDim")
+	}
+	others, bots := SplitBots([]Face{{Name: "a", Cat: "x"}, {Name: "b"}, {Name: "c"}, {Name: "d", Cat: "y"}}, 1)
+	if len(others) != 1 || others[0].Name != "b" || len(bots) != 2 {
+		t.Fatalf("others %+v bots %+v", others, bots)
 	}
 }
 

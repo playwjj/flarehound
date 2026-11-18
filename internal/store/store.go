@@ -44,9 +44,11 @@ type Snapshot struct {
 	FirewallNA   bool         `json:"firewall_na,omitempty"`
 	// The hour's top client IPs (with their ASN where the plan has it) and
 	// top IPs stopped at the edge — the console's IP board. nil before
-	// v1.14 and on rounds where the query failed.
+	// v1.14 and on rounds where the query failed. From v1.14.1 TopIPs
+	// leaves out Cloudflare-verified bots, which are kept in BotIPs.
 	TopIPs     []cfapi.Face `json:"top_ips,omitempty"`
 	BlockedIPs []cfapi.Face `json:"blocked_ips,omitempty"`
+	BotIPs     []cfapi.Face `json:"bot_ips,omitempty"`
 }
 
 type Store struct{ db *sql.DB }

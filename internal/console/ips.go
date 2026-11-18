@@ -35,14 +35,19 @@ const (
 	ipErrTTL   = 10 * time.Second
 )
 
-// IPRow is one address — or one IPv6 /64, whose addresses are summed.
+// IPRow is one address, or one network of addresses summed: an IPv6
+// /64 always (clients rotate inside one), an IPv4 /24 when two or more
+// of its addresses are listed (a crawler or scraper farm walking a
+// range would otherwise fill the board one address at a time).
 type IPRow struct {
-	Name     string // address, or "2001:db8:1:2::/64"
-	Members  int    // addresses summed into a /64 (0: a single address)
-	ASN      int    // 0: unknown (plan without ASN, or not reported)
-	Crawler  string // crawler that crawls from this network, if any
-	Known    bool   // the network is in the user's known faces
-	Listed   bool   // inside an active FlareHound IP block
+	Name     string   // address, or "66.249.66.0/24", "2001:db8:1:2::/64"
+	Members  int      // addresses summed into a network (0: a single address)
+	Top      []string // a network's largest addresses (up to ipTopMembers)
+	ASN      int      // 0: unknown (plan without ASN, or not reported)
+	Cat      string   // Cloudflare verified-bot category (bot rows only)
+	Crawler  string   // crawler that crawls from this network, if any
+	Known    bool     // the network is in the user's known faces
+	Listed   bool     // inside an active FlareHound IP block
 	Count    int64
 	Share    float64 // percent of the window's requests
 	Blocked  int64   // of Count, stopped at the edge (from the blocked top list)
@@ -60,6 +65,8 @@ type IPBoard struct {
 	Rows      []IPRow // unknown networks, ranked
 	Known     []IPRow // folded: networks the user marked known
 	KnownSum  int64
+	Bots      []IPRow // folded: Cloudflare-verified bots
+	BotSum    int64
 	Hours     int       // archived hours with IP data in the window (24 h)
 	Since     time.Time // oldest archived hour with IP data (zero: none yet)
 	SortHours bool      // 24 h ranked by persistence (else by requests)
@@ -67,88 +74,95 @@ type IPBoard struct {
 	At        time.Time
 }
 
+const ipTopMembers = 3
+
 type ipEntry struct {
 	mu sync.Mutex
 	b  *IPBoard
 }
 
-// ipKey groups an address: IPv6 by /64 (one host's usual allocation,
-// which rotating clients move around in), IPv4 as is.
-func ipKey(s string) (key string, v6 bool) {
+// ipAddr is one listed address, summed over the window.
+type ipAddr struct {
+	name           string
+	asn            int
+	cat            string
+	count, blocked int64
+	strip          []bool
+}
+
+// ipGroupKey is the network an address is summed into: its IPv6 /64, or
+// its IPv4 /24 (used only when the /24 has two or more addresses).
+func ipGroupKey(s string) (key string, v6, ok bool) {
 	a, err := netip.ParseAddr(s)
 	if err != nil {
-		return s, false
+		return s, false, false
 	}
 	a = a.Unmap()
-	if a.Is4() {
-		return a.String(), false
+	bits := 24
+	if !a.Is4() {
+		bits, v6 = 64, true
 	}
-	p, err := a.Prefix(64)
+	p, err := a.Prefix(bits)
 	if err != nil {
-		return a.String(), false
+		return s, false, false
 	}
-	return p.String(), true
+	return p.String(), v6, true
 }
 
-type ipAgg struct {
-	row     IPRow
-	members map[string]bool
-}
-
-// ipAggregator sums top lists (one per hour, or the live one) by key.
+// ipAggregator sums top lists (one per hour, or the live one) per
+// address; finish groups them into networks.
 type ipAggregator struct {
-	by    map[string]*ipAgg
+	by    map[string]*ipAddr
 	hours int // slots in the strip (0: no strip)
 }
 
 func newIPAggregator(hours int) *ipAggregator {
-	return &ipAggregator{by: map[string]*ipAgg{}, hours: hours}
+	return &ipAggregator{by: map[string]*ipAddr{}, hours: hours}
 }
 
-func (g *ipAggregator) get(name string) *ipAgg {
-	k, v6 := ipKey(name)
-	a := g.by[k]
-	if a == nil {
-		a = &ipAgg{row: IPRow{Name: k}}
-		if v6 {
-			a.members = map[string]bool{}
-		}
-		if g.hours > 0 {
-			a.row.Strip = make([]bool, g.hours)
-		}
-		g.by[k] = a
+func (g *ipAggregator) get(name string) *ipAddr {
+	if a, err := netip.ParseAddr(name); err == nil {
+		name = a.Unmap().String()
 	}
-	if a.members != nil {
-		a.members[name] = true
+	a := g.by[name]
+	if a == nil {
+		a = &ipAddr{name: name}
+		if g.hours > 0 {
+			a.strip = make([]bool, g.hours)
+		}
+		g.by[name] = a
 	}
 	return a
 }
 
 // add sums one top list; slot is the hour's strip index (-1: none).
 func (g *ipAggregator) add(top []cfapi.Face, slot int) {
-	seen := map[string]bool{}
 	for _, f := range top {
 		a := g.get(f.Name)
-		a.row.Count += f.Count
-		if a.row.ASN == 0 {
-			a.row.ASN = f.ASN
+		a.count += f.Count
+		if a.asn == 0 {
+			a.asn = f.ASN
 		}
-		if slot >= 0 && !seen[a.row.Name] {
-			seen[a.row.Name] = true
-			a.row.Hours++
-			a.row.Strip[slot] = true
+		if a.cat == "" {
+			a.cat = f.Cat
+		}
+		if slot >= 0 && slot < len(a.strip) {
+			a.strip[slot] = true
 		}
 	}
 }
 
-// addBlocked sums one top list of edge-stopped requests into rows that
-// exist (an address only blocked, never in the top of all requests, is
-// not on the board: its requests are handled already).
+// addBlocked sums one top list of edge-stopped requests into addresses
+// that are listed (an address only blocked, never in the top of all
+// requests, is not on the board: its requests are handled already).
 func (g *ipAggregator) addBlocked(top []cfapi.Face) {
 	for _, f := range top {
-		k, _ := ipKey(f.Name)
-		if a := g.by[k]; a != nil {
-			a.row.Blocked += f.Count
+		name := f.Name
+		if a, err := netip.ParseAddr(name); err == nil {
+			name = a.Unmap().String()
+		}
+		if a := g.by[name]; a != nil {
+			a.blocked += f.Count
 		}
 	}
 }
@@ -186,44 +200,116 @@ func listed(name string, blocks []netip.Prefix) bool {
 	return false
 }
 
-// finish turns the sums into the board's rows.
-func (g *ipAggregator) finish(b *IPBoard, cfg *config.Config, blocks []netip.Prefix) {
-	rows := make([]IPRow, 0, len(g.by))
-	for _, a := range g.by {
-		r := a.row
-		if a.members != nil {
-			r.Members = len(a.members)
+// group sums addresses into rows: IPv6 per /64, IPv4 per /24 when two
+// or more of its addresses are listed, else the address alone.
+func group(addrs []*ipAddr, hours int) []IPRow {
+	nets := map[string][]*ipAddr{}
+	v6 := map[string]bool{}
+	var order []string
+	for _, a := range addrs {
+		k, is6, ok := ipGroupKey(a.name)
+		if !ok {
+			k = a.name
 		}
-		if b.Total > 0 {
-			r.Share = float64(r.Count) / float64(b.Total) * 100
+		if _, seen := nets[k]; !seen {
+			order = append(order, k)
 		}
-		if r.Count > 0 {
-			r.BlockPct = min(100, float64(r.Blocked)/float64(r.Count)*100)
+		nets[k] = append(nets[k], a)
+		v6[k] = is6
+	}
+	var rows []IPRow
+	for _, k := range order {
+		as := nets[k]
+		sort.SliceStable(as, func(i, j int) bool { return as[i].count > as[j].count })
+		if len(as) == 1 && !v6[k] {
+			a := as[0]
+			rows = append(rows, IPRow{Name: a.name, ASN: a.asn, Cat: a.cat, Count: a.count, Blocked: a.blocked, Strip: a.strip,
+				Drill: strings.Count(a.name, "/") == 0})
+			continue
 		}
-		if r.ASN > 0 {
-			r.Crawler, _ = analyze.CrawlerNetwork(r.ASN)
-			r.Known = IsKnown(cfg, DimASN, "AS"+strconv.Itoa(r.ASN))
+		r := IPRow{Name: k, Members: len(as)}
+		if hours > 0 {
+			r.Strip = make([]bool, hours)
 		}
-		r.Listed = listed(r.Name, blocks)
-		r.Drill = a.members == nil && !strings.Contains(r.Name, "/")
+		for _, a := range as {
+			r.Count += a.count
+			r.Blocked += a.blocked
+			if r.ASN == 0 {
+				r.ASN = a.asn
+			}
+			if r.Cat == "" {
+				r.Cat = a.cat
+			}
+			for i, on := range a.strip {
+				r.Strip[i] = r.Strip[i] || on
+			}
+			if len(r.Top) < ipTopMembers {
+				r.Top = append(r.Top, a.name)
+			}
+		}
 		rows = append(rows, r)
 	}
-	sort.SliceStable(rows, func(i, j int) bool {
-		if b.SortHours && rows[i].Hours != rows[j].Hours {
-			return rows[i].Hours > rows[j].Hours
+	return rows
+}
+
+// finish turns the sums into the board's rows: verified bots and known
+// networks folded, the rest ranked.
+func (g *ipAggregator) finish(b *IPBoard, cfg *config.Config, blocks []netip.Prefix) {
+	var people, bots []*ipAddr
+	for _, a := range g.by {
+		if a.cat != "" {
+			bots = append(bots, a)
+		} else {
+			people = append(people, a)
 		}
-		if rows[i].Count != rows[j].Count {
-			return rows[i].Count > rows[j].Count
+	}
+	// Map order is random: sort for a stable grouping and Top list.
+	for _, as := range [][]*ipAddr{people, bots} {
+		sort.Slice(as, func(i, j int) bool { return as[i].name < as[j].name })
+	}
+	fill := func(rows []IPRow) []IPRow {
+		for i := range rows {
+			r := &rows[i]
+			for _, on := range r.Strip {
+				if on {
+					r.Hours++
+				}
+			}
+			if b.Total > 0 {
+				r.Share = float64(r.Count) / float64(b.Total) * 100
+			}
+			if r.Count > 0 {
+				r.BlockPct = min(100, float64(r.Blocked)/float64(r.Count)*100)
+			}
+			if r.ASN > 0 {
+				r.Crawler, _ = analyze.CrawlerNetwork(r.ASN)
+				r.Known = IsKnown(cfg, DimASN, "AS"+strconv.Itoa(r.ASN))
+			}
+			r.Listed = listed(r.Name, blocks)
 		}
-		return rows[i].Name < rows[j].Name
-	})
-	for _, r := range rows {
-		if r.Known {
+		sort.SliceStable(rows, func(i, j int) bool {
+			if b.SortHours && rows[i].Hours != rows[j].Hours {
+				return rows[i].Hours > rows[j].Hours
+			}
+			if rows[i].Count != rows[j].Count {
+				return rows[i].Count > rows[j].Count
+			}
+			return rows[i].Name < rows[j].Name
+		})
+		return rows
+	}
+	for _, r := range fill(group(people, g.hours)) {
+		switch {
+		case r.Known:
 			b.Known = append(b.Known, r)
 			b.KnownSum += r.Count
-		} else if len(b.Rows) < ipShown {
+		case len(b.Rows) < ipShown:
 			b.Rows = append(b.Rows, r)
 		}
+	}
+	for _, r := range fill(group(bots, g.hours)) {
+		b.Bots = append(b.Bots, r)
+		b.BotSum += r.Count
 	}
 }
 
@@ -243,7 +329,7 @@ func buildIPDay(arch Archive, cfg *config.Config, z config.Zone, byCount bool) (
 	}
 	g := newIPAggregator(ipDayHours)
 	for _, h := range hs {
-		if h.TopIPs == nil { // before v1.14, or the query failed
+		if h.TopIPs == nil && h.BotIPs == nil { // before v1.14, or the query failed
 			continue
 		}
 		slot := int(h.From.Sub(b.From) / time.Hour)
@@ -256,6 +342,7 @@ func buildIPDay(arch Archive, cfg *config.Config, z config.Zone, byCount bool) (
 		b.Hours++
 		b.Total += h.Total
 		g.add(h.TopIPs, slot)
+		g.add(h.BotIPs, slot)
 		g.addBlocked(h.BlockedIPs)
 	}
 	evs, err := arch.ActiveBlocks(z.ZoneID)
@@ -268,12 +355,8 @@ func buildIPDay(arch Archive, cfg *config.Config, z config.Zone, byCount bool) (
 
 // buildIPHour queries the live hour: total, top IPs (with their network
 // where the plan has it) and top IPs stopped at the edge, in parallel.
-func buildIPHour(ctx context.Context, an Analytics, cfg *config.Config, z config.Zone, from, to time.Time, hasASN bool, blocks []netip.Prefix) (*IPBoard, error) {
+func buildIPHour(ctx context.Context, an Analytics, cfg *config.Config, z config.Zone, from, to time.Time, dim string, blocks []netip.Prefix) (*IPBoard, error) {
 	b := &IPBoard{Span: ipSpanHour, From: from, To: to}
-	dim := cfapi.DimClientIP
-	if hasASN {
-		dim = cfapi.DimClientIPASN
-	}
 	var (
 		wg           sync.WaitGroup
 		top, blocked []cfapi.Face
@@ -284,7 +367,7 @@ func buildIPHour(ctx context.Context, an Analytics, cfg *config.Config, z config
 		go func() { defer wg.Done(); errs[i] = fn() }()
 	}
 	run(0, func() (err error) { b.Total, err = an.Count(ctx, z.ZoneID, from, to, cfapi.Filter{}); return })
-	run(1, func() (err error) { top, err = an.Top(ctx, z.ZoneID, from, to, dim, ipLimit, cfapi.Filter{}); return })
+	run(1, func() (err error) { top, err = an.Top(ctx, z.ZoneID, from, to, dim, 2*ipLimit, cfapi.Filter{}); return })
 	run(2, func() (err error) {
 		blocked, err = an.Top(ctx, z.ZoneID, from, to, cfapi.DimClientIP, ipLimit, cfapi.EdgeBlocked())
 		return
@@ -296,7 +379,9 @@ func buildIPHour(ctx context.Context, an Analytics, cfg *config.Config, z config
 		}
 	}
 	g := newIPAggregator(0)
-	g.add(top, -1)
+	others, bots := cfapi.SplitBots(top, ipLimit)
+	g.add(others, -1)
+	g.add(bots, -1)
 	g.addBlocked(blocked)
 	g.finish(b, cfg, blocks)
 	return b, nil
@@ -329,13 +414,22 @@ func (s *Server) ipHour(ctx context.Context, z config.Zone) *IPBoard {
 	if err != nil {
 		return &IPBoard{Span: ipSpanHour, Err: err.Error(), At: now}
 	}
-	b, err := buildIPHour(qctx, s.Analytics, s.eff(), z, to.Add(-liveSpan), to, !s.noASN(ctx, z), ipBlocks(evs))
+	b, err := buildIPHour(qctx, s.Analytics, s.eff(), z, to.Add(-liveSpan), to, s.ipDim(ctx, z), ipBlocks(evs))
 	if err != nil {
 		b.Err = err.Error()
 	}
 	b.At = now
 	e.b = b
 	return b
+}
+
+// ipDim is the client-IP grouping for the zone's plan (all of it when
+// the plan has not been probed).
+func (s *Server) ipDim(ctx context.Context, z config.Zone) string {
+	if s.Caps == nil {
+		return cfapi.AllCaps().ClientIPDim()
+	}
+	return s.Caps(ctx, z).ClientIPDim()
 }
 
 func (s *Server) ipsPage(w http.ResponseWriter, r *http.Request) {

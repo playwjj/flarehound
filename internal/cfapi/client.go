@@ -247,6 +247,7 @@ type Face struct {
 	Name  string `json:"name"`
 	ASN   int    `json:"asn,omitempty"`
 	Count int64  `json:"count"`
+	Cat   string `json:"cat,omitempty"` // verified-bot category (client-IP lists only)
 }
 
 // Dimension names accepted by Top.
@@ -256,10 +257,13 @@ const (
 	DimPath        = "clientRequestPath"
 	DimCacheStatus = "cacheStatus"
 	DimClientIP    = "clientIP"
-	// DimClientIPASN groups by address and network together: one row per
-	// address (an address belongs to one network), Name the address and
-	// ASN its network. Plans without the ASN dimension reject it.
-	DimClientIPASN = "clientIP clientAsn"
+	// Client-IP groupings with more: one row per address (an address
+	// belongs to one network and is one bot or not), Name the address,
+	// ASN its network, Cat Cloudflare's verified-bot category ("" when
+	// not a verified bot). Plans without a dimension reject its grouping.
+	DimClientIPASN    = "clientIP clientAsn"
+	DimClientIPBot    = "clientIP verifiedBotCategory"
+	DimClientIPASNBot = "clientIP clientAsn verifiedBotCategory"
 )
 
 // EdgeBlocked selects requests stopped at the edge: 403 and never sent
@@ -273,11 +277,12 @@ func (c *Client) Top(ctx context.Context, zoneID string, from, to time.Time, dim
 	if err != nil {
 		return nil, err
 	}
-	if dim == DimClientIPASN {
+	if strings.HasPrefix(dim, DimClientIP+" ") {
 		out := make([]Face, 0, len(rows))
 		for _, r := range rows {
 			f := Face{Name: fmt.Sprint(r.Dimensions[DimClientIP]), Count: r.Count}
 			f.ASN, _ = asnOf(r.Dimensions[DimASN])
+			f.Cat, _ = r.Dimensions[DimVerifiedBot].(string)
 			out = append(out, f)
 		}
 		sort.SliceStable(out, func(i, j int) bool { return out[i].Count > out[j].Count })
@@ -463,6 +468,35 @@ func (c Caps) FirewallFrom(from, now time.Time) time.Time {
 
 // AllCaps is the optimistic profile used when probing fails.
 func AllCaps() Caps { return Caps{FirewallEnabled: true} }
+
+// ClientIPDim is the richest client-IP grouping the plan supports:
+// with the address's network and verified-bot category where available.
+func (c Caps) ClientIPDim() string {
+	asn, bot := c.HasDim(DimASN), c.HasDim(DimVerifiedBot)
+	switch {
+	case asn && bot:
+		return DimClientIPASNBot
+	case asn:
+		return DimClientIPASN
+	case bot:
+		return DimClientIPBot
+	}
+	return DimClientIP
+}
+
+// SplitBots separates Cloudflare-verified bots (Cat set) from the other
+// addresses of a client-IP list, keeping at most n of the others.
+func SplitBots(fs []Face, n int) (others, bots []Face) {
+	for _, f := range fs {
+		switch {
+		case f.Cat != "":
+			bots = append(bots, f)
+		case len(others) < n:
+			others = append(others, f)
+		}
+	}
+	return others, bots
+}
 
 // HasDim reports whether the HTTP dataset exposes a dimension.
 func (c Caps) HasDim(dim string) bool {

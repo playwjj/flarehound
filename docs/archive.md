@@ -11,7 +11,7 @@ Cloudflare keeps about 31 days of adaptive analytics (firewall events likewise, 
 
 | Table | Holds | Kept |
 |---|---|---|
-| `snapshots` | One row per zone per window (`hour`, and `day` from the daily report): totals plus the full query set as JSON — cache-status split, top dynamic paths, firewall events per rule, and (from v1.14) the top 50 client IPs with their ASN and the top 50 IPs stopped at the edge | Hourly: `archive.hourly_retention_days` (default 400, min 30); daily: forever |
+| `snapshots` | One row per zone per window (`hour`, and `day` from the daily report): totals plus the full query set as JSON — cache-status split, top dynamic paths, firewall events per rule, and (from v1.14) the top 50 client IPs with their ASN, Cloudflare-verified bot addresses apart (from v1.14.1), and the top 50 IPs stopped at the edge | Hourly: `archive.hourly_retention_days` (default 400, min 30); daily: forever |
 | `faces` | First and last time each UA / ASN appeared in any Top list, and its peak count | Forever |
 | `alerts` | Every message-producing decision: window, decision, fingerprint, findings | Forever |
 | `block_events` | Audit log of [blocking](blocking.md): block, unblock, expire | Forever |
