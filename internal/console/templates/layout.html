@@ -20,7 +20,7 @@
 <h1 class="snaph">{{.Title}}</h1>
 {{else}}
 <header class="top">
-  <a class="brand" href="/{{if .Zone.Name}}?z={{zq .Zone}}{{end}}"><img src="/static/logo.png" alt="" width="26" height="26">FlareHound</a>
+  <a class="brand" href="/{{if .Zone.Name}}?z={{zq .Zone}}{{end}}"><img src="/static/logo.png" alt="" width="40" height="40">FlareHound</a>
   <nav class="user">
   <form method="post" action="/lang" class="langsw"><input type="hidden" name="csrf" value="{{.Req.CSRF}}"><input type="hidden" name="lang" value="{{if eq .Lang "zh"}}en{{else}}zh{{end}}"><input type="hidden" name="next" value="{{.Here}}"><button class="link" title="{{t "lang_switch"}}">{{if eq .Lang "zh"}}EN{{else}}中文{{end}}</button></form>
   {{if and .Req.User (or (not .Req.Session) .Req.Session.MFAOK)}}
