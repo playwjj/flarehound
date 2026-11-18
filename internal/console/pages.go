@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/playwjj/flarehound/internal/analyze"
 	"github.com/playwjj/flarehound/internal/block"
 	"github.com/playwjj/flarehound/internal/blockcli"
 	"github.com/playwjj/flarehound/internal/cfapi"
@@ -43,9 +44,11 @@ type page struct {
 
 	// views
 	NoASN       bool // the plan's analytics have no ASN dimension
+	Attention   []ZoneAttention
 	Settings    *settingsView
 	ASN         *ASNInfo
 	CanSettings bool // admin of a console that manages settings
+	CanSnap     bool // may create snapshots (console.snapshots)
 	SChange     *settingsChange
 	Diff        []string
 	Replays     []Replay
@@ -166,6 +169,9 @@ func (s *Server) funcs(l lang) template.FuncMap {
 		"contains":      contains,
 		"join":          func(s []string) string { return strings.Join(s, ", ") },
 		"asnInfo":       func(name string) ASNInfo { return s.asnInfo(name) },
+		"verdict":       func(e Effect) string { _, v := e.Verdict(string(l)); return v },
+		"verdictKind":   func(e Effect) string { k, _ := e.Verdict(string(l)); return k },
+		"coverOf":       func(zone, dim, name string) *analyze.RuleCover { return s.coverOf(zone, dim, name) },
 		"drillable":     func(dim, name string) bool { _, ok := drillFilter(dim, name); return ok },
 		"choicesFor":    func(p wafkit.Param, plan string) []string { return p.ChoicesFor(plan) },
 		"full": func(q map[string]rulesView, phase string) bool {
@@ -286,6 +292,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, name
 	p.CanWrite = p.WriteOn && p.Req.User != nil && p.Req.User.Admin()
 	p.Lang = string(s.L(r))
 	p.CanSettings = s.settingsOn() && p.Req.User != nil && p.Req.User.Admin()
+	p.CanSnap = s.canSnapshot(p.Req)
 	p.Here = "/"
 	if r.Method == http.MethodGet {
 		p.Here = r.URL.RequestURI()
@@ -346,6 +353,8 @@ const (
 	viewOverview = "overview"
 	viewMovers   = "movers"
 	viewHistory  = "history"
+	viewAudit    = "audit" // snapshots only (the page has its own handler)
+	viewRules    = "rules" // snapshots only
 )
 
 func (s *Server) zoneOf(q url.Values) config.Zone {
@@ -423,6 +432,16 @@ func (s *Server) buildView(ctx context.Context, view string, q url.Values) (stri
 		p := page{Title: s.lc(ctx).t("nav_history"), Zone: z, Nav: "history", History: &h, Range: rng, SnapView: view, SnapParams: params.Encode()}
 		p.Chart = historyChart(h, s.Cfg.Location, 960, 280, true)
 		return "history", p, nil
+	case viewAudit:
+		// The cached audit (no Cloudflare call when it is fresh).
+		e, _ := s.cachedAudit(ctx, z, false)
+		return "audit", page{Title: s.lc(ctx).t("nav_audit"), Zone: z, Nav: "audit", Audit: s.auditView(e, false, s.lc(ctx)),
+			SnapView: view, SnapParams: url.Values{"z": {z.Name}}.Encode()}, nil
+	case viewRules:
+		ph, _ := phaseOf(q.Get("phase"))
+		v := s.cachedRules(ctx, z, ph, false)
+		return "rules", page{Title: s.lc(ctx).t("nav_rules"), Zone: z, Nav: "rules", Rules: &v,
+			SnapView: view, SnapParams: url.Values{"z": {z.Name}, "phase": {ph}}.Encode()}, nil
 	}
 	return "", page{}, fmt.Errorf("unknown view %q", view)
 }
@@ -459,7 +478,8 @@ func (s *Server) facesPage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) auditPage(w http.ResponseWriter, r *http.Request) {
 	z := s.zone(r)
 	e, _ := s.cachedAudit(r.Context(), z, false)
-	s.render(w, r, http.StatusOK, "audit", page{Title: s.L(r).t("nav_audit"), Zone: z, Nav: "audit", Audit: s.auditView(e, false, s.L(r)), CanRules: s.canEditRules(r)})
+	s.render(w, r, http.StatusOK, "audit", page{Title: s.L(r).t("nav_audit"), Zone: z, Nav: "audit", Audit: s.auditView(e, false, s.L(r)), CanRules: s.canEditRules(r),
+		SnapView: viewAudit, SnapParams: url.Values{"z": {z.Name}}.Encode()})
 }
 
 func (s *Server) auditRun(w http.ResponseWriter, r *http.Request) {

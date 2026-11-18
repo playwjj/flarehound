@@ -203,3 +203,37 @@ func TestFreePlan(t *testing.T) {
 		t.Fatalf("paid scopes: %v", got)
 	}
 }
+
+func TestCover(t *testing.T) {
+	rules := []RuleLite{
+		{Action: "block", Enabled: true, Desc: "probes", Expr: `(http.host in {"example.com" "www.example.com"}) and (lower(http.request.uri.path) contains "wp-login")`},
+		{Action: "block", Enabled: true, Desc: "fh asn", Expr: `(ip.geoip.asnum in {150436 207990}) and not cf.client.bot`},
+		{Action: "block", Enabled: true, Desc: "ahrefs", Expr: `(http.host in {"example.com"}) and (lower(http.user_agent) contains "ahrefsbot")`},
+		{Action: "managed_challenge", Enabled: false, Desc: "off", Expr: `ip.geoip.asnum in {4134}`},
+		{Action: "skip", Enabled: true, Desc: "monitor", Expr: `ip.geoip.asnum in {13335}`},
+	}
+	if c, ok := Cover(rules, "asn", "AS150436", "example.com"); !ok || c.Pos != 2 || c.Partial {
+		t.Fatalf("ASN in a block rule: %+v %v", c, ok)
+	}
+	if c, ok := Cover(rules, "asn", "150436", "example.com"); !ok || c.Pos != 2 {
+		t.Fatalf("bare-number ASN: %+v", c)
+	}
+	if c, ok := Cover(rules, "ua", "Mozilla/5.0 (compatible; AhrefsBot/7.0)", "example.com"); !ok || c.Pos != 3 || c.Partial {
+		t.Fatalf("UA rule: %+v %v", c, ok)
+	}
+	if _, ok := Cover(rules, "asn", "AS4134", "example.com"); ok {
+		t.Fatal("disabled rule counted")
+	}
+	if c, ok := Cover(rules, "asn", "AS13335", "example.com"); !ok || c.Action != "skip" || c.Pos != 5 {
+		t.Fatalf("skip rule: %+v", c)
+	}
+	// A rule that does not look at the face's dimension says nothing.
+	if c, ok := Cover(rules[:1], "ua", "curl/8", "example.com"); ok {
+		t.Fatalf("path-only rule counted: %+v", c)
+	}
+	// One that looks at it but also depends on the path: partial.
+	pr := []RuleLite{{Action: "block", Enabled: true, Expr: `http.user_agent contains "curl" and http.request.uri.path eq "/api"`}}
+	if c, ok := Cover(pr, "ua", "curl/8", "example.com"); !ok || !c.Partial {
+		t.Fatalf("UA + path rule: %+v %v", c, ok)
+	}
+}

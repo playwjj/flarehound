@@ -2,6 +2,15 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.10.0 — 2026-11-18
+
+- **Snapshots of the WAF audit and the WAF rules.** Freeze the audit (with "How to fix") or the rule list (with plain-words explanations) into a revocable link for a site team — from the cached data, without forms or actions.
+- **Who may create snapshots is explicit**: `console.snapshots` = `admins` (default), `everyone` or `off`.
+- **Blocks get a verdict.** Every before/after now ends with one sentence — "requests 45,000 → 900 (−98 %), practically gone; the rule stopped 850 attempts", "still coming, but 95 % answered 403", or "no clear effect — check that the rule matches". The daily report lists the blocks made in its window with that verdict.
+- **Faces already handled by a rule are marked.** New faces, movers and the drill-down tag user agents and ASNs that an enabled custom rule acts on ("blocked by rule #3"; "rule #N may act on it" when it depends on the path), and new-face alerts say "already blocked by rule #3: this volume is blocked requests". Judged by evaluating the zone's rules; only rules that look at the face's dimension count. ASN signal keys are spelled one way (`AS150436`); state files with the bare-number spelling are merged on load.
+- **TOTP sign-in friendlier, not weaker.** Only failed attempts count against the per-address limit (successful sign-ins no longer do); wrong codes no longer lock the account — five end the pending sign-in (password again), and an account-wide limit of 20 wrong codes an hour stays. A code from the previous or next 30-second step was and is accepted (now covered by a test).
+- **Cross-zone home.** With several zones, `/` lists them all, most in need of attention first: an open alert episode, origin 5xx over its line, other lines over, new faces, recent alerts, stale data — from the archive and the watch's state, no Cloudflare query.
+
 ## v1.9.0 — 2026-11-18
 
 - **Settings in the console** (admins; review → TOTP → audit first): notification channels (on/off, non-secret parameters, the *names* of the environment variables holding their secrets), alert lines, known faces and network names. Kept in `settings.json` next to the state file, on top of `config.json` (unchanged, may stay read-only); every change keeps the previous version and can be restored, back to "config.json alone". No secret is ever stored.

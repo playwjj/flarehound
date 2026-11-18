@@ -12,12 +12,14 @@ import (
 	"log"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/playwjj/flarehound/internal/analyze"
 	"github.com/playwjj/flarehound/internal/block"
+	"github.com/playwjj/flarehound/internal/blockeffect"
 	"github.com/playwjj/flarehound/internal/calibrate"
 	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/config"
@@ -27,6 +29,7 @@ import (
 	"github.com/playwjj/flarehound/internal/state"
 	"github.com/playwjj/flarehound/internal/store"
 	"github.com/playwjj/flarehound/internal/suggest"
+	"github.com/playwjj/flarehound/internal/wafkit"
 )
 
 // API is the subset of the Cloudflare client the runner needs.
@@ -543,6 +546,7 @@ func (r *Runner) Intraday(ctx context.Context, zone config.Zone) error {
 	var attr analyze.Attribution
 	findings, attr.VerifiedBots, attr.Impostors = r.verifyBots(ctx, zone, w, findings)
 	attr.FaceHistory, attr.ArchiveDays = r.faceHistory(zone, findings)
+	attr.Covered = r.coverFaces(ctx, zone, findings)
 	findings, attr.Unsettled, err = r.settle(ctx, zone, w, &cur, findings)
 	if err != nil {
 		return err
@@ -695,6 +699,8 @@ func (r *Runner) Daily(ctx context.Context, zone config.Zone) error {
 	// Suggestions: the same engine as intraday, on the day's evidence.
 	// No per-IP data here, so rate-limit advice (which needs it) cannot fire.
 	attr := analyze.Attribution{CacheCur: cacheCur, CacheBase: cacheBase, DynamicPaths: d.DynamicPaths}
+	attr.Covered = r.coverFaces(ctx, zone, d.Findings)
+	d.Covered = attr.Covered
 	if len(d.Findings) > 0 && caps.HasDim("clientASNDescription") {
 		attr.ASNNames, err = r.API.ASNNames(ctx, z, w.From, w.To, currentTop)
 		r.saveASNNames(z, attr.ASNNames)
@@ -749,6 +755,7 @@ func (r *Runner) Daily(ctx context.Context, zone config.Zone) error {
 				d.Blocks = append(d.Blocks, bs)
 			}
 		}
+		d.BlockEffects = r.blockEffects(ctx, zone, w.From, w.To)
 		if st, err := r.Store.Stats(z); err == nil {
 			d.Archive = &report.ArchiveInfo{Hours: st.Hours, Days: st.Days, Oldest: st.Oldest}
 			if samples, err := r.Store.SameHour(z, w.To.Add(-time.Hour), w.To, analyze.LongBaselineDays); err == nil {
@@ -993,4 +1000,72 @@ func (r *Runner) saveASNNames(zone string, names map[int]string) {
 	if err := r.Store.PutASNNames(names, r.now()); err != nil {
 		log.Printf("archive asn names: %v", err)
 	}
+}
+
+// coverFaces notes the new faces an enabled custom rule already acts on
+// ("blocked by rule #3"): their volume is blocked traffic, not new load.
+// One ruleset read, only when there are new faces and the audit can run.
+func (r *Runner) coverFaces(ctx context.Context, zone config.Zone, fs []analyze.Finding) map[string]analyze.RuleCover {
+	var faces []analyze.Finding
+	for _, f := range fs {
+		if f.Rule == analyze.RuleNewFaceASN || f.Rule == analyze.RuleNewFaceUA {
+			faces = append(faces, f)
+		}
+	}
+	if len(faces) == 0 || !r.auditEnabled() {
+		return nil
+	}
+	rs, err := r.readRuleset(ctx, zone)
+	if err != nil {
+		return nil // best effort: the alert goes out without the note
+	}
+	rules := make([]wafkit.RuleLite, 0, len(rs.Rules))
+	for _, x := range rs.Rules {
+		rules = append(rules, wafkit.RuleLite{Action: x.Action, Expr: x.Expression, Desc: x.Description, Enabled: x.Enabled})
+	}
+	out := map[string]analyze.RuleCover{}
+	for _, f := range faces {
+		dim, name := "ua", f.Subject
+		if f.Rule == analyze.RuleNewFaceASN {
+			dim = "asn"
+			if f.ASN > 0 {
+				name = strconv.Itoa(f.ASN)
+			}
+		}
+		if c, ok := wafkit.Cover(rules, dim, name, zone.Name); ok {
+			out[f.Key()+"|"+f.Subject] = c
+		}
+	}
+	return out
+}
+
+// blockEffects compares each block made in [from, to) — whose hour after
+// has settled — before and after, in one sentence each.
+func (r *Runner) blockEffects(ctx context.Context, zone config.Zone, from, to time.Time) []report.BlockEffectLine {
+	if r.Store == nil {
+		return nil
+	}
+	evs, err := r.Store.BlockEventsBetween(zone.ZoneID, from, to, 50)
+	if err != nil {
+		log.Printf("zone %s: block effects: %v", zone.Name, err)
+		return nil
+	}
+	labels := r.Cfg.ASNLabels()
+	var out []report.BlockEffectLine
+	for i := len(evs) - 1; i >= 0; i-- { // oldest first
+		ev := evs[i]
+		if ev.Op != "block" {
+			continue
+		}
+		e := blockeffect.Compute(ctx, r.API, zone.ZoneID, ev, r.now(), r.Cfg.IntradayOffset())
+		_, v := e.Verdict(r.Cfg.Report.Language)
+		target := block.Target{Type: block.Type(ev.Type), Value: ev.Value}.String()
+		if ev.Type == string(block.ASN) {
+			if n, err := strconv.Atoi(ev.Value); err == nil && labels[n] != "" {
+				target += " (" + labels[n] + ")"
+			}
+		}
+		out = append(out, report.BlockEffectLine{Target: target, Action: ev.Action, At: ev.At, Verdict: v})
+	}
+	return out
 }

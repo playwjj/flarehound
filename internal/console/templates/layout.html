@@ -60,7 +60,7 @@
 </html>
 {{end}}
 
-{{define "snapform"}}{{if and (not .Snapshot) .SnapView}}
+{{define "snapform"}}{{if and (not .Snapshot) .SnapView .CanSnap}}
 <form class="inline snapform" method="post" action="/snapshots/create">
   <input type="hidden" name="csrf" value="{{.Req.CSRF}}"><input type="hidden" name="view" value="{{.SnapView}}"><input type="hidden" name="params" value="{{.SnapParams}}">
   <select name="ttl"><option value="24h">24 h</option><option value="7d" selected>7 {{t "days"}}</option><option value="30d">30 {{t "days"}}</option></select>

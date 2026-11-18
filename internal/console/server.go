@@ -99,6 +99,10 @@ type Server struct {
 	setupToken string
 
 	limiter *limiter
+	// TOTP failures: per account (a slow brute force from many addresses)
+	// and per pending sign-in (wrong codes end it: the password again).
+	totpAcct *limiter
+	totpSess *limiter
 
 	auditMu    sync.Mutex
 	auditCache map[string]auditEntry
@@ -135,7 +139,7 @@ type auditEntry struct {
 // a one-time setup token (returned) for the first-admin page.
 func New(cfg *config.Config, db *DB, arch Archive, auditor Auditor, version string) (*Server, string, error) {
 	s := &Server{Cfg: cfg, DB: db, Archive: arch, Auditor: auditor, Version: version, Now: time.Now,
-		trusted: cfg.TrustedProxies(), defLang: lang(cfg.Report.Language), limiter: newLimiter(10, time.Minute),
+		trusted: cfg.TrustedProxies(), defLang: lang(cfg.Report.Language), limiter: newLimiter(10, time.Minute), totpAcct: newLimiter(20, time.Hour), totpSess: newLimiter(5, preMFATTL),
 		auditCache: map[string]auditEntry{}, attemptsCache: map[string]attemptsEntry{}, attemptsBusy: map[string]bool{},
 		liveCache: map[string]*liveEntry{}, drillCache: map[string]*drillEntry{}, rulesCache: map[string]rulesEntry{}}
 	s.OAuth = builtinProviders(cfg.Console)
@@ -263,7 +267,14 @@ func (s *Server) Handler() http.Handler {
 	// Signed in.
 	user := func(h http.HandlerFunc) http.Handler { return s.requireUser(h, false) }
 	admin := func(h http.HandlerFunc) http.Handler { return s.requireUser(h, true) }
-	mux.Handle("GET /{$}", user(s.viewPage(viewOverview)))
+	mux.Handle("GET /{$}", user(func(w http.ResponseWriter, r *http.Request) {
+		// Several zones and none chosen: the cross-zone home.
+		if len(s.Cfg.Cloudflare.Zones) > 1 && r.URL.Query().Get("z") == "" {
+			s.attentionPage(w, r)
+			return
+		}
+		s.viewPage(viewOverview)(w, r)
+	}))
 	mux.Handle("GET /movers", user(s.viewPage(viewMovers)))
 	mux.Handle("GET /faces", user(s.facesPage))
 	mux.Handle("GET /movers/drill", user(s.drillPage))
@@ -529,6 +540,19 @@ type bucket struct {
 
 func newLimiter(max int, window time.Duration) *limiter {
 	return &limiter{max: max, window: window, hits: map[string]*bucket{}}
+}
+
+// blocked reports whether key is over its limit, without counting.
+func (l *limiter) blocked(key string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	b := l.hits[key]
+	return b != nil && now.Sub(b.start) <= l.window && b.n >= l.max
+}
+
+// fail counts one failed attempt.
+func (l *limiter) fail(key string, now time.Time) {
+	l.allow(key, now)
 }
 
 // allow counts one attempt and reports whether it is within the limit.

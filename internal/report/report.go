@@ -160,7 +160,7 @@ func (l lang) short(f analyze.Finding) string {
 // findingLine is a finding for the "lines crossed" list: the finding,
 // what a new ASN is (name and network type, so nobody looks it up by
 // hand), and — once calibrated — what its count means in dashboard terms.
-func (l lang) findingLine(f analyze.Finding, ratio float64, names, labels map[int]string) string {
+func (l lang) findingLine(f analyze.Finding, ratio float64, names, labels map[int]string, covered map[string]analyze.RuleCover) string {
 	s := l.finding(f)
 	if f.Rule == analyze.RuleNewFaceASN && f.ASN > 0 {
 		name := names[f.ASN]
@@ -177,6 +177,9 @@ func (l lang) findingLine(f analyze.Finding, ratio float64, names, labels map[in
 			kind = clip(shown, 40) + l.t(", ", "，") + kind
 		}
 		s += fmt.Sprintf(l.t(" [%s]", "【%s】"), kind)
+	}
+	if c, ok := covered[f.Key()+"|"+f.Subject]; ok {
+		s += l.coverNote(c)
 	}
 	if ratio > 0 && f.Rule != analyze.RuleCPUUp && f.Rule != analyze.RuleOrigin5xx && f.Cur > 0 {
 		s += fmt.Sprintf(l.t(" (≈ %s in dashboard terms)", "（≈ 面板 %s 次）"), n(int64(f.Cur/ratio)))
@@ -342,7 +345,7 @@ func Intraday(language string, d IntradayData) string {
 
 	b.WriteString(l.t("Lines crossed:\n", "越线：\n"))
 	for _, f := range d.Findings {
-		fmt.Fprintf(&b, "- %s\n", l.findingLine(f, d.DashRatio, d.Attr.ASNNames, d.Attr.ASNLabels))
+		fmt.Fprintf(&b, "- %s\n", l.findingLine(f, d.DashRatio, d.Attr.ASNNames, d.Attr.ASNLabels, d.Attr.Covered))
 	}
 	b.WriteString("\n")
 	l.twoWindows(&b, d.Cur, d.Base, l.t("vs same hour yesterday", "对比昨日同时段"))
@@ -480,6 +483,13 @@ type ArtifactCount struct {
 	Count int64
 }
 
+// BlockEffectLine is a block made in the report window, with what it did.
+type BlockEffectLine struct {
+	Target, Action string
+	At             time.Time
+	Verdict        string
+}
+
 // BlockStatus is one active FlareHound block for the daily checkpoint.
 type BlockStatus struct {
 	Target     string
@@ -520,7 +530,9 @@ type DailyData struct {
 	Calibration       *calibrate.Summary
 	ASNNames          map[int]string
 	ASNLabels         map[int]string // operator's short names
+	Covered           map[string]analyze.RuleCover
 	Blocks            []BlockStatus
+	BlockEffects      []BlockEffectLine // blocks made in the window, before / after
 	ActiveSince       time.Time
 	ActiveFingerprint string
 	Gaps              []string
@@ -533,6 +545,13 @@ func Daily(language string, d DailyData) string {
 	fmt.Fprintf(&b, l.t("FlareHound daily · %s\n", "FlareHound 日报 · %s\n"), d.Zone)
 
 	var warn []string
+	if len(d.BlockEffects) > 0 {
+		b.WriteString(l.t("- Blocks made in the window and what they did (the hour before vs the hour after):\n",
+			"- 窗口内新增封禁及效果（封前一小时 vs 封后一小时）：\n"))
+		for _, x := range d.BlockEffects {
+			fmt.Fprintf(&b, l.t("  %s (%s, %s): %s\n", "  %s（%s，%s）：%s\n"), x.Target, x.Action, x.At.In(locOr(d.Loc)).Format("01-02 15:04"), x.Verdict)
+		}
+	}
 	for _, c := range d.Checkpoints {
 		if c.OriginReach > c.Max {
 			warn = append(warn, c.Label)
@@ -560,7 +579,7 @@ func Daily(language string, d DailyData) string {
 			ratio = d.Calibration.Requests
 		}
 		for _, f := range d.Findings {
-			fmt.Fprintf(&b, "- %s\n", l.findingLine(f, ratio, d.ASNNames, d.ASNLabels))
+			fmt.Fprintf(&b, "- %s\n", l.findingLine(f, ratio, d.ASNNames, d.ASNLabels, d.Covered))
 		}
 	}
 
@@ -705,4 +724,21 @@ func (l lang) faces(b *strings.Builder, title string, cur, base []cfapi.Face, ua
 		}
 		fmt.Fprintf(b, "- %s %s%s\n", name, n(f.Count), tag)
 	}
+}
+
+// coverNote says a rule already acts on a new face.
+func (l lang) coverNote(c analyze.RuleCover) string {
+	desc := l.t("", " ") // Chinese: a space between "#3" and the verb when there is no name
+	if c.Desc != "" {
+		desc = fmt.Sprintf(l.t(" %q", "「%s」"), clip(c.Desc, 40))
+	}
+	switch {
+	case c.Action == "skip":
+		return fmt.Sprintf(l.t(" — let through by skip rule #%d%s", "——被放行规则 #%d%s放过"), c.Pos, desc)
+	case c.Partial:
+		return fmt.Sprintf(l.t(" — rule #%d%s may act on it, depending on other conditions", "——规则 #%d%s视其他条件可能拦截"), c.Pos, desc)
+	case c.Action == "block":
+		return fmt.Sprintf(l.t(" — already blocked by rule #%d%s: this volume is blocked requests", "——已被规则 #%d%s拦截：此量为被拦下的请求"), c.Pos, desc)
+	}
+	return fmt.Sprintf(l.t(" — already challenged by rule #%d%s: this volume includes challenged requests", "——已被规则 #%d%s质询：此量包含被质询的请求"), c.Pos, desc)
 }

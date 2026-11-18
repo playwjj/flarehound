@@ -165,6 +165,7 @@
 <p><span class="mono">{{.Effect.Target}}</span> · {{.Event.Action}} · {{when .Effect.At}} · #{{.Event.ID}}</p>
 {{with .Effect}}
 {{if .Err}}<div class="banner warn">{{t "effect_err"}} {{.Err}}</div>{{end}}
+<p class="verdict v-{{verdictKind .}}"><b>{{verdict .}}</b></p>
 {{if not .Settled}}<div class="banner info">{{t "effect_partial"}}</div>{{end}}
 <table class="list">
 <thead><tr><th></th><th class="r">{{t "before_1h"}}</th><th class="r">{{t "after_1h"}}</th></tr></thead>

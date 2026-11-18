@@ -12,6 +12,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/playwjj/flarehound/internal/analyze"
@@ -61,7 +63,42 @@ func Load(path string) (*State, error) {
 	if err := json.Unmarshal(raw, &st); err != nil {
 		return nil, err
 	}
+	st.canonical()
 	return &st, nil
+}
+
+// canonical migrates signal keys to one spelling (AS150436, not 150436),
+// merging duplicates (the higher peak wins).
+func (st *State) canonical() {
+	if len(st.Keys) > 0 {
+		keys := map[string]bool{}
+		for k, v := range st.Keys {
+			keys[analyze.CanonicalKey(k)] = keys[analyze.CanonicalKey(k)] || v
+		}
+		st.Keys = keys
+	}
+	if len(st.Peak) > 0 {
+		peak := map[string]float64{}
+		for k, v := range st.Peak {
+			ck := analyze.CanonicalKey(k)
+			if v > peak[ck] {
+				peak[ck] = v
+			}
+		}
+		st.Peak = peak
+	}
+	if st.Fingerprint != "" {
+		seen := map[string]bool{}
+		var parts []string
+		for _, p := range strings.Split(st.Fingerprint, ",") {
+			if ck := analyze.CanonicalKey(p); !seen[ck] {
+				seen[ck] = true
+				parts = append(parts, ck)
+			}
+		}
+		sort.Strings(parts)
+		st.Fingerprint = strings.Join(parts, ",")
+	}
 }
 
 // Save writes atomically (temp file + rename) so a crash mid-write never

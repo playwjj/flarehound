@@ -45,7 +45,7 @@
 <thead><tr><th>{{t "name"}}</th><th class="r">{{t "current"}}</th><th class="r">{{t "baseline"}}</th><th class="r">{{t "change"}}</th></tr></thead>
 <tbody>
 {{range $rows}}<tr>
-  <td class="name">{{if or $w.Snap (not (drillable $w.Dim .Name))}}<span class="mono" title="{{.Name}}">{{short .Name 80}}</span>{{else}}<a class="mono" title="{{.Name}}" href="/movers/drill?z={{$w.ZoneName}}&amp;dim={{$w.Dim}}&amp;name={{.Name}}">{{short .Name 80}}</a>{{end}}{{if eq $w.Dim "asn"}}{{template "asninfo" (list .Name $w.Known $w.Here)}}{{end}}{{if .Known}} <span class="tag">{{t "known"}}</span>{{else}}{{template "knownbtn" (list $w.Dim .Name $w.CSRF $w.Known $w.Here)}}{{end}}{{template "blocklink" (list $w.Dim .Name $w.ZoneName $w.Reason $w.Can)}}</td>
+  <td class="name">{{if or $w.Snap (not (drillable $w.Dim .Name))}}<span class="mono" title="{{.Name}}">{{short .Name 80}}</span>{{else}}<a class="mono" title="{{.Name}}" href="/movers/drill?z={{$w.ZoneName}}&amp;dim={{$w.Dim}}&amp;name={{.Name}}">{{short .Name 80}}</a>{{end}}{{if eq $w.Dim "asn"}}{{template "asninfo" (list .Name $w.Known $w.Here)}}{{end}}{{if not $w.Snap}}{{template "cover" (list $w.ZoneName $w.Dim .Name)}}{{end}}{{if .Known}} <span class="tag">{{t "known"}}</span>{{else}}{{template "knownbtn" (list $w.Dim .Name $w.CSRF $w.Known $w.Here)}}{{end}}{{template "blocklink" (list $w.Dim .Name $w.ZoneName $w.Reason $w.Can)}}</td>
   <td class="r">{{if .CurCapped}}&lt; {{end}}{{num .Cur}}</td>
   <td class="r">{{if .BaseCapped}}&lt; {{end}}{{num .Base}}</td>
   <td class="r"><b>{{if or .BaseCapped .CurCapped}}≈{{end}}{{delta .Delta}}</b>{{if .HasPct}}<br><small class="muted">{{pct .Pct}}</small>{{end}}</td>
@@ -90,7 +90,7 @@
 <table class="list">
 <thead><tr><th>{{t "name"}}</th><th>{{t "first_seen"}}</th><th class="r">{{t "now"}}</th><th class="r">{{t "peak"}}</th></tr></thead>
 <tbody>{{range .Faces}}<tr>
-  <td class="name">{{if drillable .Dim .Name}}<a class="mono" title="{{.Name}}" href="/movers/drill?z={{$.Zone.Name}}&amp;dim={{.Dim}}&amp;name={{.Name}}">{{short .Name 80}}</a>{{else}}<span class="mono" title="{{.Name}}">{{short .Name 80}}</span>{{end}}{{if eq .Dim "asn"}}{{template "asninfo" (list .Name $.CanSettings $.Here)}}{{end}}{{if .Known}} <span class="tag">{{t "known"}}</span>{{else}}{{template "knownbtn" (list .Dim .Name $.Req.CSRF $.CanSettings $.Here)}}{{end}}{{template "blocklink" (list .Dim .Name $.Zone.Name "new face" $.CanWrite)}}</td>
+  <td class="name">{{if drillable .Dim .Name}}<a class="mono" title="{{.Name}}" href="/movers/drill?z={{$.Zone.Name}}&amp;dim={{.Dim}}&amp;name={{.Name}}">{{short .Name 80}}</a>{{else}}<span class="mono" title="{{.Name}}">{{short .Name 80}}</span>{{end}}{{if eq .Dim "asn"}}{{template "asninfo" (list .Name $.CanSettings $.Here)}}{{end}}{{template "cover" (list $.Zone.Name .Dim .Name)}}{{if .Known}} <span class="tag">{{t "known"}}</span>{{else}}{{template "knownbtn" (list .Dim .Name $.Req.CSRF $.CanSettings $.Here)}}{{end}}{{template "blocklink" (list .Dim .Name $.Zone.Name "new face" $.CanWrite)}}</td>
   <td>{{when .FirstSeen}}<br><small class="muted">{{ago .FirstSeen}}</small></td>
   <td class="r">{{if .InCur}}{{num .Cur}}{{else}}<span class="muted">{{t "not_in_top"}}</span>{{end}}</td>
   <td class="r">{{num .MaxCount}}<br><small class="muted">{{t "last_seen"}} {{ago .LastSeen}}</small></td>
@@ -140,7 +140,8 @@
 <details><summary>{{t "full_report"}}</summary><pre class="report">{{.Text}}</pre></details>{{end}}
 <p class="meta">{{tf "audit_cached" (when .At)}}</p>
 {{end}}
-<form method="post" action="/audit/run"><input type="hidden" name="csrf" value="{{.Req.CSRF}}"><input type="hidden" name="z" value="{{.Zone.Name}}"><button>{{t "audit_run"}}</button></form>
+{{if not .Snapshot}}<form method="post" action="/audit/run"><input type="hidden" name="csrf" value="{{.Req.CSRF}}"><input type="hidden" name="z" value="{{.Zone.Name}}"><button>{{t "audit_run"}}</button></form>{{end}}
+{{template "snapform" .}}
 </section>
 {{template "foot" .}}{{end}}
 
@@ -276,6 +277,7 @@
 <section class="card">
 <h1><span class="muted">{{t (print "dim_" .Dim)}}</span> <span class="mono wrapname">{{.Name}}</span></h1>
 {{if eq .Dim "asn"}}<p>{{template "asninfo" (list .Name $.CanSettings $.Here)}}</p>{{end}}
+<p>{{template "cover" (list $z.Name .Dim .Name)}}</p>
 {{template "blocklink" (list .Dim .Name $z.Name "drill-down" $can)}} {{template "knownbtn" (list .Dim .Name $.Req.CSRF $.CanSettings $.Here)}}
 {{if .Err}}<div class="banner err">{{.Err}}</div>{{else}}
 <dl class="kv">
@@ -301,4 +303,26 @@
 <p class="note">{{t "drill_note"}}</p>
 {{else}}<section class="card"><p>{{.Err}}</p></section>{{end}}
 <p><a href="/movers?z={{zq .Zone}}&amp;dim={{.Dim}}">← {{t "nav_movers"}}</a></p>
+{{template "foot" .}}{{end}}
+
+{{define "attention"}}{{template "head" .}}
+<section class="card"><h1>{{t "attention_title"}}</h1><p class="note">{{t "attention_note"}}</p></section>
+{{range .Attention}}
+<section class="card zonecard{{if .Open}} z-open{{else if .OverLines}} z-over{{end}}">
+  <h2><a href="/?z={{zq .Zone}}">{{.Zone.Name}}</a>{{if .HasBase}} <small class="muted">{{t "m_total"}} {{pct .TotalPct}}</small>{{end}}</h2>
+  <p class="chips">
+    {{if .Open}}<span class="chip c-alert">{{tf "att_open" (when .OpenSince)}}</span>{{end}}
+    {{if .Origin5xx}}<span class="chip c-alert">{{t "att_5xx"}}</span>{{end}}
+    {{if .OverLines}}<span class="chip c-alert">{{tf "att_over" .OverLines}}</span>{{end}}
+    {{if .Watching}}<span class="chip c-watch">{{tf "att_watch" .Watching}}</span>{{end}}
+    {{if .NewFaces}}<a class="chip c-info" href="/faces?z={{zq .Zone}}&amp;days=1">{{tf "att_faces" .NewFaces}}</a>{{end}}
+    {{if .Alerts24h}}<span class="chip">{{tf "att_alerts" .Alerts24h}}</span>{{end}}
+    {{if .Blocks}}<a class="chip" href="/blocks?z={{zq .Zone}}">{{tf "att_blocks" .Blocks}}</a>{{end}}
+    {{if .NoData}}<span class="chip c-watch">{{t "att_nodata"}}</span>{{else if .Stale}}<span class="chip c-watch">{{t "att_stale"}}</span>{{end}}
+    {{if not (or .Open .Origin5xx .OverLines .Watching .NewFaces .Alerts24h .NoData .Stale)}}<span class="chip c-ok">{{t "att_quiet"}}</span>{{end}}
+  </p>
+  {{if .OpenKeys}}<p class="meta mono">{{join .OpenKeys}}</p>{{end}}
+  {{if not .Window.IsZero}}<p class="meta">{{t "window"}} → {{when .Window}}</p>{{end}}
+</section>
+{{end}}
 {{template "foot" .}}{{end}}

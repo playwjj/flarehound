@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/playwjj/flarehound/internal/analyze"
 	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/config"
 	"github.com/playwjj/flarehound/internal/ruleexec"
@@ -179,7 +180,8 @@ func (s *Server) rulesPage(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
 	defer cancel()
 	v := s.cachedRules(ctx, z, r.URL.Query().Get("phase"), r.URL.Query().Get("fresh") == "1")
-	p := page{Title: s.L(r).t("nav_rules"), Zone: z, Nav: "rules", Rules: &v, Flash: r.URL.Query().Get("ok"), CanRules: s.canEditRules(r)}
+	p := page{Title: s.L(r).t("nav_rules"), Zone: z, Nav: "rules", Rules: &v, Flash: r.URL.Query().Get("ok"), CanRules: s.canEditRules(r),
+		SnapView: viewRules, SnapParams: url.Values{"z": {z.Name}, "phase": {v.Phase}}.Encode()}
 	if p.CanRules {
 		p.Backups, _ = s.Store.RuleBackups(z.ZoneID, "", 20)
 	}
@@ -424,4 +426,35 @@ func (s *Server) ruleApply(w http.ResponseWriter, r *http.Request) {
 	s.audit(r, "rule_applied", o.Op+" "+target, fmt.Sprintf("%s; backup #%d", res.Detail, res.BackupID))
 	msg := fmt.Sprintf(s.L(r).t("rule_done"), res.BackupID)
 	http.Redirect(w, r, "/rules?z="+url.QueryEscape(o.Zone.Name)+"&phase="+o.Phase+"&ok="+url.QueryEscape(msg), http.StatusSeeOther)
+}
+
+// coverOf reports the custom rule that already acts on a face (from the
+// cached rules; nil when none, or when the rules cannot be read).
+func (s *Server) coverOf(zoneName, dim, name string) *analyze.RuleCover {
+	if (dim != DimUA && dim != DimASN) || (s.RulesRead == nil && s.RulesWrite == nil) {
+		return nil
+	}
+	var z *config.Zone
+	for i := range s.Cfg.Cloudflare.Zones {
+		if s.Cfg.Cloudflare.Zones[i].Name == zoneName || s.Cfg.Cloudflare.Zones[i].ZoneID == zoneName {
+			z = &s.Cfg.Cloudflare.Zones[i]
+		}
+	}
+	if z == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	v := s.cachedRules(ctx, *z, "custom", false)
+	if v.Err != "" {
+		return nil
+	}
+	rules := make([]wafkit.RuleLite, 0, len(v.Rules))
+	for _, r := range v.Rules {
+		rules = append(rules, wafkit.RuleLite{Action: r.Action, Expr: r.Expr, Desc: r.Desc, Enabled: r.Enabled})
+	}
+	if c, ok := wafkit.Cover(rules, dim, name, z.Name); ok {
+		return &c
+	}
+	return nil
 }

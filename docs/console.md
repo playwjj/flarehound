@@ -48,6 +48,7 @@ With `base_url` set, alerts link to the movers view, recoveries and daily report
 
 | Page | What it answers |
 |---|---|
+| **All zones** | With several zones, the home page lists them most-in-need first: an open alert episode, origin 5xx over the line, other lines over, new faces in 24 h, recent alerts, stale data. Click a zone for its overview. |
 | **Overview** | **The last 60 minutes, live**: queried from Cloudflare with the watch's own queries (at most once a minute), ending a few minutes ago for ingestion lag and marked *not settled*, against the 28-day baseline blended from the two clock hours it spans. Below it, the newest settled hour from the archive. Each line shows its change, its alert line and a status (normal / watch / over the line); 48-hour chart with the baseline. If the live query fails, the settled hour is shown with a note. |
 | **Movers** | Who is up, who is down: user agents, ASNs and uncached paths ranked by absolute change against the baseline. Tap an entry to **drill down**: its paths, status codes, cache status and the other dimension (ASNs of a user agent, user agents of an ASN), now and in the same hour yesterday, each part drillable in turn. |
 | **New faces** | User agents, ASNs and paths first seen in the last 24 h / 7 / 30 days, with their current volume. Entries in `known_faces` are marked. |
@@ -56,6 +57,8 @@ With `base_url` set, alerts link to the movers view, recoveries and daily report
 | **Blocks** | With the write token: the blocks as Cloudflare holds them, joined with the audit log, attempts since each block, expiry, the rule quota and whether `flarehound enforce` is running; unblock, change expiry, undo, before/after. Without it: the audit log's view. |
 
 Apart from the live hour and the drill-down, all numbers come from settled hourly windows in the archive — the same windows, queries and baseline the alerts use. The live hour uses the same queries on a rolling window; the drill-down queries Cloudflare live (it keeps about 31 days) and caches each breakdown for 10 minutes.
+
+User agents and ASNs that an enabled custom rule already acts on are tagged ("blocked by rule #3", or "rule #N may act on it" when the rule also depends on the path): their volume includes the requests that rule stopped.
 
 ### Reading the movers
 
@@ -79,7 +82,7 @@ The same steps apply to **unblock** and to **change expiry** (+24 h, +7 days, +3
 
 **Undo** is on every record of the block log: it opens the review of the inverse change — unblock a block, re-block an unblock (prefilled form), restore the previous expiry — and goes through the same confirmation. Only a target's newest record can be undone.
 
-**Before / after**: for every block, the console compares the hour before with the hour after it took effect — the target's requests and share of the zone, its status codes (blocked requests are still counted, as 403), the zone total, and the rule's attempts. It is computed automatically once that hour has settled (a partial comparison is shown before) and the block is marked on the history timeline.
+**Before / after**: every comparison ends with a one-sentence verdict ("requests 45,000 → 900 (−98 %), practically gone", "still coming, but 95 % answered 403", "no clear effect — check that the rule matches"); the daily report lists the day's new blocks with theirs. For every block, the console compares the hour before with the hour after it took effect — the target's requests and share of the zone, its status codes (blocked requests are still counted, as 403), the zone total, and the rule's attempts. It is computed automatically once that hour has settled (a partial comparison is shown before) and the block is marked on the history timeline.
 
 **Expiry** stays the job of `flarehound enforce` (CLI, or the `admin` service in docker-compose). The blocks page shows when it last ran and warns when blocks have an expiry but the enforcer is not running.
 
@@ -103,7 +106,7 @@ The **WAF audit** page puts **How to fix** first — each finding with what to d
 
 ## Read-only snapshots
 
-Overview, movers and history have a **Snapshot** button. It freezes the view into one self-contained HTML page — stylesheet inlined, no script, no external resource, no account data or tokens — and gives you a share link that works **without sign-in** for 24 hours, 7 or 30 days. Use it for incident reviews and to show the situation to a site team or partner without giving them an account.
+Overview, movers, history, the **WAF audit** and the **WAF rules** have a **Snapshot** button (who may use it: `console.snapshots` — admins by default, or everyone, or nobody). It freezes the view into one self-contained HTML page — stylesheet inlined, no script, no external resource, no account data or tokens — and gives you a share link that works **without sign-in** for 24 hours, 7 or 30 days. Use it for incident reviews and to show the situation to a site team or partner without giving them an account.
 
 The **Snapshots** page lists them (admins see all, others their own): download the HTML file, or revoke the link at any time. Creating and revoking are recorded in the account audit log. Shared pages are served with `noindex` and a strict Content-Security-Policy.
 

@@ -197,3 +197,21 @@ ul.known li { margin-bottom: .3rem; }
 .net { border-radius: 4px; padding: 0 .3rem; }
 .net-hosting { background: var(--alert-bg); color: var(--fg); }
 .net-eyeball { background: var(--ok-bg); color: var(--fg); }
+
+.tag.cover { color: var(--ok); border-color: var(--ok); }
+.tag.cover.partial { color: var(--watch); border-color: var(--watch); }
+
+p.verdict { padding: .6rem .8rem; border-radius: 8px; background: var(--bg); }
+p.v-gone, p.v-down, p.v-stopped { background: var(--ok-bg); }
+p.v-unclear { background: var(--watch-bg); }
+
+/* cross-zone home */
+.zonecard h2 a { color: var(--fg); }
+.zonecard.z-open { border-left: 4px solid var(--alert); }
+.zonecard.z-over { border-left: 4px solid var(--watch); }
+p.chips { display: flex; flex-wrap: wrap; gap: .35rem; margin: .3rem 0; }
+.chip { font-size: .8rem; border: 1px solid var(--line); border-radius: 999px; padding: .1rem .55rem; color: var(--fg); }
+.chip.c-alert { background: var(--alert-bg); border-color: transparent; }
+.chip.c-watch { background: var(--watch-bg); border-color: transparent; }
+.chip.c-info { background: var(--info-bg); border-color: transparent; }
+.chip.c-ok { background: var(--ok-bg); border-color: transparent; }

@@ -1,7 +1,7 @@
 {{define "rules"}}{{template "head" .}}
 {{$z := .Zone}}{{$rq := .Req}}{{$can := .CanRules}}
 {{with .Rules}}{{$ph := .Phase}}
-<nav class="seg">
+<nav class="seg{{if $.Snapshot}} hide{{end}}">
   <a href="/rules?z={{zq $z}}&amp;phase=custom"{{if eq $ph "custom"}} class="on"{{end}}>{{t "phase_custom"}}</a>
   <a href="/rules?z={{zq $z}}&amp;phase=ratelimit"{{if eq $ph "ratelimit"}} class="on"{{end}}>{{t "phase_ratelimit"}}</a>
 </nav>
@@ -37,7 +37,8 @@
   <td>{{template "rop" (list "restore" (print .ID) (phaseShort .Phase) $z.Name $rq.CSRF "rule_restore")}}</td>
 </tr>{{end}}</tbody></table>
 </section>{{end}}
-<p class="note">{{t "rules_help"}} <a href="/rules/recipes?z={{zq .Zone}}">{{t "recipes_title"}}</a> · <a href="/audit?z={{zq .Zone}}">{{t "nav_audit"}}</a></p>
+{{if not .Snapshot}}<p class="note">{{t "rules_help"}} <a href="/rules/recipes?z={{zq .Zone}}">{{t "recipes_title"}}</a> · <a href="/audit?z={{zq .Zone}}">{{t "nav_audit"}}</a></p>{{end}}
+{{template "snapform" .}}
 {{template "foot" .}}{{end}}
 
 {{define "rop"}}<form method="post" action="/rules/review" class="op"><input type="hidden" name="csrf" value="{{index . 4}}"><input type="hidden" name="op" value="{{index . 0}}"><input type="hidden" name="sel" value="{{index . 1}}"><input type="hidden" name="phase" value="{{index . 2}}"><input type="hidden" name="z" value="{{index . 3}}"><button class="small">{{t (index . 5)}}</button></form>{{end}}

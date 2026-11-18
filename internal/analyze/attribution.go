@@ -31,6 +31,9 @@ type Attribution struct {
 	// console): shown instead of the registered name; the network type is
 	// still judged from the registered one.
 	ASNLabels map[int]string `json:"asn_labels,omitempty"`
+	// Covered notes new faces an enabled custom rule already acts on
+	// (finding key → the rule): their volume is (partly) blocked traffic.
+	Covered map[string]RuleCover `json:"covered,omitempty"`
 	// FaceHistory is the archive's memory of each new face (finding
 	// Subject): when it was first and last seen in any Top list. A face
 	// absent from the map has never been seen before.
@@ -309,4 +312,12 @@ func Block(cur, base Metrics, a Attribution, protect Protector) BlockAdvice {
 		adv.Dispersed = true
 	}
 	return adv
+}
+
+// RuleCover is a custom rule that acts on a face.
+type RuleCover struct {
+	Pos     int    `json:"pos"`     // 1-based position in the ruleset
+	Action  string `json:"action"`  // block, managed_challenge, skip …
+	Desc    string `json:"desc"`    // rule description
+	Partial bool   `json:"partial"` // depends on other conditions (path, host …)
 }

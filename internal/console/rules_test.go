@@ -295,3 +295,71 @@ func TestRulesReadOnlyAndAuditFixes(t *testing.T) {
 }
 
 var regexpVersion = regexp.MustCompile(`name="version" value="([^"]*)"`)
+
+func TestAuditAndRulesSnapshotsAndPolicy(t *testing.T) {
+	e, _ := rulesEnv(t, true)
+	e.srv.Auditor = func(_ context.Context, z config.Zone) (report.AuditData, error) {
+		ua := cfapi.Rule{ID: "u", Action: "skip", Expression: `http.user_agent contains "Googlebot"`, Description: "let google in", Enabled: true,
+			ActionParameters: &cfapi.ActionParameters{Ruleset: "current"}}
+		return report.AuditData{Zone: z.Name, Result: waf.Audit(waf.Input{Rules: []cfapi.Rule{ua}, Hosts: []string{z.Name},
+			Sensitive: []waf.Path{{Name: "login", Pattern: "/login*"}}})}, nil
+	}
+	c := e.admin
+	snap := func(cl *client, page, view, params string) (int, string) {
+		_, body, _ := cl.do("GET", page, nil, nil)
+		if !strings.Contains(body, `action="/snapshots/create"`) {
+			return 0, ""
+		}
+		code, body, _ := cl.do("POST", "/snapshots/create", url.Values{"csrf": {csrfOf(t, body)}, "view": {view}, "params": {params}, "ttl": {"24h"}}, nil)
+		link := regexp.MustCompile(`http://[^<\s]+/s/[A-Za-z0-9_-]+`).FindString(body)
+		if link == "" {
+			return code, ""
+		}
+		_, out, _ := newClient(t, e.ts.URL).do("GET", strings.TrimPrefix(link, e.ts.URL), nil, nil)
+		return code, out
+	}
+	_, audit := snap(c, "/audit", "audit", "z=example.com")
+	if !strings.Contains(audit, "How to fix") || strings.Contains(audit, "<form") || strings.Contains(audit, "csrf") {
+		t.Fatal("audit snapshot: missing fixes, or forms leaked")
+	}
+	_, rules := snap(c, "/rules", "rules", "z=example.com&phase=custom")
+	if !strings.Contains(rules, "If the user agent contains") || strings.Contains(rules, "<form") || strings.Contains(rules, "/rules/recipes") {
+		t.Fatal("rules snapshot: missing explanations, or actions leaked")
+	}
+
+	// Default policy: admins only.
+	v := e.login(t, "viewer", "viewer-password-1")
+	if code, _ := snap(v, "/movers", "movers", "z=example.com"); code != 0 {
+		t.Fatal("viewer offered a snapshot button")
+	}
+	_, body, _ := v.do("GET", "/movers", nil, nil)
+	if code, _, _ := v.do("POST", "/snapshots/create", url.Values{"csrf": {csrfOf(t, body)}, "view": {"movers"}, "params": {"z=example.com"}, "ttl": {"24h"}}, nil); code != http.StatusForbidden {
+		t.Fatalf("viewer created a snapshot: %d", code)
+	}
+	e.srv.Cfg.Console.Snapshots = "everyone"
+	if _, out := snap(v, "/movers", "movers", "z=example.com"); out == "" {
+		t.Fatal("everyone: viewer cannot snapshot")
+	}
+	e.srv.Cfg.Console.Snapshots = "off"
+	if code, _ := snap(c, "/movers", "movers", "z=example.com"); code != 0 {
+		t.Fatal("off: admin still offered snapshots")
+	}
+}
+
+func TestCoverageTags(t *testing.T) {
+	e, _ := rulesEnv(t, false)
+	e.srv.Analytics = &fakeAnalytics{}
+	c := e.admin
+	_, body, _ := c.do("GET", "/movers?dim=asn", nil, nil)
+	if !strings.Contains(body, "blocked by rule #2") {
+		t.Fatalf("AS207990 (rule #2) not marked:\n%s", body)
+	}
+	_, body, _ = c.do("GET", "/movers/drill?dim=asn&name=AS207990", nil, nil)
+	if !strings.Contains(body, "blocked by rule #2") {
+		t.Fatal("drill-down not marked")
+	}
+	_, body, _ = c.do("GET", "/faces?days=1", nil, nil)
+	if strings.Count(body, "blocked by rule") != 1 {
+		t.Fatalf("new faces tags: %d", strings.Count(body, "blocked by rule"))
+	}
+}

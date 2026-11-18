@@ -31,6 +31,7 @@ import (
 
 	"github.com/playwjj/flarehound/internal/block"
 	"github.com/playwjj/flarehound/internal/blockcli"
+	"github.com/playwjj/flarehound/internal/blockeffect"
 	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/config"
 	"github.com/playwjj/flarehound/internal/health"
@@ -161,13 +162,13 @@ func (s *Server) requireWrite(h http.HandlerFunc) http.HandlerFunc {
 func (s *Server) writeCheck(r *http.Request) string {
 	rq := reqOf(r)
 	if rq.User.TOTPEnabled {
-		if !s.limiter.allow("totp:"+rq.IP, s.Now()) {
-			return s.L(r).t("login_throttled")
-		}
 		u, err := s.DB.UserByID(rq.User.ID)
-		if err != nil || !s.checkTOTP(&u, r.PostFormValue("code")) {
+		if err != nil {
+			return s.L(r).t("error")
+		}
+		if ok, msg := s.verifyCode(r, &u, r.PostFormValue("code")); !ok {
 			s.audit(r, "stepup_failed", "", "write confirmation")
-			return s.L(r).t("totp_wrong")
+			return msg
 		}
 	}
 	return ""
@@ -621,33 +622,8 @@ func (s *Server) warmBlocks(ctx context.Context) {
 
 // --- before / after comparison ---
 
-// Effect compares one block's target in the hour before and after it
-// took effect (docs §4.6 "封后效果自动对比").
-type Effect struct {
-	EventID       int64
-	Target        string
-	At            time.Time
-	Settled       bool // the hour after has passed (and settled)
-	Measurable    bool
-	Before, After int64
-	ZoneBefore    int64
-	ZoneAfter     int64
-	StatusBefore  []cfapi.Face
-	StatusAfter   []cfapi.Face
-	Attempts      int64
-	AttemptsKnown bool
-	Err           string
-}
-
-func pctOf(n, of int64) float64 {
-	if of == 0 {
-		return 0
-	}
-	return float64(n) / float64(of) * 100
-}
-
-func (e Effect) ShareBefore() float64 { return pctOf(e.Before, e.ZoneBefore) }
-func (e Effect) ShareAfter() float64  { return pctOf(e.After, e.ZoneAfter) }
+// Effect is one block's before / after (internal/blockeffect).
+type Effect = blockeffect.Effect
 
 func (s *Server) settleAfter() time.Duration { return s.Cfg.IntradayOffset() }
 
@@ -660,48 +636,7 @@ func (s *Server) effect(ctx context.Context, z config.Zone, ev store.BlockEvent)
 			return e
 		}
 	}
-	t := block.Target{Type: block.Type(ev.Type), Value: ev.Value}
-	e := Effect{EventID: ev.ID, Target: t.String(), At: ev.At}
-	at := ev.At.Truncate(time.Minute)
-	bFrom, aTo := at.Add(-time.Hour), at.Add(time.Hour)
-	if end := s.Now().Add(-s.settleAfter()); end.Before(aTo) {
-		aTo = end // partial: shown, not cached
-	} else {
-		e.Settled = true
-	}
-	if !aTo.After(at) {
-		return e
-	}
-	var errs []string
-	note := func(err error) {
-		if err != nil {
-			errs = append(errs, err.Error())
-		}
-	}
-	var err error
-	e.ZoneBefore, err = s.Live.Count(ctx, z.ZoneID, bFrom, at, cfapi.Filter{})
-	note(err)
-	e.ZoneAfter, err = s.Live.Count(ctx, z.ZoneID, at, aTo, cfapi.Filter{})
-	note(err)
-	if f, ok := blockcli.FilterFor(t); ok {
-		e.Measurable = true
-		e.Before, err = s.Live.Count(ctx, z.ZoneID, bFrom, at, f)
-		note(err)
-		e.After, err = s.Live.Count(ctx, z.ZoneID, at, aTo, f)
-		note(err)
-		e.StatusBefore, err = s.Live.Top(ctx, z.ZoneID, bFrom, at, effectDim, 5, f)
-		note(err)
-		e.StatusAfter, err = s.Live.Top(ctx, z.ZoneID, at, aTo, effectDim, 5, f)
-		note(err)
-	}
-	if ev.RuleID != "" {
-		n, err := block.Attempts(ctx, s.Live, z.ZoneID, ev.RuleID, t, at, aTo)
-		e.Attempts, e.AttemptsKnown = n, err == nil
-	}
-	if len(errs) > 0 {
-		e.Err = strings.Join(errs, "; ")
-		e.Settled = false // retry later
-	}
+	e := blockeffect.Compute(ctx, s.Live, z.ZoneID, ev, s.Now(), s.settleAfter())
 	if e.Settled {
 		if raw, err := json.Marshal(e); err == nil {
 			_ = s.DB.PutEffect(z.ZoneID, ev.ID, raw)

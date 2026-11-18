@@ -1,6 +1,7 @@
 package state
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -85,5 +86,25 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 	if missing, err := Load(filepath.Join(t.TempDir(), "nope.json")); err != nil || missing.Active {
 		t.Fatal("missing file must load as empty state")
+	}
+}
+
+func TestCanonicalKeysOnLoad(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "state.json")
+	raw := `{"active":true,"fingerprint":"new_face_asn:150436,new_face_asn:AS150436,total_up",
+		"keys":{"new_face_asn:150436":true,"new_face_asn:AS150436":true,"total_up":true},
+		"peak":{"new_face_asn:150436":900,"new_face_asn:AS150436":500}}`
+	if err := os.WriteFile(p, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Keys) != 2 || !st.Keys["new_face_asn:AS150436"] || st.Peak["new_face_asn:AS150436"] != 900 || len(st.Peak) != 1 {
+		t.Fatalf("keys: %+v peak: %+v", st.Keys, st.Peak)
+	}
+	if st.Fingerprint != "new_face_asn:AS150436,total_up" {
+		t.Fatalf("fingerprint: %s", st.Fingerprint)
 	}
 }

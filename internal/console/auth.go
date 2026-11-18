@@ -34,7 +34,8 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 		s.render(w, r, http.StatusForbidden, "login", p)
 		return
 	}
-	if !s.limiter.allow("login:"+rq.IP, s.Now()) {
+	// Only failures count: a person who signs in often is not throttled.
+	if s.limiter.blocked("login:"+rq.IP, s.Now()) {
 		p.Err = s.L(r).t("login_throttled")
 		s.render(w, r, http.StatusTooManyRequests, "login", p)
 		return
@@ -47,6 +48,7 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
+		s.limiter.fail("login:"+rq.IP, s.Now())
 		VerifyPassword(dummyHash, pw) // same cost as a real check
 		s.DB.Audit(name, rq.IP, "login_failed", name, "unknown user")
 		p.Err = s.L(r).t("login_failed")
@@ -61,6 +63,7 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !VerifyPassword(u.PWHash, pw) || u.Disabled {
+		s.limiter.fail("login:"+rq.IP, s.Now())
 		if !u.Disabled {
 			_ = s.DB.LoginFailed(u.ID)
 		}
@@ -118,20 +121,19 @@ func (s *Server) totpPost(w http.ResponseWriter, r *http.Request) {
 	}
 	next := localPath(r.PostFormValue("next"))
 	p := page{Title: s.L(r).t("totp_title"), Next: next, Action: "/login/totp"}
-	if !s.limiter.allow("totp:"+rq.IP, s.Now()) {
-		p.Err = s.L(r).t("login_throttled")
-		s.render(w, r, http.StatusTooManyRequests, "totp", p)
-		return
-	}
 	u := rq.User
-	if !s.checkTOTP(u, r.PostFormValue("code")) {
-		_ = s.DB.LoginFailed(u.ID)
-		if fresh, err := s.DB.UserByID(u.ID); err == nil && s.Now().Before(fresh.LockedUntil) {
+	if ok, msg := s.verifyCode(r, u, r.PostFormValue("code")); !ok {
+		s.DB.Audit(u.Username, rq.IP, "login_failed", u.Username, "bad TOTP code")
+		// Wrong codes do not lock the account; five end this sign-in.
+		s.totpSess.fail(rq.Session.Hash, s.Now())
+		if s.totpSess.blocked(rq.Session.Hash, s.Now()) {
 			_ = s.DB.EndSession(rq.Session.Token)
 			s.clearSession(w, r)
+			s.render(w, r, http.StatusUnauthorized, "login", page{Title: s.L(r).t("login_title"), Providers: s.ProviderList(),
+				ResetOn: s.resetOn(), Err: s.L(r).t("totp_too_many")})
+			return
 		}
-		s.DB.Audit(u.Username, rq.IP, "login_failed", u.Username, "bad TOTP code")
-		p.Err = s.L(r).t("totp_wrong")
+		p.Err = msg
 		s.render(w, r, http.StatusUnauthorized, "totp", p)
 		return
 	}
@@ -144,6 +146,24 @@ func (s *Server) totpPost(w http.ResponseWriter, r *http.Request) {
 	s.setSession(w, r, sess, s.sessionTTL())
 	s.DB.Audit(u.Username, rq.IP, "login", u.Username, "password+totp")
 	http.Redirect(w, r, next, http.StatusSeeOther)
+}
+
+// verifyCode checks a TOTP code for u with throttling that counts only
+// failures: per client address (10 a minute) and per account (20 an
+// hour). It returns the message to show on failure.
+func (s *Server) verifyCode(r *http.Request, u *User, code string) (bool, string) {
+	rq := reqOf(r)
+	now := s.Now()
+	acct := "totp:" + strconv.FormatInt(u.ID, 10)
+	if s.limiter.blocked("totp:"+rq.IP, now) || s.totpAcct.blocked(acct, now) {
+		return false, s.L(r).t("login_throttled")
+	}
+	if s.checkTOTP(u, code) {
+		return true, ""
+	}
+	s.limiter.fail("totp:"+rq.IP, now)
+	s.totpAcct.fail(acct, now)
+	return false, s.L(r).t("totp_wrong")
 }
 
 // checkTOTP verifies a code and consumes its time step.
@@ -181,10 +201,10 @@ func (s *Server) stepUpPost(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, next, http.StatusSeeOther)
 		return
 	}
-	if !s.limiter.allow("totp:"+rq.IP, s.Now()) || !s.checkTOTP(rq.User, r.PostFormValue("code")) {
+	if ok, msg := s.verifyCode(r, rq.User, r.PostFormValue("code")); !ok {
 		s.audit(r, "stepup_failed", rq.User.Username, "")
 		s.render(w, r, http.StatusUnauthorized, "totp", page{Title: s.L(r).t("stepup_title"), Msg: s.L(r).t("stepup_desc"),
-			Next: next, Action: "/stepup", Err: s.L(r).t("totp_wrong")})
+			Next: next, Action: "/stepup", Err: msg})
 		return
 	}
 	if err := s.DB.MarkStepUp(rq.Session.Hash); err != nil {
@@ -419,12 +439,17 @@ func (s *Server) totpConfirm(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if u.TOTPEnabled || u.TOTPSecret == "" || !s.limiter.allow("totp:"+reqOf(r).IP, s.Now()) {
+	if u.TOTPEnabled || u.TOTPSecret == "" {
 		http.Redirect(w, r, "/account", http.StatusSeeOther)
+		return
+	}
+	if s.limiter.blocked("totp:"+reqOf(r).IP, s.Now()) {
+		s.accountErr(w, r, s.L(r).t("login_throttled"))
 		return
 	}
 	step, ok := VerifyTOTP(u.TOTPSecret, r.PostFormValue("code"), s.Now(), 0)
 	if !ok {
+		s.limiter.fail("totp:"+reqOf(r).IP, s.Now())
 		s.accountErr(w, r, s.L(r).t("totp_wrong"))
 		return
 	}
@@ -446,10 +471,16 @@ func (s *Server) totpDisable(w http.ResponseWriter, r *http.Request) {
 		s.accountErr(w, r, s.L(r).t("totp_required_no_off"))
 		return
 	}
-	if !s.limiter.allow("totp:"+reqOf(r).IP, s.Now()) || !VerifyPassword(u.PWHash, r.PostFormValue("current")) ||
-		(u.TOTPEnabled && !s.checkTOTP(u, r.PostFormValue("code"))) {
-		s.accountErr(w, r, s.L(r).t("totp_wrong"))
+	if !VerifyPassword(u.PWHash, r.PostFormValue("current")) {
+		s.limiter.fail("login:"+reqOf(r).IP, s.Now())
+		s.accountErr(w, r, s.L(r).t("pw_wrong"))
 		return
+	}
+	if u.TOTPEnabled {
+		if ok, msg := s.verifyCode(r, u, r.PostFormValue("code")); !ok {
+			s.accountErr(w, r, msg)
+			return
+		}
 	}
 	if err := s.DB.SetTOTP(u.ID, "", false, 0); err != nil {
 		s.fail(w, r, err)

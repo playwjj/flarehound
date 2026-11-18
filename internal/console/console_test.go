@@ -582,3 +582,52 @@ func TestQRSVG(t *testing.T) {
 		t.Fatalf("qr svg: %.200s", s)
 	}
 }
+
+func TestTOTPWindowAndThrottling(t *testing.T) {
+	// ±1 step: a code read just before the 30-second boundary still works
+	// just after it, and one step ahead (a fast clock) too.
+	secret, _ := NewTOTPSecret()
+	key, _ := b32.DecodeString(secret)
+	now := time.Unix(1_800_000_015, 0)
+	cur := now.Unix() / totpStep
+	for _, d := range []int64{-1, 0, 1} {
+		if _, ok := VerifyTOTP(secret, totpAt(key, cur+d), now, 0); !ok {
+			t.Fatalf("code of step %+d rejected", d)
+		}
+	}
+	for _, d := range []int64{-2, 2} {
+		if _, ok := VerifyTOTP(secret, totpAt(key, cur+d), now, 0); ok {
+			t.Fatalf("code of step %+d accepted", d)
+		}
+	}
+
+	e := newWriteEnv(t, false)
+	// Successful sign-ins do not count against the per-address limit.
+	for i := 0; i < 12; i++ {
+		e.login(t, "viewer", "viewer-password-1")
+	}
+
+	// Wrong codes neither lock the account nor eat the password budget;
+	// five of them end the pending sign-in.
+	u, _, _ := e.db.UserByName("viewer")
+	_ = e.db.SetTOTP(u.ID, secret, true, 0)
+	c := newClient(t, e.ts.URL)
+	_, body, _ := c.do("GET", "/login", nil, nil)
+	c.do("POST", "/login", url.Values{"csrf": {csrfOf(t, body)}, "username": {"viewer"}, "password": {"viewer-password-1"}}, nil)
+	_, body, _ = c.do("GET", "/login/totp", nil, nil)
+	csrf := csrfOf(t, body)
+	var code int
+	for i := 0; i < 5; i++ {
+		code, body, _ = c.do("POST", "/login/totp", url.Values{"csrf": {csrf}, "code": {"000000"}}, nil)
+	}
+	if code != http.StatusUnauthorized || !strings.Contains(body, "Five wrong codes") {
+		t.Fatalf("after five wrong codes: %d", code)
+	}
+	if u, _, _ := e.db.UserByName("viewer"); time.Now().Before(u.LockedUntil) || u.Failed != 0 {
+		t.Fatalf("wrong TOTP codes locked the account: %+v", u)
+	}
+	if code, _, h := c.do("GET", "/login/totp", nil, nil); code != http.StatusSeeOther || h.Get("Location") != "/" {
+		// pending session ended: /login/totp has no session to finish
+		t.Fatalf("pending sign-in not ended: %d %s", code, h.Get("Location"))
+	}
+}

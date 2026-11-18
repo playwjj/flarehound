@@ -202,3 +202,5 @@
 </section>
 {{end}}
 {{template "foot" .}}{{end}}
+
+{{define "cover"}}{{with coverOf (index . 0) (index . 1) (index . 2)}} <span class="tag cover{{if .Partial}} partial{{end}}" title="{{.Desc}} — {{t "cover_hint"}}">{{if eq .Action "skip"}}{{tf "cover_skip" .Pos}}{{else if .Partial}}{{tf "cover_partial" .Pos}}{{else if eq .Action "block"}}{{tf "cover_block" .Pos}}{{else}}{{tf "cover_challenge" .Pos}}{{end}}</span>{{end}}{{end}}

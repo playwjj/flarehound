@@ -49,8 +49,26 @@ func (s *Server) renderSnapshot(ctx context.Context, view string, q url.Values) 
 	return string(out), title, p.Zone.ZoneID, nil
 }
 
+// canSnapshot applies console.snapshots: who may create snapshots.
+func (s *Server) canSnapshot(rq *Req) bool {
+	if rq == nil || rq.User == nil {
+		return false
+	}
+	switch s.Cfg.Console.Snapshots {
+	case "everyone":
+		return true
+	case "off":
+		return false
+	}
+	return rq.User.Admin()
+}
+
 func (s *Server) snapshotCreate(w http.ResponseWriter, r *http.Request) {
 	rq := reqOf(r)
+	if !s.canSnapshot(rq) {
+		s.render(w, r, http.StatusForbidden, "message", page{Title: s.L(r).t("snap_title"), Msg: s.L(r).t("snap_not_allowed")})
+		return
+	}
 	view := r.PostFormValue("view")
 	ttl, ok := snapTTLs[r.PostFormValue("ttl")]
 	if !ok {

@@ -11,6 +11,7 @@ package analyze
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/playwjj/flarehound/internal/cfapi"
@@ -120,7 +121,21 @@ func (f Finding) Key() string {
 	if f.Subject == "" || f.Rule == RuleNewFaceUA {
 		return f.Rule
 	}
-	return f.Rule + ":" + f.Subject
+	return CanonicalKey(f.Rule + ":" + f.Subject)
+}
+
+// CanonicalKey spells ASN signal keys one way: "new_face_asn:AS150436"
+// (older state files may hold "new_face_asn:150436").
+func CanonicalKey(k string) string {
+	rule, subj, ok := strings.Cut(k, ":")
+	if !ok || rule != RuleNewFaceASN {
+		return k
+	}
+	n, err := strconv.Atoi(strings.TrimPrefix(strings.ToUpper(subj), "AS"))
+	if err != nil || n <= 0 {
+		return k
+	}
+	return rule + ":AS" + strconv.Itoa(n)
 }
 
 // String is a compact English rendering for logs.
@@ -220,7 +235,11 @@ func newFaces(rule string, curTop, baseTop []cfapi.Face, minCount int64, known K
 		if rule == RuleNewFaceUA && known.uaKnown(f.Name) {
 			continue
 		}
-		out = append(out, Finding{Rule: rule, Subject: f.Name, ASN: f.ASN, Cur: float64(f.Count), Pct: 999})
+		subject := f.Name
+		if rule == RuleNewFaceASN && f.ASN > 0 {
+			subject = "AS" + strconv.Itoa(f.ASN) // one spelling everywhere
+		}
+		out = append(out, Finding{Rule: rule, Subject: subject, ASN: f.ASN, Cur: float64(f.Count), Pct: 999})
 	}
 	return out
 }

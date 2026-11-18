@@ -3,6 +3,7 @@ package waf
 import (
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -141,13 +142,28 @@ func evalCmp(c Cmp, p Probe) Tri {
 		if c.Op != "in" {
 			return Unknown
 		}
+		undecided := false
 		for _, it := range val.Items {
 			if !it.Quoted {
-				return Unknown // numbers, IPs, ranges: not string membership
+				// Whole numbers (ASNs) compare as numbers; IPs and ranges
+				// are not decided here.
+				a, errA := strconv.ParseInt(it.S, 10, 64)
+				b, errB := strconv.ParseInt(v, 10, 64)
+				if errA == nil && errB == nil {
+					if a == b {
+						return True
+					}
+					continue
+				}
+				undecided = true
+				continue
 			}
 			if it.S == v {
 				return True
 			}
+		}
+		if undecided {
+			return Unknown
 		}
 		return False
 	case Scalar:

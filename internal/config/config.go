@@ -147,6 +147,9 @@ type Console struct {
 	RefreshSeconds int `json:"refresh_seconds"`
 	// SessionHours is the idle lifetime of a login session (0: 12).
 	SessionHours int `json:"session_hours"`
+	// Snapshots says who may create read-only snapshots (shareable links
+	// that need no sign-in): "admins" (default), "everyone" or "off".
+	Snapshots string `json:"snapshots"`
 	// RequireTOTP makes two-factor sign-in mandatory for every account.
 	RequireTOTP bool `json:"require_totp"`
 	// TrustedProxies lists the addresses (IPs or CIDRs) of the reverse
@@ -565,6 +568,13 @@ func (c *Config) resolveConsole() error {
 	}
 	if cs.SessionHours < 1 || cs.SessionHours > 24*30 {
 		return fmt.Errorf("config: console.session_hours must be within 1..720")
+	}
+	switch cs.Snapshots {
+	case "":
+		cs.Snapshots = "admins"
+	case "admins", "everyone", "off":
+	default:
+		return fmt.Errorf("config: console.snapshots must be admins, everyone or off")
 	}
 	cs.BaseURL = strings.TrimRight(cs.BaseURL, "/")
 	if cs.BaseURL != "" && !strings.HasPrefix(cs.BaseURL, "https://") && !strings.HasPrefix(cs.BaseURL, "http://") {

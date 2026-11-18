@@ -72,11 +72,19 @@ func TestEdgeAbsorbedFloodAndDashboardTerms(t *testing.T) {
 func TestASNLabelInFindingLine(t *testing.T) {
 	f := analyze.Finding{Rule: analyze.RuleNewFaceASN, Subject: "AS45102", ASN: 45102, Cur: 9000}
 	names := map[int]string{45102: "ALIBABA-CN-NET Alibaba US Technology Co., Ltd."}
-	got := lang("zh").findingLine(f, 0, names, map[int]string{45102: "aliyun"})
+	got := lang("zh").findingLine(f, 0, names, map[int]string{45102: "aliyun"}, nil)
 	if !strings.Contains(got, "aliyun") || strings.Contains(got, "ALIBABA") || !strings.Contains(got, "机房") {
 		t.Fatalf("label line: %s", got)
 	}
-	if got := lang("en").findingLine(f, 0, names, nil); !strings.Contains(got, "ALIBABA") {
+	if got := lang("en").findingLine(f, 0, names, nil, nil); !strings.Contains(got, "ALIBABA") {
 		t.Fatalf("registered name fallback: %s", got)
+	}
+}
+
+func TestCoverNote(t *testing.T) {
+	f := analyze.Finding{Rule: analyze.RuleNewFaceASN, Subject: "AS150436", ASN: 150436, Cur: 9000}
+	cov := map[string]analyze.RuleCover{f.Key() + "|" + f.Subject: {Pos: 3, Action: "block", Desc: "bytedance"}}
+	if got := lang("zh").findingLine(f, 0, nil, nil, cov); !strings.Contains(got, "已被规则 #3「bytedance」拦截") {
+		t.Fatalf("cover note: %s", got)
 	}
 }
