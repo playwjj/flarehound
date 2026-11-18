@@ -122,11 +122,13 @@ type Server struct {
 	asnNames map[int]string // registered names from the archive
 	asnAt    time.Time
 
-	liveMu     sync.Mutex
-	liveCache  map[string]*liveEntry
-	drillMu    sync.Mutex
-	drillCache map[string]*drillEntry
-	attemptsWG sync.WaitGroup // background attempt queries (tests wait on it)
+	liveMu       sync.Mutex
+	liveCache    map[string]*liveEntry
+	drillMu      sync.Mutex
+	drillCache   map[string]*drillEntry
+	blockedMu    sync.Mutex
+	blockedCache map[string]*blockedEntry
+	attemptsWG   sync.WaitGroup // background attempt queries (tests wait on it)
 }
 
 type auditEntry struct {
@@ -141,7 +143,8 @@ func New(cfg *config.Config, db *DB, arch Archive, auditor Auditor, version stri
 	s := &Server{Cfg: cfg, DB: db, Archive: arch, Auditor: auditor, Version: version, Now: time.Now,
 		trusted: cfg.TrustedProxies(), defLang: lang(cfg.Report.Language), limiter: newLimiter(10, time.Minute), totpAcct: newLimiter(20, time.Hour), totpSess: newLimiter(5, preMFATTL),
 		auditCache: map[string]auditEntry{}, attemptsCache: map[string]attemptsEntry{}, attemptsBusy: map[string]bool{},
-		liveCache: map[string]*liveEntry{}, drillCache: map[string]*drillEntry{}, rulesCache: map[string]rulesEntry{}}
+		liveCache: map[string]*liveEntry{}, drillCache: map[string]*drillEntry{}, rulesCache: map[string]rulesEntry{},
+		blockedCache: map[string]*blockedEntry{}}
 	s.OAuth = builtinProviders(cfg.Console)
 	s.reviewKey = make([]byte, 32)
 	if _, err := rand.Read(s.reviewKey); err != nil {

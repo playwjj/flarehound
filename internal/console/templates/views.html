@@ -69,6 +69,15 @@
 <section class="card"><h2 class="down">▼ {{t "fallers"}}</h2>{{template "moverrows" (rowsCtx $ .Down)}}</section>
 <p class="note">{{tf "movers_note" .TopN}}{{if eq $dim "path"}} {{t "path_note"}}{{end}}</p>
 {{end}}{{end}}
+{{with .Blocked}}{{if and (not .Err) .Total}}<section class="card"><h2>{{t "blocked_title"}}</h2>
+<p class="note">{{tf "blocked_total" .Total}} {{t "blocked_note"}}</p>
+{{if .ASNs}}<h3>{{t "dim_asn"}}</h3><table class="list"><thead><tr><th>{{t "name"}}</th><th class="r">{{t "stopped"}}</th><th class="r">{{t "share"}}</th></tr></thead><tbody>
+{{range .ASNs}}<tr><td class="name"><span class="mono">{{.Name}}</span>{{template "asninfo" (list .Name false "")}}</td><td class="r">{{num .Count}}</td><td class="r">{{printf "%.0f" .Share}}%</td></tr>{{end}}
+</tbody></table>{{end}}
+{{if .UAs}}<h3>{{t "dim_ua"}}</h3><table class="list"><thead><tr><th>{{t "name"}}</th><th class="r">{{t "stopped"}}</th><th class="r">{{t "share"}}</th></tr></thead><tbody>
+{{range .UAs}}<tr><td class="name"><span class="mono" title="{{.Name}}">{{short .Name 80}}</span></td><td class="r">{{num .Count}}</td><td class="r">{{printf "%.0f" .Share}}%</td></tr>{{end}}
+</tbody></table>{{end}}
+</section>{{end}}{{end}}
 {{template "snapform" .}}
 {{template "foot" .}}{{end}}
 

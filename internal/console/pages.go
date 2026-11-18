@@ -58,6 +58,8 @@ type page struct {
 	Drill       *Drill
 	Chart       template.HTML
 	Movers      *Movers
+	Blocked     *Blocked
+	Trend       template.HTML
 	Dim         string
 	Faces       *NewFaces
 	Days        int
@@ -401,8 +403,12 @@ func (s *Server) buildView(ctx context.Context, view string, q url.Values) (stri
 		if err != nil {
 			return "", page{}, err
 		}
-		return "movers", page{Title: s.lc(ctx).t("nav_movers"), Zone: z, Nav: "movers", Movers: &mv, Dim: dim, NoASN: dim == DimASN && s.noASN(ctx, z),
-			Refresh: s.Cfg.Console.RefreshSeconds, SnapView: view, SnapParams: url.Values{"z": {z.Name}, "dim": {dim}}.Encode()}, nil
+		p := page{Title: s.lc(ctx).t("nav_movers"), Zone: z, Nav: "movers", Movers: &mv, Dim: dim, NoASN: dim == DimASN && s.noASN(ctx, z),
+			Refresh: s.Cfg.Console.RefreshSeconds, SnapView: view, SnapParams: url.Values{"z": {z.Name}, "dim": {dim}}.Encode()}
+		if mv.Has && s.Analytics != nil {
+			p.Blocked = s.blocked(ctx, z, mv.Window, !s.noASN(ctx, z))
+		}
+		return "movers", p, nil
 	case viewHistory:
 		rng := q.Get("range")
 		span := 7 * 24 * time.Hour
