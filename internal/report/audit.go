@@ -22,6 +22,9 @@ type AuditData struct {
 	Plan   string
 	Result waf.Result
 	NA     string // non-empty: the audit could not run, and why
+	// PathsUnset: the zone has no sensitive-path list of its own (and the
+	// default list belongs to another zone), so coverage was not checked.
+	PathsUnset bool
 }
 
 func (l lang) ruleRef(r waf.RuleRef) string {
@@ -73,10 +76,15 @@ func (l lang) auditBody(b *strings.Builder, d AuditData, full bool) {
 	}
 
 	// coverage
-	if len(r.Coverage) == 0 {
+	if d.PathsUnset {
 		if full {
-			b.WriteString(l.t("Coverage: no sensitive paths configured (path_rules, daily.paths, waf_audit.sensitive_paths).\n",
-				"覆盖：未配置敏感路径（path_rules、daily.paths、waf_audit.sensitive_paths）。\n"))
+			fmt.Fprintf(b, l.t("Coverage: not configured for this zone — set cloudflare.zones[].waf_audit.sensitive_paths for %s (the default list belongs to another zone).\n",
+				"覆盖：本站未配置——请在 cloudflare.zones[].waf_audit.sensitive_paths 为 %s 设置敏感路径（缺省清单属于其他站点）。\n"), d.Zone)
+		}
+	} else if len(r.Coverage) == 0 {
+		if full {
+			b.WriteString(l.t("Coverage: no sensitive paths configured (path_rules, daily.paths, waf_audit.sensitive_paths, or cloudflare.zones[].waf_audit.sensitive_paths).\n",
+				"覆盖：未配置敏感路径（path_rules、daily.paths、waf_audit.sensitive_paths 或 cloudflare.zones[].waf_audit.sensitive_paths）。\n"))
 		}
 	} else {
 		hosts := map[string]bool{}

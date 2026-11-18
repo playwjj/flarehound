@@ -8,7 +8,7 @@
 
 Cloudflare gives you data. FlareHound gives you the conclusion.
 
-> Status: **v1.10** — cross-zone home, block verdicts in the daily report, rule-covered faces marked, audit/rule snapshots; settings in the console (notifications with test sends, alert lines with a replay preview, known faces, network names); console in English or Chinese; WAF basics, rule recipes and plain-words rules; live hour and movers drill-down; web console with in-console blocking, undo, before/after, read-only snapshots and Google / GitHub sign-in. Documentation: **https://playwjj.github.io/flarehound/** · Changelog: [CHANGELOG.md](CHANGELOG.md)
+> Status: **v1.11** — per-zone WAF audit coverage; cross-zone home, block verdicts in the daily report, rule-covered faces marked, audit/rule snapshots; settings in the console (notifications with test sends, alert lines with a replay preview, known faces, network names); console in English or Chinese; WAF basics, rule recipes and plain-words rules; live hour and movers drill-down; web console with in-console blocking, undo, before/after, read-only snapshots and Google / GitHub sign-in. Documentation: **https://playwjj.github.io/flarehound/** · Changelog: [CHANGELOG.md](CHANGELOG.md)
 >
 > **Direction:** FlareHound is growing a built-in web console — live movers (who is up, who is down), new-face tracking, history against the long-term baseline, the WAF audit, and in-console blocking with per-account audit — landing in v1.3–v1.5. Notifications become the alerting layer that brings you to the console. See the [web console revision note](docs/web-console-revision.md).
 >
@@ -182,7 +182,7 @@ Every change is shown in full (field-by-field old → new for edits), confirmed 
 
 `flarehound audit` (and a section of every daily report) reads your custom rules — read-only — and checks them like a reviewer would:
 
-- **Coverage gaps**: is each sensitive path (`path_rules`, `daily.paths`, `waf_audit.sensitive_paths`) covered by a block/challenge rule? Fully, only conditionally (e.g. only for one user agent), or not at all — or exempted by a skip rule placed ahead of it.
+- **Coverage gaps**: is each sensitive path (`path_rules`, `daily.paths`, `waf_audit.sensitive_paths`, or the zone's own `zones[].waf_audit.sensitive_paths`) covered by a block/challenge rule? Fully, only conditionally (e.g. only for one user agent), or not at all — or exempted by a skip rule placed ahead of it.
 - **Ordering**: rules that can never fire because an earlier Block rule already matches everything they match, exact duplicates, and protections a skip rule ahead of them lets traffic around.
 - **Exemptions**: skip rules whose condition uses only fields any client can forge (user agent, referer, path…) — "anyone who sends `MyMonitor` in the UA skips your WAF".
 - **Hits and zombies** (plans with firewall events): 7- and 30-day hits per rule; rules with no hits in 30 days are reported (not removed — quiet is not useless).

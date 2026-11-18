@@ -14,6 +14,8 @@ A complete example is `config.example.json` in the repository. Validation errors
 | `cloudflare.zones[].zone_id` | string | — | **Required.** 32-char hex zone ID. |
 | `cloudflare.zones[].name` | string | the zone ID | Display name; also the default WAF-audit probe host and the `--zone` selector. |
 | `cloudflare.zones[].workers` | string[] | `[]` | Worker script names to watch (invocations and CPU P50). Each is evaluated separately. Needs Account Analytics: Read. |
+| `cloudflare.zones[].waf_audit.hosts` | string[] | global hosts in this zone, else the zone name | This zone's WAF-audit probe hosts. Each must be the zone or a subdomain of it. |
+| `cloudflare.zones[].waf_audit.sensitive_paths` | string[] | — | This zone's whole sensitive-path list for the coverage check. When set (even `[]`), the default list is not used for this zone. |
 
 ## schedule
 
@@ -150,6 +152,16 @@ For Slack, Discord, WeCom and Feishu, naming a variable that is empty is a start
 | `waf_audit.disabled` | bool | `false` | Turn the WAF audit off (daily section, re-audit on change, `flarehound audit`). |
 | `waf_audit.hosts` | string[] | the zone name | Hosts to probe; rules often pin `http.host`, so coverage is judged per host. |
 | `waf_audit.sensitive_paths` | string[] | `[]` | Extra sensitive path patterns, in addition to `path_rules` and `daily.paths`. |
+
+With several zones, each zone probes only the `waf_audit.hosts` that belong to it (the zone or its subdomains). The default sensitive list (`path_rules` + `daily.paths` + `waf_audit.sensitive_paths`) applies only to the zones those hosts belong to — or, with no global hosts, to the first zone. Give every other zone its own list; until then its audit says coverage is **not configured** instead of scoring another site's paths:
+
+```json
+"zones": [
+  { "name": "example.com", "zone_id": "…" },
+  { "name": "blog.example.org", "zone_id": "…",
+    "waf_audit": { "sensitive_paths": ["/wp-login.php", "/wp-admin*", "/xmlrpc.php"] } }
+]
+```
 
 ## archive
 

@@ -27,7 +27,7 @@ The full audit (`flarehound audit`, the console's WAF audit page, the ruleset-ch
 
 ### Coverage gaps
 
-Sensitive paths = `path_rules` + `daily.paths` + `waf_audit.sensitive_paths`. Each pattern becomes one probe path (`/login*` → `/login`, `/u/*/edit` → `/u/x/edit`), probed on every host in `waf_audit.hosts` (default: the zone name). Walking the enabled rules in execution order:
+Sensitive paths = the zone's own `cloudflare.zones[].waf_audit.sensitive_paths` when set, otherwise the default list `path_rules` + `daily.paths` + `waf_audit.sensitive_paths`. With several zones the default list belongs only to the zones the global `waf_audit.hosts` are in (with no hosts set: the first zone); any other zone without its own list shows coverage as **not configured** — it is never scored against another site's paths. Each pattern becomes one probe path (`/login*` → `/login`, `/u/*/edit` → `/u/x/edit`), probed on every host of the zone: its own `waf_audit.hosts`, else the global hosts that belong to it, else the zone name. Walking the enabled rules in execution order:
 
 | Result | Meaning |
 |---|---|

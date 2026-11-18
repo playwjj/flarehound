@@ -15,8 +15,50 @@ import (
 	"github.com/playwjj/flarehound/internal/waf"
 )
 
-// sensitivePaths gathers every configured sensitive pattern: path rules,
-// daily checkpoints and waf_audit.sensitive_paths, de-duplicated.
+// auditScope is what a zone's coverage check probes: its hosts and its
+// sensitive paths. ok=false: the zone has no list of its own and the
+// default list belongs to another zone — coverage is "not configured"
+// rather than scored against somebody else's paths.
+func (r *Runner) auditScope(zone config.Zone) (hosts []string, paths []waf.Path, ok bool) {
+	own := zone.WAFAudit
+	if own != nil && len(own.Hosts) > 0 {
+		hosts = own.Hosts
+	} else {
+		for _, h := range r.Cfg.WAFAudit.Hosts {
+			if config.HostInZone(h, zone.Name) {
+				hosts = append(hosts, h)
+			}
+		}
+		if len(hosts) == 0 {
+			hosts = []string{zone.Name}
+		}
+	}
+	if own != nil && own.SensitivePaths != nil {
+		for _, p := range dedupe(own.SensitivePaths) {
+			paths = append(paths, waf.Path{Name: p, Pattern: p})
+		}
+		return hosts, paths, true
+	}
+	if !r.Cfg.DefaultAuditScope(zone) {
+		return hosts, nil, false
+	}
+	return hosts, r.sensitivePaths(), true
+}
+
+func dedupe(in []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range in {
+		if s != "" && !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// sensitivePaths gathers the default sensitive list: path rules, daily
+// checkpoints and waf_audit.sensitive_paths, de-duplicated.
 func (r *Runner) sensitivePaths() []waf.Path {
 	seen := map[string]bool{}
 	var out []waf.Path
@@ -128,12 +170,11 @@ func (r *Runner) Audit(ctx context.Context, zone config.Zone) (report.AuditData,
 		return d, fmt.Errorf("read rulesets: %w", err)
 	}
 	d.Plan, _ = r.Rules.ZonePlan(ctx, zone.ZoneID) // optional (Zone: Read)
-	in := waf.Input{Rules: rs.Rules, Sensitive: r.sensitivePaths(), Plan: d.Plan, Now: r.now()}
+	in := waf.Input{Rules: rs.Rules, Plan: d.Plan, Now: r.now()}
+	var scoped bool
+	in.Hosts, in.Sensitive, scoped = r.auditScope(zone)
+	d.PathsUnset = !scoped
 	in.Hits, in.HitsDays = r.ruleHits(ctx, zone)
-	in.Hosts = r.Cfg.WAFAudit.Hosts
-	if len(in.Hosts) == 0 {
-		in.Hosts = []string{zone.Name}
-	}
 	if in.Access, err = r.Rules.AccessRules(ctx, zone.ZoneID, ""); err != nil {
 		in.AccessNA = true
 	}

@@ -154,6 +154,9 @@ func runDoctor(ctx context.Context, cfg *config.Config, cfgPath string, out io.W
 		if err := restGET(ctx, cfg.APIToken, "/zones/"+z.ZoneID+"/firewall/access_rules/rules?per_page=1"); err != nil && strings.HasPrefix(audit, "✓") {
 			audit += " (IP Access Rules not checked)"
 		}
+		if strings.HasPrefix(audit, "✓") && cfg.AuditPathsUnset(z) {
+			audit += " (path coverage not configured for this zone: set cloudflare.zones[].waf_audit.sensitive_paths)"
+		}
 		rows = append(rows, capRow{"WAF audit", audit})
 		rows = append(rows, capRow{"calibration", watch})
 

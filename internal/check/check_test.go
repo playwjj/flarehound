@@ -848,3 +848,68 @@ func TestMessagesCarryVisuals(t *testing.T) {
 		t.Fatal("visuals off must send text only")
 	}
 }
+
+// TestAuditScopePerZone: with several zones, each zone's coverage uses its
+// own hosts and sensitive paths; a zone without its own list is "not
+// configured" instead of being scored against another zone's paths.
+func TestAuditScopePerZone(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Report.Language = "en"
+	cfg.PathRules = nil
+	cfg.Daily.Paths = nil
+	cfg.WAFAudit.Hosts = []string{"example.com", "www.example.com", "api.other.org"}
+	cfg.WAFAudit.SensitivePaths = []string{"/login*", "/ranking*"}
+	main := cfg.Cloudflare.Zones[0]
+	wp := config.Zone{ZoneID: strings.Repeat("c", 32), Name: "blog.test",
+		WAFAudit: &config.ZoneAudit{SensitivePaths: []string{"/wp-login.php", "/xmlrpc.php", "/wp-login.php"}}}
+	bare := config.Zone{ZoneID: strings.Repeat("d", 32), Name: "third.test"}
+	cfg.Cloudflare.Zones = []config.Zone{main, wp, bare}
+	r := &Runner{API: &fakeAPI{windows: map[time.Time]*window{}, reads: map[time.Time]int{}}, Cfg: cfg,
+		Rules: &fakeRules{rs: auditRules("1")}, Now: func() time.Time { return time.Date(2026, 11, 17, 8, 0, 0, 0, time.UTC) }}
+
+	probed := func(d report.AuditData) (hosts, paths map[string]bool) {
+		hosts, paths = map[string]bool{}, map[string]bool{}
+		for _, c := range d.Result.Coverage {
+			hosts[c.Host], paths[c.Path.Pattern] = true, true
+		}
+		return
+	}
+
+	d, err := r.Audit(context.Background(), main)
+	if err != nil || d.PathsUnset {
+		t.Fatalf("main: %+v %v", d, err)
+	}
+	h, p := probed(d)
+	if len(h) != 2 || !h["www.example.com"] || h["api.other.org"] || len(p) != 2 || !p["/ranking*"] {
+		t.Errorf("main zone probes %v × %v", h, p)
+	}
+
+	d, _ = r.Audit(context.Background(), wp)
+	h, p = probed(d)
+	if d.PathsUnset || len(h) != 1 || !h["blog.test"] || len(p) != 2 || p["/login*"] || !p["/xmlrpc.php"] {
+		t.Errorf("own list: unset=%v %v × %v", d.PathsUnset, h, p)
+	}
+
+	d, _ = r.Audit(context.Background(), bare)
+	if !d.PathsUnset || len(d.Result.Coverage) != 0 {
+		t.Fatalf("zone without a list must not borrow one: %+v", d)
+	}
+	txt := report.Audit("en", d, "")
+	if !strings.Contains(txt, "not configured for this zone") || strings.Contains(txt, "/ranking") {
+		t.Errorf("audit text:\n%s", txt)
+	}
+
+	// No global hosts: the default list belongs to the first zone only.
+	cfg.WAFAudit.Hosts = nil
+	if d, _ = r.Audit(context.Background(), main); d.PathsUnset {
+		t.Error("first zone lost the default list")
+	}
+	if d, _ = r.Audit(context.Background(), bare); !d.PathsUnset {
+		t.Error("second zone took the default list")
+	}
+	// A single zone always uses it.
+	cfg.Cloudflare.Zones = []config.Zone{bare}
+	if d, _ = r.Audit(context.Background(), bare); d.PathsUnset || len(d.Result.Coverage) != 2 {
+		t.Errorf("single zone: %+v", d)
+	}
+}

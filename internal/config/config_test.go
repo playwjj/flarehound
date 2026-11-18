@@ -58,6 +58,8 @@ func TestValidation(t *testing.T) {
 		"bad tz":          `{"cloudflare":{"zones":[` + zone + `]},"schedule":{"timezone":"Mars/Base"}}`,
 		"bad lang":        `{"cloudflare":{"zones":[` + zone + `]},"report":{"language":"fr"}}`,
 		"bad path":        `{"cloudflare":{"zones":[` + zone + `]},"path_rules":[{"path":"login"}]}`,
+		"foreign host":    `{"cloudflare":{"zones":[{"zone_id":"` + strings.Repeat("a", 32) + `","name":"example.com","waf_audit":{"hosts":["www.other.org"]}}]}}`,
+		"zone path":       `{"cloudflare":{"zones":[{"zone_id":"` + strings.Repeat("a", 32) + `","name":"example.com","waf_audit":{"sensitive_paths":["wp-admin"]}}]}}`,
 	} {
 		if _, err := Load(write(t, body)); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -97,5 +99,22 @@ func TestChannelSecrets(t *testing.T) {
 	}
 	if _, err := Load(write(t, `{"cloudflare":{"zones":[`+zone+`]},"notify":{"email":{"smtp_host":"h","from":"a@b","to":["c@d"],"username":"u"}}}`)); err == nil {
 		t.Fatal("email username without password accepted")
+	}
+}
+
+func TestZoneAudit(t *testing.T) {
+	t.Setenv("CF_API_TOKEN", "tok")
+	c, err := Load(write(t, `{"cloudflare":{"zones":[{"zone_id":"`+strings.Repeat("a", 32)+`","name":"example.com","waf_audit":{"hosts":["www.example.com"],"sensitive_paths":[]}}]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := c.Cloudflare.Zones[0].WAFAudit
+	if a == nil || a.SensitivePaths == nil || len(a.SensitivePaths) != 0 {
+		t.Fatalf("explicit empty list must stay set: %+v", a)
+	}
+	for h, want := range map[string]bool{"example.com": true, "WWW.Example.com.": true, "*.example.com": true, "badexample.com": false, "example.com.evil.org": false} {
+		if HostInZone(h, "example.com") != want {
+			t.Errorf("HostInZone(%q) != %v", h, want)
+		}
 	}
 }

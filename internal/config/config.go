@@ -22,6 +22,53 @@ type Zone struct {
 	ZoneID  string   `json:"zone_id"`
 	Name    string   `json:"name"`
 	Workers []string `json:"workers"`
+	// WAFAudit is this zone's own coverage scope; it replaces the global
+	// waf_audit.hosts / sensitive_paths for this zone.
+	WAFAudit *ZoneAudit `json:"waf_audit,omitempty"`
+}
+
+// ZoneAudit is one zone's WAF-audit coverage scope.
+type ZoneAudit struct {
+	// Hosts to probe (default: the global hosts that belong to the zone,
+	// else the zone name).
+	Hosts []string `json:"hosts,omitempty"`
+	// SensitivePaths, when set (even empty), is the zone's whole list:
+	// path_rules, daily.paths and the global sensitive_paths are not
+	// added to it.
+	SensitivePaths []string `json:"sensitive_paths"`
+}
+
+// AuditPathsUnset reports a zone whose sensitive-path coverage is not
+// configured: no list of its own, and the default list is not its.
+func (c *Config) AuditPathsUnset(z Zone) bool {
+	return (z.WAFAudit == nil || z.WAFAudit.SensitivePaths == nil) && !c.DefaultAuditScope(z)
+}
+
+// DefaultAuditScope: the default sensitive list (path_rules, daily.paths,
+// waf_audit.sensitive_paths) applies to the only zone; with several, to the
+// zones the global waf_audit.hosts belong to, or to the first zone when no
+// global hosts are set.
+func (c *Config) DefaultAuditScope(z Zone) bool {
+	zones := c.Cloudflare.Zones
+	if len(zones) <= 1 {
+		return true
+	}
+	if hs := c.WAFAudit.Hosts; len(hs) > 0 {
+		for _, h := range hs {
+			if HostInZone(h, z.Name) {
+				return true
+			}
+		}
+		return false
+	}
+	return zones[0].ZoneID == z.ZoneID
+}
+
+// HostInZone reports whether host is the zone apex or a subdomain of it.
+func HostInZone(host, zone string) bool {
+	host = strings.TrimSuffix(strings.ToLower(strings.TrimPrefix(host, "*.")), ".")
+	zone = strings.TrimSuffix(strings.ToLower(zone), ".")
+	return host == zone || strings.HasSuffix(host, "."+zone)
 }
 
 type Thresholds struct {
@@ -228,10 +275,14 @@ type Config struct {
 	WAFAudit struct {
 		Disabled bool `json:"disabled"`
 		// Hosts to probe (default: the zone name). Rules often pin
-		// http.host, so coverage is judged per host.
+		// http.host, so coverage is judged per host; each zone probes only
+		// the hosts that belong to it.
 		Hosts []string `json:"hosts"`
-		// SensitivePaths adds patterns to path_rules and daily.paths,
-		// which are always checked for coverage.
+		// SensitivePaths adds patterns to path_rules and daily.paths.
+		// Together they are the default list, used by a zone without its
+		// own zones[].waf_audit.sensitive_paths — with several zones, only
+		// by the zones the global hosts belong to (the first zone when no
+		// hosts are set). Other zones show coverage as not configured.
 		SensitivePaths []string `json:"sensitive_paths"`
 	} `json:"waf_audit"`
 	Archive struct {
@@ -409,6 +460,18 @@ func (c *Config) resolve() error {
 		}
 		if len(z.Workers) > 0 {
 			needAccount = true
+		}
+		if a := z.WAFAudit; a != nil {
+			for _, h := range a.Hosts {
+				if !HostInZone(h, c.Cloudflare.Zones[i].Name) {
+					return fmt.Errorf("config: zones[%d].waf_audit.hosts: %q is not in zone %s", i, h, c.Cloudflare.Zones[i].Name)
+				}
+			}
+			for _, p := range a.SensitivePaths {
+				if !strings.HasPrefix(p, "/") {
+					return fmt.Errorf("config: zones[%d].waf_audit.sensitive_paths: %q must start with /", i, p)
+				}
+			}
 		}
 	}
 	if needAccount && !tag.MatchString(c.Cloudflare.AccountID) {
