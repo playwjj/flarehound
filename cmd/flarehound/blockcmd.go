@@ -30,6 +30,7 @@ const blockUsage = `Commands:
   flarehound calibrate [--days 7]                  compare FlareHound's counts with the Cloudflare dashboard (read token)
   flarehound doctor                                self-check: config, what each token can do, capabilities, archive, heartbeat
   flarehound health [--file heartbeat]             exit 0 if the watch loop's heartbeat is fresh (Docker HEALTHCHECK)
+  flarehound console [help]                        the web console (see "flarehound console help")
 
 Blocking commands (separate write token, see README):
 
@@ -93,7 +94,7 @@ func pickZone(cfg *config.Config, want string) (config.Zone, error) {
 
 func runSubcommand(ctx context.Context, cfgPath, verb string, args []string, redactor *logx.Redactor) int {
 	if verb == "help" {
-		fmt.Print(blockUsage + rulesUsage)
+		fmt.Print(blockUsage + rulesUsage + "\n" + consoleUsage)
 		return 0
 	}
 	pos, rest := splitArgs(args)

@@ -2,6 +2,14 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.3.0 — 2026-11-18
+
+- **`flarehound console`**: a self-hosted web console, a separate process from the watch. Overview (newest settled hour vs the 28-day same-hour median, status against each alert line, 48-hour chart), movers (biggest risers and fallers by UA, ASN and uncached path, ranked by absolute change, with Top-N truncation shown as upper bounds), new faces (UA / ASN / path, first seen in 1 / 7 / 30 days), history (24 h / 7 d / 30 d with baseline band and a timeline of alerts, blocks and rule changes), WAF audit, and the block list (read-only). Server-rendered HTML with inline SVG charts, no JavaScript, strict CSP, mobile first, dark mode.
+- **Accounts**: local accounts (admin / viewer), argon2id passwords, revocable server-side sessions, CSRF tokens, per-IP and per-account sign-in throttling and lockout, TOTP two-factor sign-in (optionally mandatory), step-up for account administration, single-use invitation links, an account audit log. First admin via a one-time setup link or `flarehound console init-admin`. Optional trusted-proxy identity header (Cloudflare Access and similar), honoured only from `console.trusted_proxies`. External identities are reserved for third-party sign-in (v1.5).
+- **Isolation**: the console never reads the write token in this version; the watch and console heartbeats record whether the write token is in their environment and `doctor` reports it, along with the listen address, proxy setup and accounts.
+- **Deep links**: with `console.base_url` set, alerts, daily reports and audit messages end with a link to the matching console view.
+- The archive now also records uncached (dynamic) paths in the face history (`faces` dim `path`), so path new-faces work from this version on.
+
 ## v1.2.0 — 2026-11-17
 
 - **Charts and HTML email** (`report.visuals`, default on). Requests per hour, last 24 h vs the day before, with the alert's hour shaded; a real-rendering (`dynamic`) chart when it matters. Drawn in pure Go on your machine, nothing uploaded. Email becomes HTML (plain-text alternative, inline charts, metric tiles, cost bar, top lists); Telegram, Discord and WeCom receive the charts as images; the JSONL channel saves them as files; `-dry-run` writes previews to the temp directory.

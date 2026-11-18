@@ -8,7 +8,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"log"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -610,9 +612,13 @@ func (r *Runner) Intraday(ctx context.Context, zone config.Zone) error {
 		return nil
 	}
 	log.Printf("zone %s: %s decision=%s findings=%d", zone.Name, w, decision, len(findings))
-	return r.Sender.Send(ctx, notify.Message{Kind: "intraday", Zone: zone.Name, Decision: decision.String(),
+	view := "/movers"
+	if decision.String() == "recovered" {
+		view = "/"
+	}
+	return r.Sender.Send(ctx, r.withConsoleLink(notify.Message{Kind: "intraday", Zone: zone.Name, Decision: decision.String(),
 		WindowFrom: w.From, WindowTo: w.To, Rules: keys(findings), Severity: sev.Level, Text: text,
-		HTML: htmlBody, Images: imgs})
+		HTML: htmlBody, Images: imgs}, view))
 }
 
 // Daily builds and sends the daily report (SPEC 7.1 / 7.4): the last
@@ -766,8 +772,32 @@ func (r *Runner) Daily(ctx context.Context, zone config.Zone) error {
 		htmlBody = report.DailyHTML(cfg.Report.Language, d, text, cs)
 	}
 	log.Printf("zone %s: daily report %s (findings=%d)", zone.Name, w, len(d.Findings))
-	return r.Sender.Send(ctx, notify.Message{Kind: "daily", Zone: zone.Name,
-		WindowFrom: w.From, WindowTo: w.To, Rules: keys(d.Findings), Text: text, HTML: htmlBody, Images: imgs})
+	return r.Sender.Send(ctx, r.withConsoleLink(notify.Message{Kind: "daily", Zone: zone.Name,
+		WindowFrom: w.From, WindowTo: w.To, Rules: keys(d.Findings), Text: text, HTML: htmlBody, Images: imgs}, "/"))
+}
+
+// withConsoleLink appends a deep link to the matching console view when
+// console.base_url is configured (docs/web-console-revision.md §7 v1.3).
+func (r *Runner) withConsoleLink(m notify.Message, view string) notify.Message {
+	base := r.Cfg.Console.BaseURL
+	if base == "" {
+		return m
+	}
+	link := base + view + "?z=" + url.QueryEscape(m.Zone)
+	label := "Console: "
+	if r.Cfg.Report.Language == "zh" {
+		label = "控制台："
+	}
+	m.Text = strings.TrimRight(m.Text, "\n") + "\n\n" + label + link
+	if m.HTML != "" {
+		p := `<p style="margin:16px 0"><a href="` + html.EscapeString(link) + `">` + html.EscapeString(strings.TrimSpace(strings.TrimSuffix(label, ": "))) + ` →</a></p>`
+		if i := strings.LastIndex(m.HTML, "</body>"); i >= 0 {
+			m.HTML = m.HTML[:i] + p + m.HTML[i:]
+		} else {
+			m.HTML += p
+		}
+	}
+	return m
 }
 
 // keys lists the distinct signal keys of findings, in order.
@@ -876,6 +906,7 @@ func (r *Runner) archiveRound(ctx context.Context, zone config.Zone, w, bw sched
 	logErr("faces", r.Store.TouchFaces(z, store.DimASN, cur.TopASN, w.From))
 	logErr("faces", r.Store.TouchFaces(z, store.DimUA, base.TopUA, bw.From))
 	logErr("faces", r.Store.TouchFaces(z, store.DimASN, base.TopASN, bw.From))
+	logErr("faces", r.Store.TouchFaces(z, store.DimPath, snap.DynamicPaths, w.From))
 
 	cutoff := r.now().Add(-time.Duration(r.Cfg.Archive.HourlyRetentionDays) * 24 * time.Hour)
 	if n, err := r.Store.Prune(cutoff); err != nil {

@@ -73,5 +73,14 @@
     "disabled": false,
     "file": "data/archive.db",
     "hourly_retention_days": 400
+  },
+  "console": {
+    "enabled": false,
+    "listen": "127.0.0.1:8640",
+    "base_url": "",
+    "refresh_seconds": 300,
+    "session_hours": 12,
+    "require_totp": false,
+    "trusted_proxies": []
   }
 }

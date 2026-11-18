@@ -51,6 +51,12 @@ func main() {
 	// Blocking commands: they alone may read the write token.
 	if flag.NArg() > 0 {
 		verb := flag.Arg(0)
+		if verb == "console" { // the web console: its own process and flags
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			code := runConsole(ctx, *cfgPath, flag.Args()[1:], redactor)
+			stop()
+			os.Exit(code)
+		}
 		if !subcommands[verb] {
 			fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", verb, blockUsage)
 			os.Exit(2)
@@ -136,6 +142,7 @@ func main() {
 		}
 		b := health.Beat{At: time.Now().UTC(), Version: version, Role: "watch", Zones: len(cfg.Cloudflare.Zones),
 			Errors: failed, Next: schedule.NextIntraday(time.Now(), interval, offset)}
+		b.WriteTokenInEnv = os.Getenv(cfg.Blocking.WriteTokenEnv) != ""
 		if err := health.Write(cfg.DataDir(), health.WatchFile, b); err != nil {
 			log.Printf("heartbeat: %v", err)
 		}

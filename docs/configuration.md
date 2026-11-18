@@ -159,6 +159,24 @@ For Slack, Discord, WeCom and Feishu, naming a variable that is empty is a start
 | `archive.file` | string | `<data dir>/archive.db` | Archive path. |
 | `archive.hourly_retention_days` | int | `400` | Days to keep hourly snapshots (about 13 months). Minimum 30. Daily snapshots, faces and alerts are kept forever. |
 
+## console
+
+The web console (v1.3, read-only) — see [Web console](console.md).
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `console.enabled` | bool | `false` | `flarehound console` refuses to start unless this is true. |
+| `console.listen` | string | `127.0.0.1:8640` | Listen address. Keep it on loopback and reach it through Tailscale, a TLS reverse proxy or Cloudflare Tunnel: FlareHound does no TLS. |
+| `console.db_file` | string | `<data dir>/console.db` | Accounts and sessions (file mode 0600). The watch never opens it. |
+| `console.base_url` | string | — | How people reach the console, e.g. `https://hound.example.ts.net`. When set, notifications carry a deep link to the matching view, and invitation links use it. |
+| `console.refresh_seconds` | int | `300` | Auto-refresh of the live views. Minimum 30. |
+| `console.session_hours` | int | `12` | Idle lifetime of a sign-in session (1–720). |
+| `console.require_totp` | bool | `false` | Every account must set up two-factor sign-in before using the console. |
+| `console.trusted_proxies` | list | `[]` | IPs / CIDRs of reverse proxies in front of the console. Only these may set `X-Forwarded-For`, `X-Forwarded-Proto` or the proxy identity header. |
+| `console.proxy_auth.header` | string | — | Trust an identity header injected by an authenticating proxy (e.g. `Cf-Access-Authenticated-User-Email`). Requires `trusted_proxies`. |
+| `console.proxy_auth.default_role` | string | `viewer` | Role for proxy identities that match no local account: `viewer` or `none` (refuse). |
+| `console.proxy_auth.disable_login` | bool | `false` | Turn the built-in password sign-in off (proxy identities only). |
+
 ## Environment variables at a glance
 
 | Variable (default name) | Set by key | Used by |

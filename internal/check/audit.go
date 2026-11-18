@@ -175,7 +175,7 @@ func (r *Runner) rulesetChanged(ctx context.Context, zone config.Zone, st *state
 		reason = fmt.Sprintf("规则集已变更：版本 %s → %s", prev, rs.Version)
 	}
 	text := report.Audit(r.Cfg.Report.Language, d, reason)
-	if err := r.Sender.Send(ctx, notify.Message{Kind: "audit", Zone: zone.Name, Text: text}); err != nil {
+	if err := r.Sender.Send(ctx, r.withConsoleLink(notify.Message{Kind: "audit", Zone: zone.Name, Text: text}, "/audit")); err != nil {
 		log.Printf("zone %s: audit notify: %v", zone.Name, err)
 	}
 }

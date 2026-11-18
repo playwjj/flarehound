@@ -1,0 +1,447 @@
+// Package console is FlareHound's web console (docs/web-console-revision.md).
+//
+// It is a separate process from the watch (`flarehound console`), reads
+// the archive the watch writes, and keeps its own account database. In
+// v1.3 it is read-only against Cloudflare: it never reads the write
+// token. Pages are rendered on the server with inline SVG charts; there
+// is no JavaScript and no external resource (strict CSP).
+package console
+
+import (
+	"context"
+	"crypto/subtle"
+	"embed"
+	"errors"
+	"fmt"
+	"html/template"
+	"log"
+	"net"
+	"net/http"
+	"net/netip"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/playwjj/flarehound/internal/config"
+	"github.com/playwjj/flarehound/internal/report"
+)
+
+//go:embed templates/*.html static/*
+var assets embed.FS
+
+const (
+	sessionCookie = "fh_session"
+	preCookie     = "fh_pre" // pre-auth CSRF token (double submit)
+	preMFATTL     = 5 * time.Minute
+	stepUpTTL     = 10 * time.Minute
+)
+
+// Auditor runs the WAF audit for a zone (read token only).
+type Auditor func(ctx context.Context, zone config.Zone) (report.AuditData, error)
+
+// Server is the console HTTP handler.
+type Server struct {
+	Cfg     *config.Config
+	DB      *DB
+	Archive Archive
+	Auditor Auditor
+	Version string
+	Now     func() time.Time
+
+	tmpl    *template.Template
+	trusted []netip.Prefix
+	lang    lang
+
+	setupMu    sync.Mutex
+	setupToken string
+
+	limiter *limiter
+
+	auditMu    sync.Mutex
+	auditCache map[string]auditEntry
+}
+
+type auditEntry struct {
+	at   time.Time
+	data report.AuditData
+	err  error
+}
+
+// New prepares a server. When the account database is empty it creates
+// a one-time setup token (returned) for the first-admin page.
+func New(cfg *config.Config, db *DB, arch Archive, auditor Auditor, version string) (*Server, string, error) {
+	s := &Server{Cfg: cfg, DB: db, Archive: arch, Auditor: auditor, Version: version, Now: time.Now,
+		trusted: cfg.TrustedProxies(), lang: lang(cfg.Report.Language), limiter: newLimiter(10, time.Minute),
+		auditCache: map[string]auditEntry{}}
+	t, err := template.New("").Funcs(s.funcs()).ParseFS(assets, "templates/*.html")
+	if err != nil {
+		return nil, "", err
+	}
+	s.tmpl = t
+	n, err := db.CountUsers()
+	if err != nil {
+		return nil, "", err
+	}
+	if n == 0 && !cfg.Console.ProxyAuth.DisableLogin {
+		s.setupToken = randToken(24)
+	}
+	return s, s.setupToken, nil
+}
+
+// --- request context ---
+
+type ctxKey int
+
+const reqKey ctxKey = 0
+
+// Req is the per-request state shared by middleware and handlers.
+type Req struct {
+	IP       string
+	Secure   bool // reached over HTTPS (directly or via a trusted proxy)
+	Loopback bool
+	User     *User  // nil: anonymous
+	Proxy    string // identity asserted by a trusted proxy, if any
+	Session  *Session
+	CSRF     string
+	Pre      string // pre-auth token (anonymous forms)
+	Flash    string
+	Err      string
+}
+
+func reqOf(r *http.Request) *Req { return r.Context().Value(reqKey).(*Req) }
+
+func (s *Server) fromTrusted(addr netip.Addr) bool {
+	for _, p := range s.trusted {
+		if p.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+// clientInfo derives the client address and scheme. Forwarded headers are
+// honoured only from trusted proxies; the client is the rightmost
+// X-Forwarded-For entry that is not itself a trusted proxy.
+func (s *Server) clientInfo(r *http.Request) (ip netip.Addr, secure, fromProxy bool) {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	peer, _ := netip.ParseAddr(host)
+	peer = peer.Unmap()
+	secure = r.TLS != nil
+	if !peer.IsValid() || !s.fromTrusted(peer) {
+		return peer, secure, false
+	}
+	ip = peer
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		parts := strings.Split(xff, ",")
+		for i := len(parts) - 1; i >= 0; i-- {
+			a, err := netip.ParseAddr(strings.TrimSpace(parts[i]))
+			if err != nil {
+				break
+			}
+			ip = a.Unmap()
+			if !s.fromTrusted(ip) {
+				break
+			}
+		}
+	}
+	if strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+		secure = true
+	}
+	return ip, secure, true
+}
+
+func (s *Server) sessionTTL() time.Duration {
+	return time.Duration(s.Cfg.Console.SessionHours) * time.Hour
+}
+
+// Handler returns the console's root handler.
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+	static := http.FileServerFS(assets)
+	mux.Handle("GET /static/", static)
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "ok") })
+
+	// Anonymous.
+	mux.HandleFunc("GET /login", s.loginPage)
+	mux.HandleFunc("POST /login", s.loginPost)
+	mux.HandleFunc("GET /setup", s.setupPage)
+	mux.HandleFunc("POST /setup", s.setupPost)
+	mux.HandleFunc("GET /invite/{token}", s.invitePage)
+	mux.HandleFunc("POST /invite/{token}", s.invitePost)
+	// Second factor of a pending sign-in.
+	mux.HandleFunc("GET /login/totp", s.totpPage)
+	mux.HandleFunc("POST /login/totp", s.totpPost)
+	mux.HandleFunc("POST /logout", s.logout)
+
+	// Signed in.
+	user := func(h http.HandlerFunc) http.Handler { return s.requireUser(h, false) }
+	admin := func(h http.HandlerFunc) http.Handler { return s.requireUser(h, true) }
+	mux.Handle("GET /{$}", user(s.overviewPage))
+	mux.Handle("GET /movers", user(s.moversPage))
+	mux.Handle("GET /faces", user(s.facesPage))
+	mux.Handle("GET /history", user(s.historyPage))
+	mux.Handle("GET /audit", user(s.auditPage))
+	mux.Handle("POST /audit/run", user(s.auditRun))
+	mux.Handle("GET /blocks", user(s.blocksPage))
+	mux.Handle("GET /account", user(s.accountPage))
+	mux.Handle("POST /account/password", user(s.accountPassword))
+	mux.Handle("POST /account/totp/start", user(s.totpStart))
+	mux.Handle("POST /account/totp/confirm", user(s.totpConfirm))
+	mux.Handle("POST /account/totp/disable", user(s.totpDisable))
+	mux.Handle("POST /account/sessions/end", user(s.sessionEnd))
+	mux.Handle("GET /stepup", user(s.stepUpPage))
+	mux.Handle("POST /stepup", user(s.stepUpPost))
+	mux.Handle("GET /users", admin(s.usersPage))
+	mux.Handle("POST /users/create", admin(s.stepUp(s.userCreate)))
+	mux.Handle("POST /users/{id}/{op}", admin(s.stepUp(s.userOp)))
+	mux.Handle("POST /invites/create", admin(s.stepUp(s.inviteCreate)))
+	mux.Handle("POST /invites/revoke", admin(s.stepUp(s.inviteRevoke)))
+
+	return s.base(mux)
+}
+
+// base sets security headers, resolves the client and identity, and
+// enforces CSRF on every POST.
+func (s *Server) base(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; img-src 'self' data:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		if !strings.HasPrefix(r.URL.Path, "/static/") {
+			h.Set("Cache-Control", "no-store")
+		}
+
+		ip, secure, viaProxy := s.clientInfo(r)
+		rq := &Req{IP: ip.String(), Secure: secure, Loopback: ip.IsLoopback()}
+		if secure {
+			h.Set("Strict-Transport-Security", "max-age=31536000")
+		}
+
+		// Identity: a proxy-asserted identity (trusted proxies only), else
+		// the session cookie.
+		if hdr := s.Cfg.Console.ProxyAuth.Header; hdr != "" && viaProxy {
+			if id := strings.TrimSpace(r.Header.Get(hdr)); id != "" {
+				rq.Proxy = id
+			}
+		}
+		if c, err := r.Cookie(sessionCookie); err == nil {
+			if sess, ok, err := s.DB.SessionByToken(c.Value); err == nil && ok {
+				if u, err := s.DB.UserByID(sess.UserID); err == nil && !u.Disabled {
+					// A proxy identity that names someone else wins over a
+					// leftover cookie.
+					if rq.Proxy == "" || identityMatches(u, rq.Proxy) {
+						rq.Session, rq.User, rq.CSRF = &sess, &u, sess.CSRF
+						_ = s.DB.TouchSession(sess, s.sessionTTL())
+					}
+				}
+			}
+		}
+		if rq.User == nil && rq.Proxy != "" {
+			u, ok, err := s.DB.UserByIdentity(rq.Proxy)
+			switch {
+			case err != nil:
+				log.Printf("console: proxy identity lookup: %v", err)
+			case ok && !u.Disabled:
+				rq.User = &u
+			case !ok && s.Cfg.Console.ProxyAuth.DefaultRole == RoleViewer:
+				rq.User = &User{Username: rq.Proxy, Role: RoleViewer}
+			}
+		}
+		// Anonymous and proxy-identified requests use a double-submit token.
+		if rq.CSRF == "" {
+			if c, err := r.Cookie(preCookie); err == nil && len(c.Value) >= 32 {
+				rq.Pre = c.Value
+			} else {
+				rq.Pre = randToken(24)
+				http.SetCookie(w, &http.Cookie{Name: preCookie, Value: rq.Pre, Path: "/", HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode})
+			}
+			rq.CSRF = rq.Pre
+		}
+
+		if r.Method == http.MethodPost {
+			if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" && site != "none" {
+				http.Error(w, "cross-site request refused", http.StatusForbidden)
+				return
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+			if err := r.ParseForm(); err != nil {
+				http.Error(w, "bad form", http.StatusBadRequest)
+				return
+			}
+			if subtle.ConstantTimeCompare([]byte(r.PostFormValue("csrf")), []byte(rq.CSRF)) != 1 {
+				http.Error(w, "invalid or expired form — reload the page and try again", http.StatusForbidden)
+				return
+			}
+		}
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), reqKey, rq)))
+	})
+}
+
+func identityMatches(u User, id string) bool {
+	return strings.EqualFold(u.Username, id) || (u.Email != "" && strings.EqualFold(u.Email, id))
+}
+
+// requireUser gates signed-in pages, the pending second factor, forced
+// password change and mandatory TOTP enrolment.
+func (s *Server) requireUser(h http.HandlerFunc, adminOnly bool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rq := reqOf(r)
+		if rq.User == nil {
+			if r.Method == http.MethodGet {
+				http.Redirect(w, r, "/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusSeeOther)
+			} else {
+				http.Redirect(w, r, "/login", http.StatusSeeOther)
+			}
+			return
+		}
+		if rq.Session != nil && !rq.Session.MFAOK {
+			http.Redirect(w, r, "/login/totp", http.StatusSeeOther)
+			return
+		}
+		u := rq.User
+		if u.ID != 0 && rq.Session != nil { // a local account signed in with a password
+			acct := strings.HasPrefix(r.URL.Path, "/account")
+			if u.MustChange && !acct {
+				http.Redirect(w, r, "/account", http.StatusSeeOther)
+				return
+			}
+			if s.Cfg.Console.RequireTOTP && !u.TOTPEnabled && !acct {
+				http.Redirect(w, r, "/account", http.StatusSeeOther)
+				return
+			}
+		}
+		if adminOnly && !u.Admin() {
+			s.render(w, r, http.StatusForbidden, "message", page{Title: s.lang.t("forbidden"), Msg: s.lang.t("forbidden")})
+			return
+		}
+		h(w, r)
+	})
+}
+
+// stepUp requires a recent second-factor check for sensitive actions by
+// accounts that have TOTP on (docs §5.2: step-up before writes).
+func (s *Server) stepUp(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rq := reqOf(r)
+		if rq.User.TOTPEnabled && rq.Session != nil && s.Now().Sub(rq.Session.StepUpAt) > stepUpTTL {
+			next := r.Header.Get("Referer")
+			if next == "" {
+				next = "/users"
+			}
+			http.Redirect(w, r, "/stepup?next="+url.QueryEscape(localPath(next)), http.StatusSeeOther)
+			return
+		}
+		h(w, r)
+	}
+}
+
+// localPath keeps redirects on this site: only "/..." paths, never "//host".
+func localPath(p string) string {
+	if u, err := url.Parse(p); err == nil && u.IsAbs() {
+		p = u.RequestURI()
+	}
+	if !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") || strings.HasPrefix(p, "/\\") {
+		return "/"
+	}
+	return p
+}
+
+func (s *Server) setSession(w http.ResponseWriter, r *http.Request, sess Session, ttl time.Duration) {
+	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: sess.Token, Path: "/", HttpOnly: true,
+		Secure: reqOf(r).Secure, SameSite: http.SameSiteLaxMode, MaxAge: int(ttl.Seconds())})
+}
+
+func (s *Server) clearSession(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", HttpOnly: true,
+		Secure: reqOf(r).Secure, SameSite: http.SameSiteLaxMode, MaxAge: -1})
+}
+
+func (s *Server) audit(r *http.Request, action, target, detail string) {
+	rq := reqOf(r)
+	actor := "-"
+	if rq.User != nil {
+		actor = rq.User.Username
+		if rq.Proxy != "" && rq.Session == nil {
+			actor += " (proxy)"
+		}
+	}
+	if err := s.DB.Audit(actor, rq.IP, action, target, detail); err != nil {
+		log.Printf("console: audit log: %v", err)
+	}
+}
+
+func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
+	log.Printf("console: %s %s: %v", r.Method, r.URL.Path, err)
+	s.render(w, r, http.StatusInternalServerError, "message", page{Title: s.lang.t("error"), Msg: s.lang.t("error")})
+}
+
+// --- login throttling ---
+
+// limiter is a fixed-window counter per key (client IP), in memory.
+type limiter struct {
+	mu     sync.Mutex
+	max    int
+	window time.Duration
+	hits   map[string]*bucket
+}
+
+type bucket struct {
+	start time.Time
+	n     int
+}
+
+func newLimiter(max int, window time.Duration) *limiter {
+	return &limiter{max: max, window: window, hits: map[string]*bucket{}}
+}
+
+// allow counts one attempt and reports whether it is within the limit.
+func (l *limiter) allow(key string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.hits) > 10000 {
+		for k, b := range l.hits {
+			if now.Sub(b.start) > l.window {
+				delete(l.hits, k)
+			}
+		}
+	}
+	b := l.hits[key]
+	if b == nil || now.Sub(b.start) > l.window {
+		b = &bucket{start: now}
+		l.hits[key] = b
+	}
+	b.n++
+	return b.n <= l.max
+}
+
+// --- WAF audit cache ---
+
+const auditTTL = 30 * time.Minute
+
+func (s *Server) cachedAudit(ctx context.Context, zone config.Zone, force bool) (auditEntry, bool) {
+	s.auditMu.Lock()
+	e, ok := s.auditCache[zone.ZoneID]
+	s.auditMu.Unlock()
+	now := s.Now()
+	if ok && (!force && now.Sub(e.at) < auditTTL || force && now.Sub(e.at) < time.Minute) {
+		return e, force // force within a minute: refused, cached result returned
+	}
+	if s.Auditor == nil {
+		return auditEntry{at: now, err: errors.New("audit unavailable")}, false
+	}
+	actx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	d, err := s.Auditor(actx, zone)
+	e = auditEntry{at: now, data: d, err: err}
+	s.auditMu.Lock()
+	s.auditCache[zone.ZoneID] = e
+	s.auditMu.Unlock()
+	return e, false
+}

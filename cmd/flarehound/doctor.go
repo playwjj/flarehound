@@ -20,6 +20,7 @@ import (
 	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/check"
 	"github.com/playwjj/flarehound/internal/config"
+	"github.com/playwjj/flarehound/internal/console"
 	"github.com/playwjj/flarehound/internal/health"
 	"github.com/playwjj/flarehound/internal/schedule"
 	"github.com/playwjj/flarehound/internal/state"
@@ -251,6 +252,8 @@ func runDoctor(ctx context.Context, cfg *config.Config, cfgPath string, out io.W
 			st.Close()
 		}
 	}
+	doctorConsole(d, cfg, now)
+
 	if raw, err := os.ReadFile(filepath.Join(cfg.DataDir(), "outbox.json")); err == nil && len(raw) > 2 {
 		var q []json.RawMessage
 		_ = json.Unmarshal(raw, &q)
@@ -288,4 +291,73 @@ func sortedStrings(s []string) []string {
 		}
 	}
 	return s
+}
+
+// doctorConsole checks the web console's isolation (docs/web-console-revision.md §5.1).
+func doctorConsole(d *doctorOut, cfg *config.Config, now time.Time) {
+	d.head("Web console")
+	if b, err := health.Read(cfg.DataDir(), health.WatchFile); err == nil && b.WriteTokenInEnv {
+		d.bad("the watch process has %s in its environment: the watch must never hold the write token — remove it from the watch's environment", cfg.Blocking.WriteTokenEnv)
+	}
+	cs := cfg.Console
+	if !cs.Enabled {
+		d.ok("console off (console.enabled is false)")
+		return
+	}
+	if listenIsLocal(cs.Listen) {
+		d.ok("console.listen %s is loopback-only", cs.Listen)
+	} else {
+		d.warn("console.listen %s is reachable beyond this machine: FlareHound does no TLS — use Tailscale, a TLS reverse proxy or Cloudflare Tunnel", cs.Listen)
+		if len(cs.TrustedProxies) == 0 {
+			d.warn("no console.trusted_proxies: client IPs and HTTPS behind a proxy cannot be recognised (session cookies are sent without Secure)")
+		}
+	}
+	if cs.BaseURL != "" && strings.HasPrefix(cs.BaseURL, "http://") && !strings.Contains(cs.BaseURL, "://127.") && !strings.Contains(cs.BaseURL, "://localhost") {
+		d.warn("console.base_url %s is plain HTTP: passwords and session cookies would cross the network in clear text", cs.BaseURL)
+	}
+	if cs.ProxyAuth.Header != "" {
+		d.ok("proxy identity header %s trusted from %s", cs.ProxyAuth.Header, strings.Join(cs.TrustedProxies, ", "))
+	}
+	if b, err := health.Read(cfg.DataDir(), health.ConsoleFile); err != nil {
+		d.warn("no console heartbeat: the console has not run yet (flarehound console)")
+	} else {
+		age := now.Sub(b.At).Round(time.Second)
+		if age > 15*time.Minute {
+			d.warn("console heartbeat %s ago: is the console still running?", age)
+		} else {
+			d.ok("console running on %s (heartbeat %s ago)", b.Listen, age)
+		}
+		if b.WriteTokenInEnv {
+			d.bad("the console process has %s in its environment: this version is read-only and must not hold the write token", cfg.Blocking.WriteTokenEnv)
+		}
+	}
+	db, err := console.OpenDB(cfg.Console.DBFile)
+	if err != nil {
+		d.bad("console database: %v", err)
+		return
+	}
+	defer db.Close()
+	us, err := db.Users()
+	if err != nil {
+		d.bad("console database: %v", err)
+		return
+	}
+	admins, twofa := 0, 0
+	for _, u := range us {
+		if u.Admin() && !u.Disabled {
+			admins++
+		}
+		if u.TOTPEnabled {
+			twofa++
+		}
+	}
+	switch {
+	case len(us) == 0 && !cs.ProxyAuth.DisableLogin:
+		d.warn("no console accounts yet: run `flarehound console init-admin --user NAME` or use the setup link the console logs")
+	case admins == 0 && !cs.ProxyAuth.DisableLogin:
+		d.bad("no active admin account: run `flarehound console init-admin --user NAME`")
+	default:
+		d.ok("%d account(s), %d admin(s), %d with two-factor sign-in%s", len(us), admins, twofa,
+			map[bool]string{true: " (required)", false: ""}[cs.RequireTOTP])
+	}
 }

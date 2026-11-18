@@ -23,12 +23,19 @@ type Beat struct {
 	Zones   int       `json:"zones"`
 	Errors  []string  `json:"errors,omitempty"`
 	Next    time.Time `json:"next,omitzero"`
+	// WriteTokenInEnv: the write token variable is set in this process's
+	// environment. The watch and the v1.3 console must never hold it;
+	// doctor warns when they do.
+	WriteTokenInEnv bool `json:"write_token_in_env,omitempty"`
+	// Listen is the console's bound address (console role only).
+	Listen string `json:"listen,omitempty"`
 }
 
 // File names of the two roles' heartbeats in the data directory.
 const (
 	WatchFile   = "heartbeat"
 	EnforceFile = "heartbeat-enforce"
+	ConsoleFile = "heartbeat-console"
 )
 
 // Write stores a beat atomically.

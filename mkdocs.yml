@@ -42,6 +42,7 @@ nav:
       - Alerts, daily report & suggestions: reports.md
       - Notification channels: channels.md
       - Local archive & calibration: archive.md
+  - Web console: console.md
   - Acting on findings:
       - One-click blocking: blocking.md
       - Rule changes: rules.md

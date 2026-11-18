@@ -225,6 +225,9 @@ type FaceRecord struct {
 const (
 	DimUA  = "ua"
 	DimASN = "asn"
+	// DimPath records top uncached (dynamic) paths — the expensive ones.
+	// Recorded since v1.3; older archives have no path history.
+	DimPath = "path"
 )
 
 // TouchFaces records that faces appeared in a Top list of the window
@@ -542,4 +545,185 @@ func (s *Store) CalibrationDays(zone string, n int) ([][]byte, error) {
 		out = append(out, []byte(d))
 	}
 	return out, rows.Err()
+}
+
+// Window is an archived hourly snapshot with its timing.
+type Window struct {
+	From, To time.Time
+	SavedAt  time.Time
+	Snapshot
+}
+
+// LatestHour returns the newest hourly snapshot of a zone.
+func (s *Store) LatestHour(zone string) (Window, bool, error) {
+	var from, to, saved int64
+	var raw string
+	err := s.db.QueryRow(`SELECT from_ts, to_ts, saved_at, data FROM snapshots WHERE zone = ? AND kind = 'hour'
+		ORDER BY from_ts DESC LIMIT 1`, zone).Scan(&from, &to, &saved, &raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Window{}, false, nil
+	}
+	if err != nil {
+		return Window{}, false, err
+	}
+	w := Window{From: time.Unix(from, 0).UTC(), To: time.Unix(to, 0).UTC(), SavedAt: time.Unix(saved, 0).UTC()}
+	if err := json.Unmarshal([]byte(raw), &w.Snapshot); err != nil {
+		return Window{}, false, err
+	}
+	return w, true, nil
+}
+
+// HourAt returns the hourly snapshot starting at from, if archived.
+func (s *Store) HourAt(zone string, from time.Time) (Window, bool, error) {
+	var to, saved int64
+	var raw string
+	err := s.db.QueryRow(`SELECT to_ts, saved_at, data FROM snapshots WHERE zone = ? AND kind = 'hour' AND from_ts = ?`,
+		zone, from.Unix()).Scan(&to, &saved, &raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Window{}, false, nil
+	}
+	if err != nil {
+		return Window{}, false, err
+	}
+	w := Window{From: from.UTC(), To: time.Unix(to, 0).UTC(), SavedAt: time.Unix(saved, 0).UTC()}
+	if err := json.Unmarshal([]byte(raw), &w.Snapshot); err != nil {
+		return Window{}, false, err
+	}
+	return w, true, nil
+}
+
+// SameHourSnapshots is SameHour with the full snapshots (breakdowns
+// included), for per-entry baselines.
+func (s *Store) SameHourSnapshots(zone string, from, to time.Time, days int) ([]Snapshot, error) {
+	length := to.Unix() - from.Unix()
+	var starts []any
+	for k := 1; k <= days; k++ {
+		starts = append(starts, from.Add(-time.Duration(k)*24*time.Hour).Unix())
+	}
+	if len(starts) == 0 {
+		return nil, nil
+	}
+	q := `SELECT data FROM snapshots WHERE zone = ? AND kind = 'hour' AND to_ts - from_ts = ? AND from_ts IN (?` +
+		strings.Repeat(",?", len(starts)-1) + `) ORDER BY from_ts DESC`
+	rows, err := s.db.Query(q, append([]any{zone, length}, starts...)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Snapshot
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		var snap Snapshot
+		if err := json.Unmarshal([]byte(raw), &snap); err != nil {
+			return nil, err
+		}
+		out = append(out, snap)
+	}
+	return out, rows.Err()
+}
+
+// HourPoint is one archived hour's headline numbers (no breakdowns).
+type HourPoint struct {
+	From                      time.Time
+	Total, Dynamic, Origin5xx int64
+}
+
+// HourSeries returns the hourly headline numbers with windows starting
+// in [from, to), oldest first.
+func (s *Store) HourSeries(zone string, from, to time.Time) ([]HourPoint, error) {
+	rows, err := s.db.Query(`SELECT from_ts, total, dynamic, origin_5xx FROM snapshots
+		WHERE zone = ? AND kind = 'hour' AND from_ts >= ? AND from_ts < ? ORDER BY from_ts`, zone, from.Unix(), to.Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []HourPoint
+	for rows.Next() {
+		var p HourPoint
+		var ts int64
+		if err := rows.Scan(&ts, &p.Total, &p.Dynamic, &p.Origin5xx); err != nil {
+			return nil, err
+		}
+		p.From = time.Unix(ts, 0).UTC()
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// FacesSince returns faces of one dim first seen at or after since,
+// newest first.
+func (s *Store) FacesSince(zone, dim string, since time.Time, limit int) ([]FaceRecord, error) {
+	rows, err := s.db.Query(`SELECT name, first_seen, last_seen, max_count FROM faces
+		WHERE zone = ? AND dim = ? AND first_seen >= ? ORDER BY first_seen DESC, max_count DESC LIMIT ?`,
+		zone, dim, since.Unix(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []FaceRecord
+	for rows.Next() {
+		var f FaceRecord
+		var first, last int64
+		if err := rows.Scan(&f.Name, &first, &last, &f.MaxCount); err != nil {
+			return nil, err
+		}
+		f.FirstSeen, f.LastSeen = time.Unix(first, 0).UTC(), time.Unix(last, 0).UTC()
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// OldestFace returns when a dim was first recorded at all (zero if never)
+// — the path dim only exists since v1.3.
+func (s *Store) OldestFace(zone, dim string) (time.Time, error) {
+	var v sql.NullInt64
+	err := s.db.QueryRow(`SELECT MIN(first_seen) FROM faces WHERE zone = ? AND dim = ?`, zone, dim).Scan(&v)
+	if err != nil || !v.Valid {
+		return time.Time{}, err
+	}
+	return time.Unix(v.Int64, 0).UTC(), nil
+}
+
+// AlertRecord is an archived decision with its findings.
+type AlertRecord struct {
+	Alert
+	Findings []analyze.Finding
+	SentAt   time.Time
+}
+
+// AlertsDetailed is Alerts with findings, newest first.
+func (s *Store) AlertsDetailed(zone string, from, to time.Time, limit int) ([]AlertRecord, error) {
+	rows, err := s.db.Query(`SELECT window_to, decision, fingerprint, findings, sent_at FROM alerts
+		WHERE zone = ? AND window_to >= ? AND window_to < ? ORDER BY window_to DESC, id DESC LIMIT ?`,
+		zone, from.Unix(), to.Unix(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AlertRecord
+	for rows.Next() {
+		var a AlertRecord
+		var ts, sent int64
+		var raw string
+		if err := rows.Scan(&ts, &a.Decision, &a.Fingerprint, &raw, &sent); err != nil {
+			return nil, err
+		}
+		a.WindowTo, a.SentAt = time.Unix(ts, 0).UTC(), time.Unix(sent, 0).UTC()
+		_ = json.Unmarshal([]byte(raw), &a.Findings)
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// BlockEventsBetween returns a zone's block audit events in [from, to), newest first.
+func (s *Store) BlockEventsBetween(zone string, from, to time.Time, limit int) ([]BlockEvent, error) {
+	rows, err := s.db.Query(`SELECT `+eventCols+` FROM block_events WHERE zone = ? AND at >= ? AND at < ?
+		ORDER BY id DESC LIMIT ?`, zone, from.Unix(), to.Unix(), limit)
+	if err != nil {
+		return nil, err
+	}
+	return scanEvents(rows)
 }

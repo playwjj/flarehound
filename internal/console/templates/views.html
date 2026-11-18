@@ -1,0 +1,250 @@
+{{define "windowline"}}
+<p class="meta">{{t "window"}} <b>{{when .Window.From}}–{{hm .Window.To}}</b> · {{t "saved_at"}} {{ago .Window.SavedAt}}</p>
+{{end}}
+
+{{define "overview"}}{{template "head" .}}
+{{with .Overview}}
+{{if not .Has}}<section class="card"><p>{{t "no_data"}}</p></section>{{else}}
+{{if .Stale}}<div class="banner warn">{{t "stale"}}</div>{{end}}
+{{template "windowline" .}}
+{{if not .BaselineOK}}<p class="note">{{if .Samples}}{{tf "baseline_thin" .Samples 20}}{{else}}{{t "baseline_none"}}{{end}}</p>{{end}}
+<section class="tiles">
+{{range .Rows}}
+<div class="tile st-{{.Status}}">
+  <div class="tl">{{t .Key}}{{if .Subject}} · <span class="mono">{{.Subject}}</span>{{end}}</div>
+  <div class="tv">{{numf .Cur .Unit}}</div>
+  <div class="td">{{if .HasBase}}<span class="chg">{{pct .Pct}}</span> <span class="muted">{{t "baseline"}} {{numf .Base .Unit}}</span>{{else}}<span class="muted">{{t "st_na"}}</span>{{end}}</div>
+  <div class="ts"><span class="dot"></span>{{t (print "st_" .Status)}} <span class="muted">· {{t "alert_line"}} {{.LineDesc}}</span></div>
+</div>
+{{end}}
+</section>
+<p class="meta">{{tf "alerts_24h" .AlertsToday}} · {{t "baseline"}} = {{t "baseline_desc"}}</p>
+{{end}}
+{{end}}
+{{if .Chart}}<section class="card"><h2>{{t "last_48h"}}</h2>{{.Chart}}<p class="legend">{{t "hist_legend"}}</p></section>{{end}}
+<p class="note">{{t "settled_note"}}</p>
+{{template "foot" .}}{{end}}
+
+{{define "moverrows"}}
+{{if not .}}<p class="muted">{{t "none"}}</p>{{else}}
+<table class="list">
+<thead><tr><th>{{t "name"}}</th><th class="r">{{t "current"}}</th><th class="r">{{t "baseline"}}</th><th class="r">{{t "change"}}</th></tr></thead>
+<tbody>
+{{range .}}<tr>
+  <td class="name"><span class="mono" title="{{.Name}}">{{short .Name 80}}</span>{{if .Known}} <span class="tag">{{t "known"}}</span>{{end}}</td>
+  <td class="r">{{if .CurCapped}}&lt; {{end}}{{num .Cur}}</td>
+  <td class="r">{{if .BaseCapped}}&lt; {{end}}{{num .Base}}</td>
+  <td class="r"><b>{{if or .BaseCapped .CurCapped}}≈{{end}}{{delta .Delta}}</b>{{if .HasPct}}<br><small class="muted">{{pct .Pct}}</small>{{end}}</td>
+</tr>{{end}}
+</tbody></table>{{end}}
+{{end}}
+
+{{define "movers"}}{{template "head" .}}
+{{$z := zq .Zone}}{{$dim := .Dim}}
+<nav class="seg">
+  <a href="/movers?z={{$z}}&amp;dim=ua"{{if eq $dim "ua"}} class="on"{{end}}>{{t "dim_ua"}}</a>
+  <a href="/movers?z={{$z}}&amp;dim=asn"{{if eq $dim "asn"}} class="on"{{end}}>{{t "dim_asn"}}</a>
+  <a href="/movers?z={{$z}}&amp;dim=path"{{if eq $dim "path"}} class="on"{{end}}>{{t "dim_path"}}</a>
+</nav>
+{{with .Movers}}
+{{if not .Has}}<section class="card"><p>{{t "no_data"}}</p></section>{{else}}
+{{template "windowline" .}}
+{{if lt .Samples 20}}<p class="note">{{if .Samples}}{{tf "baseline_thin" .Samples 20}}{{else}}{{t "baseline_none"}}{{end}}</p>{{end}}
+<section class="card"><h2 class="up">▲ {{t "risers"}}</h2>{{template "moverrows" .Up}}</section>
+<section class="card"><h2 class="down">▼ {{t "fallers"}}</h2>{{template "moverrows" .Down}}</section>
+<p class="note">{{tf "movers_note" .TopN}}{{if eq $dim "path"}} {{t "path_note"}}{{end}}</p>
+{{end}}{{end}}
+{{template "foot" .}}{{end}}
+
+{{define "faces"}}{{template "head" .}}
+{{$z := zq .Zone}}{{$days := .Days}}
+<nav class="seg">
+  <a href="/faces?z={{$z}}&amp;days=1"{{if eq $days 1}} class="on"{{end}}>24 h</a>
+  <a href="/faces?z={{$z}}&amp;days=7"{{if eq $days 7}} class="on"{{end}}>7 {{t "days"}}</a>
+  <a href="/faces?z={{$z}}&amp;days=30"{{if eq $days 30}} class="on"{{end}}>30 {{t "days"}}</a>
+</nav>
+<p class="note">{{tf "faces_since" .Days}}</p>
+{{$pathSince := .Faces.PathSince}}
+{{range .Faces.Sections}}
+<section class="card">
+<h2>{{t (print "dim_" .Dim)}}</h2>
+{{if eq .Dim "path"}}<p class="note">{{if $pathSince.IsZero}}{{t "path_since_none"}}{{else}}{{tf "path_since" (when $pathSince)}}{{end}} {{t "path_note"}}</p>{{end}}
+{{if not .Faces}}<p class="muted">{{t "none"}}</p>{{else}}
+<table class="list">
+<thead><tr><th>{{t "name"}}</th><th>{{t "first_seen"}}</th><th class="r">{{t "now"}}</th><th class="r">{{t "peak"}}</th></tr></thead>
+<tbody>{{range .Faces}}<tr>
+  <td class="name"><span class="mono" title="{{.Name}}">{{short .Name 80}}</span>{{if .Known}} <span class="tag">{{t "known"}}</span>{{end}}</td>
+  <td>{{when .FirstSeen}}<br><small class="muted">{{ago .FirstSeen}}</small></td>
+  <td class="r">{{if .InCur}}{{num .Cur}}{{else}}<span class="muted">{{t "not_in_top"}}</span>{{end}}</td>
+  <td class="r">{{num .MaxCount}}<br><small class="muted">{{t "last_seen"}} {{ago .LastSeen}}</small></td>
+</tr>{{end}}</tbody></table>{{end}}
+</section>
+{{end}}
+{{template "foot" .}}{{end}}
+
+{{define "history"}}{{template "head" .}}
+{{$z := zq .Zone}}{{$r := .Range}}
+<nav class="seg">
+  <a href="/history?z={{$z}}&amp;range=24h"{{if eq $r "24h"}} class="on"{{end}}>24 h</a>
+  <a href="/history?z={{$z}}&amp;range=7d"{{if eq $r "7d"}} class="on"{{end}}>7 {{t "days"}}</a>
+  <a href="/history?z={{$z}}&amp;range=30d"{{if eq $r "30d"}} class="on"{{end}}>30 {{t "days"}}</a>
+</nav>
+<form class="inline" method="get" action="/history">
+  <input type="hidden" name="z" value="{{.Zone.Name}}"><input type="hidden" name="range" value="{{.Range}}">
+  <label>{{t "range"}} ≤ <input type="date" name="end"></label> <button class="small">OK</button>
+</form>
+<p class="meta">{{when .History.From}} – {{when .History.To}}</p>
+<section class="card">{{if .Chart}}{{.Chart}}{{else}}<p class="muted">{{t "none"}}</p>{{end}}<p class="legend">{{t "hist_legend"}}</p></section>
+<section class="card"><h2>{{t "events"}}</h2>
+{{if not .History.Events}}<p class="muted">{{t "none"}}</p>{{else}}
+<table class="list">
+<thead><tr><th>{{t "time"}}</th><th>{{t "event"}}</th><th>{{t "detail"}}</th></tr></thead>
+<tbody>{{range .History.Events}}<tr>
+  <td class="nowrap">{{when .At}}</td>
+  <td><span class="ev ev-{{.Kind}}">{{evName .Kind}}</span> <span class="mono">{{.Label}}</span></td>
+  <td class="muted">{{short .Detail 160}}</td>
+</tr>{{end}}</tbody></table>{{end}}
+</section>
+{{template "foot" .}}{{end}}
+
+{{define "audit"}}{{template "head" .}}
+<section class="card">
+<h1>{{t "audit_title"}} · {{.Zone.Name}}</h1>
+{{with .Audit}}
+{{if .Refused}}<div class="banner info">{{t "audit_wait"}}</div>{{end}}
+{{if .Err}}<div class="banner err">{{t "error"}}</div>{{else}}
+{{if .NA}}<div class="banner warn">{{.NA}}</div>{{else}}<p><b class="{{if .Problems}}bad{{else}}good{{end}}">{{.Problems}}</b> {{t "audit_problems"}}</p>{{end}}
+<pre class="report">{{.Text}}</pre>{{end}}
+<p class="meta">{{tf "audit_cached" (when .At)}}</p>
+{{end}}
+<form method="post" action="/audit/run"><input type="hidden" name="csrf" value="{{.Req.CSRF}}"><input type="hidden" name="z" value="{{.Zone.Name}}"><button>{{t "audit_run"}}</button></form>
+</section>
+{{template "foot" .}}{{end}}
+
+{{define "blocks"}}{{template "head" .}}
+<p class="note">{{t "blocks_ro"}}</p>
+<section class="card"><h2>{{t "active_blocks"}}</h2>
+{{if not .Active}}<p class="muted">{{t "none"}}</p>{{else}}
+<table class="list">
+<thead><tr><th>{{t "type"}}</th><th>{{t "value"}}</th><th>{{t "action"}}</th><th>{{t "expires"}}</th><th>{{t "reason"}}</th></tr></thead>
+<tbody>{{range .Active}}<tr>
+  <td>{{.Type}}</td><td class="mono">{{.Value}}</td><td>{{.Action}}</td>
+  <td class="nowrap">{{if .ExpiresAt.IsZero}}{{t "permanent"}}{{else}}{{when .ExpiresAt}}{{end}}</td>
+  <td class="muted">{{.Reason}}<br><small>{{when .At}} · {{.Actor}}</small></td>
+</tr>{{end}}</tbody></table>{{end}}
+</section>
+<section class="card"><h2>{{t "block_log"}}</h2>
+{{if not .Log}}<p class="muted">{{t "none"}}</p>{{else}}
+<table class="list">
+<thead><tr><th>{{t "time"}}</th><th>{{t "op"}}</th><th>{{t "value"}}</th><th>{{t "actor"}}</th></tr></thead>
+<tbody>{{range .Log}}<tr>
+  <td class="nowrap">{{when .At}}</td><td><span class="ev ev-{{.Op}}">{{evName .Op}}</span> {{.Action}}</td>
+  <td><span class="mono">{{.Type}} {{.Value}}</span>{{if .Reason}}<br><small class="muted">{{.Reason}}</small>{{end}}</td><td>{{.Actor}}</td>
+</tr>{{end}}</tbody></table>{{end}}
+</section>
+{{template "foot" .}}{{end}}
+
+{{define "account"}}{{template "head" .}}
+{{$rq := .Req}}
+<section class="card">
+<h1>{{t "acct_title"}}</h1>
+{{if .Msg}}<div class="banner warn">{{.Msg}}</div>{{end}}
+<p>{{.Req.User.Username}} · {{t "role"}}: <b>{{roleName .Req.User.Role}}</b></p>
+</section>
+{{if .Req.User.ID}}
+<section class="card"><h2>{{t "change_pw"}}</h2>
+<form method="post" action="/account/password" class="stack">
+  <input type="hidden" name="csrf" value="{{.Req.CSRF}}">
+  <input type="text" name="username" value="{{.Req.User.Username}}" autocomplete="username" hidden>
+  <label>{{t "password_cur"}}<input name="current" type="password" autocomplete="current-password" required></label>
+  <label>{{t "password_new"}} <small>{{t "password_rule"}}</small><input name="password" type="password" minlength="10" autocomplete="new-password" required></label>
+  <label>{{t "password_again"}}<input name="password2" type="password" minlength="10" autocomplete="new-password" required></label>
+  <button>{{t "save"}}</button>
+</form></section>
+
+<section class="card"><h2>{{t "totp_section"}}</h2>
+{{if .Req.User.TOTPEnabled}}
+<p>{{t "totp_on"}}</p>
+<form method="post" action="/account/totp/disable" class="stack">
+  <input type="hidden" name="csrf" value="{{.Req.CSRF}}">
+  <label>{{t "password_cur"}}<input name="current" type="password" autocomplete="current-password" required></label>
+  <label>{{t "totp_code"}}<input name="code" inputmode="numeric" autocomplete="one-time-code" required></label>
+  <button class="danger">{{t "totp_disable"}}</button>
+</form>
+{{else if .TOTPSecret}}
+<p>{{t "totp_enroll"}}</p>
+<p>{{t "totp_key"}}: <code class="secret">{{.TOTPSecret}}</code></p>
+<details><summary>{{t "totp_uri"}}</summary><code class="wrap">{{.TOTPURI}}</code></details>
+<form method="post" action="/account/totp/confirm" class="stack">
+  <input type="hidden" name="csrf" value="{{.Req.CSRF}}">
+  <label>{{t "totp_code"}}<input name="code" inputmode="numeric" autocomplete="one-time-code" required></label>
+  <button>{{t "verify"}}</button>
+</form>
+{{else}}
+<p>{{t "totp_off"}}</p>
+<form method="post" action="/account/totp/start"><input type="hidden" name="csrf" value="{{.Req.CSRF}}"><button>{{t "totp_start"}}</button></form>
+{{end}}
+</section>
+
+<section class="card"><h2>{{t "sessions"}}</h2>
+<table class="list"><thead><tr><th>{{t "created"}}</th><th>{{t "ip"}}</th><th>{{t "device"}}</th><th></th></tr></thead>
+<tbody>{{range .Sessions}}<tr>
+  <td class="nowrap">{{when .CreatedAt}}<br><small class="muted">{{ago .LastSeen}}</small></td>
+  <td class="mono">{{.IP}}</td><td class="muted">{{short .UA 60}}</td>
+  <td>{{if isNow . $rq}}<span class="tag">{{t "this_session"}}</span>{{else}}<form method="post" action="/account/sessions/end"><input type="hidden" name="csrf" value="{{$rq.CSRF}}"><input type="hidden" name="id" value="{{.Hash}}"><button class="small">{{t "end"}}</button></form>{{end}}</td>
+</tr>{{end}}</tbody></table>
+<form method="post" action="/account/sessions/end"><input type="hidden" name="csrf" value="{{.Req.CSRF}}"><input type="hidden" name="all" value="1"><button class="small">{{t "end_others"}}</button></form>
+</section>
+{{end}}
+{{template "foot" .}}{{end}}
+
+{{define "users"}}{{template "head" .}}
+{{$rq := .Req}}
+{{if .Secret}}<div class="banner info">{{t "temp_pw_note"}} <b>{{.SecretFor}}</b>: <code class="secret">{{.Secret}}</code></div>{{end}}
+{{if .InviteLink}}<div class="banner info">{{t "invite_link_note"}}<br><code class="wrap">{{.InviteLink}}</code></div>{{end}}
+<section class="card"><h1>{{t "users_title"}}</h1>
+<table class="list">
+<thead><tr><th>{{t "username"}}</th><th>{{t "role"}}</th><th>{{t "status"}}</th><th>{{t "twofa"}}</th><th>{{t "actions"}}</th></tr></thead>
+<tbody>{{range .Users}}<tr>
+  <td><b>{{.Username}}</b>{{if .Email}}<br><small class="muted">{{.Email}}</small>{{end}}</td>
+  <td>{{roleName .Role}}</td>
+  <td>{{if .Disabled}}<span class="bad">{{t "disabled"}}</span>{{else if locked .}}<span class="bad">{{t "locked"}}</span>{{else}}{{t "active"}}{{end}}{{if .MustChange}}<br><small class="muted">{{t "must_change"}}</small>{{end}}</td>
+  <td>{{if .TOTPEnabled}}{{t "yes"}}{{else}}{{t "no"}}{{end}}</td>
+  <td class="acts">{{if ne .ID $rq.User.ID}}{{$id := .ID}}
+    {{if .Admin}}{{template "uop" (list "viewer" (print $id) $rq.CSRF "make_viewer")}}{{else}}{{template "uop" (list "admin" (print $id) $rq.CSRF "make_admin")}}{{end}}
+    {{if .Disabled}}{{template "uop" (list "enable" (print $id) $rq.CSRF "enable")}}{{else}}{{template "uop" (list "disable" (print $id) $rq.CSRF "disable")}}{{end}}
+    {{if locked .}}{{template "uop" (list "unlock" (print $id) $rq.CSRF "unlock")}}{{end}}
+    {{template "uop" (list "reset" (print $id) $rq.CSRF "reset_pw")}}
+    {{if .TOTPEnabled}}{{template "uop" (list "totp" (print $id) $rq.CSRF "reset_totp")}}{{end}}
+    {{template "uop" (list "signout" (print $id) $rq.CSRF "sign_out_user")}}
+  {{else}}<a href="/account">{{t "nav_account"}}</a>{{end}}</td>
+</tr>{{end}}</tbody></table>
+</section>
+
+<section class="card"><h2>{{t "new_user"}}</h2>
+<form method="post" action="/users/create" class="stack">
+  <input type="hidden" name="csrf" value="{{.Req.CSRF}}">
+  <label>{{t "username"}}<input name="username" autocapitalize="none" required></label>
+  <label>{{t "email"}}<input name="email" type="email"></label>
+  <label>{{t "role"}}<select name="role"><option value="viewer">{{roleName "viewer"}}</option><option value="admin">{{roleName "admin"}}</option></select></label>
+  <button>{{t "create"}}</button>
+</form></section>
+
+<section class="card"><h2>{{t "invite_new"}}</h2>
+<form method="post" action="/invites/create" class="inline">
+  <input type="hidden" name="csrf" value="{{.Req.CSRF}}">
+  <select name="role"><option value="viewer">{{roleName "viewer"}}</option><option value="admin">{{roleName "admin"}}</option></select>
+  <button>{{t "invite_make"}}</button>
+</form>
+{{if .Invites}}<h3>{{t "invite_pending"}}</h3>
+<table class="list"><tbody>{{range .Invites}}<tr><td>{{roleName .Role}}</td><td>{{t "created"}} {{when .CreatedAt}}</td><td>{{t "expires"}} {{when .ExpiresAt}}</td>
+<td><form method="post" action="/invites/revoke"><input type="hidden" name="csrf" value="{{$rq.CSRF}}"><input type="hidden" name="id" value="{{.Hash}}"><button class="small">{{t "revoke"}}</button></form></td></tr>{{end}}</tbody></table>{{end}}
+</section>
+
+<section class="card"><h2>{{t "audit_log"}}</h2>
+<table class="list"><thead><tr><th>{{t "time"}}</th><th>{{t "actor"}}</th><th>{{t "action"}}</th><th>{{t "detail"}}</th></tr></thead>
+<tbody>{{range .AuditLog}}<tr><td class="nowrap">{{when .At}}</td><td>{{.Actor}}<br><small class="muted mono">{{.IP}}</small></td><td class="mono">{{.Action}}</td><td class="muted">{{.Target}} {{.Detail}}</td></tr>{{end}}</tbody></table>
+</section>
+{{template "foot" .}}{{end}}
+
+{{define "uop"}}<form method="post" action="/users/{{index . 1}}/{{index . 0}}" class="op"><input type="hidden" name="csrf" value="{{index . 2}}"><button class="small">{{t (index . 3)}}</button></form>{{end}}

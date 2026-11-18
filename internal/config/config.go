@@ -131,6 +131,39 @@ type Channels struct {
 	Slack, Discord, WeCom, Feishu, FeishuSecret, EmailPassword string
 }
 
+// Console is the web console (v1.3, docs/web-console-revision.md). It is
+// a separate process (`flarehound console`), off unless Enabled, and
+// bound to loopback by default: exposing it beyond this machine is left
+// to the operator's own Tailscale / reverse proxy / Cloudflare Tunnel.
+type Console struct {
+	Enabled bool   `json:"enabled"`
+	Listen  string `json:"listen"`  // default 127.0.0.1:8640
+	DBFile  string `json:"db_file"` // accounts and sessions; default <data dir>/console.db
+	// BaseURL is how people reach the console (e.g. https://hound.example.ts.net).
+	// When set, notifications carry a deep link to the matching view.
+	BaseURL string `json:"base_url"`
+	// RefreshSeconds is the auto-refresh interval of live views (0: 300).
+	RefreshSeconds int `json:"refresh_seconds"`
+	// SessionHours is the idle lifetime of a login session (0: 12).
+	SessionHours int `json:"session_hours"`
+	// RequireTOTP makes two-factor sign-in mandatory for every account.
+	RequireTOTP bool `json:"require_totp"`
+	// TrustedProxies lists the addresses (IPs or CIDRs) of the reverse
+	// proxies in front of the console. Only requests from them may set
+	// X-Forwarded-For / X-Forwarded-Proto or the proxy identity header.
+	TrustedProxies []string `json:"trusted_proxies"`
+	// ProxyAuth trusts an identity header injected by an authenticating
+	// proxy (Cloudflare Access, oauth2-proxy, …). Requires TrustedProxies.
+	ProxyAuth struct {
+		Header string `json:"header"` // e.g. Cf-Access-Authenticated-User-Email
+		// DefaultRole applies to identities that match no local account:
+		// "viewer" (default) or "none" (refuse).
+		DefaultRole string `json:"default_role"`
+		// DisableLogin turns the built-in password login off.
+		DisableLogin bool `json:"disable_login"`
+	} `json:"proxy_auth"`
+}
+
 type Config struct {
 	Cloudflare struct {
 		AccountID   string `json:"account_id"`
@@ -185,6 +218,8 @@ type Config struct {
 		File                string `json:"file"`                  // default: <data dir>/archive.db
 		HourlyRetentionDays int    `json:"hourly_retention_days"` // default 400 (~13 months)
 	} `json:"archive"`
+
+	Console Console `json:"console"`
 
 	// Secrets resolved from the environment at load time; never persisted.
 	APIToken         string   `json:"-"`
@@ -372,6 +407,9 @@ func (c *Config) resolve() error {
 	if c.Archive.File == "" {
 		c.Archive.File = filepath.Join(c.DataDir(), "archive.db")
 	}
+	if err := c.resolveConsole(); err != nil {
+		return err
+	}
 	if c.Archive.HourlyRetentionDays <= 0 {
 		c.Archive.HourlyRetentionDays = 400
 	}
@@ -426,3 +464,64 @@ func dur(s string, def time.Duration) time.Duration {
 // DataDir is the directory holding the state file; per-zone state,
 // the notification outbox and future archives live next to it.
 func (c *Config) DataDir() string { return filepath.Dir(c.StateFile) }
+
+func (c *Config) resolveConsole() error {
+	cs := &c.Console
+	if cs.Listen == "" {
+		cs.Listen = "127.0.0.1:8640"
+	}
+	if cs.DBFile == "" {
+		cs.DBFile = filepath.Join(c.DataDir(), "console.db")
+	}
+	if cs.RefreshSeconds == 0 {
+		cs.RefreshSeconds = 300
+	}
+	if cs.RefreshSeconds < 30 {
+		return fmt.Errorf("config: console.refresh_seconds must be >= 30")
+	}
+	if cs.SessionHours == 0 {
+		cs.SessionHours = 12
+	}
+	if cs.SessionHours < 1 || cs.SessionHours > 24*30 {
+		return fmt.Errorf("config: console.session_hours must be within 1..720")
+	}
+	cs.BaseURL = strings.TrimRight(cs.BaseURL, "/")
+	if cs.BaseURL != "" && !strings.HasPrefix(cs.BaseURL, "https://") && !strings.HasPrefix(cs.BaseURL, "http://") {
+		return fmt.Errorf("config: console.base_url must start with https:// or http://")
+	}
+	for i, s := range cs.TrustedProxies {
+		if _, err := netip.ParsePrefix(s); err != nil {
+			if _, err := netip.ParseAddr(s); err != nil {
+				return fmt.Errorf("config: console.trusted_proxies[%d] %q is not an IP or CIDR", i, s)
+			}
+		}
+	}
+	pa := &cs.ProxyAuth
+	switch pa.DefaultRole {
+	case "":
+		pa.DefaultRole = "viewer"
+	case "viewer", "none":
+	default:
+		return fmt.Errorf("config: console.proxy_auth.default_role must be \"viewer\" or \"none\"")
+	}
+	if pa.Header != "" && len(cs.TrustedProxies) == 0 {
+		return fmt.Errorf("config: console.proxy_auth.header needs console.trusted_proxies — otherwise anyone who can reach the port could forge the identity header")
+	}
+	if pa.DisableLogin && pa.Header == "" {
+		return fmt.Errorf("config: console.proxy_auth.disable_login needs console.proxy_auth.header (nobody could sign in)")
+	}
+	return nil
+}
+
+// TrustedProxies returns console.trusted_proxies as prefixes.
+func (c *Config) TrustedProxies() []netip.Prefix {
+	var out []netip.Prefix
+	for _, s := range c.Console.TrustedProxies {
+		if p, err := netip.ParsePrefix(s); err == nil {
+			out = append(out, p.Masked())
+		} else if a, err := netip.ParseAddr(s); err == nil {
+			out = append(out, netip.PrefixFrom(a, a.BitLen()))
+		}
+	}
+	return out
+}

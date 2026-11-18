@@ -1,0 +1,109 @@
+{{define "head"}}<!doctype html>
+<html lang="{{.Lang}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+{{if .Refresh}}<meta http-equiv="refresh" content="{{.Refresh}}">{{end}}
+<title>{{.Title}} · FlareHound</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/{{if .Zone.Name}}?z={{zq .Zone}}{{end}}">FlareHound</a>
+  {{if and .Req.User (or (not .Req.Session) .Req.Session.MFAOK)}}
+  <nav class="user">
+    <a href="/account">{{.Req.User.Username}}</a>
+    {{if .Req.User.Admin}}<a href="/users">{{t "nav_users"}}</a>{{end}}
+    {{if .Req.Session}}<form method="post" action="/logout"><input type="hidden" name="csrf" value="{{.Req.CSRF}}"><button class="link">{{t "logout"}}</button></form>{{end}}
+  </nav>
+  {{end}}
+</header>
+{{if and (not .Req.Secure) (not .Req.Loopback)}}<div class="banner warn">{{t "insecure"}}</div>{{end}}
+{{if and .Req.Proxy (not .Req.Session) .Req.User}}<div class="banner info">{{t "proxy_identity"}} <b>{{.Req.Proxy}}</b> ({{roleName .Req.User.Role}})</div>{{end}}
+{{if .Nav}}
+{{if gt (len .Zones) 1}}
+<nav class="zones">{{$cur := .Zone.ZoneID}}{{$nav := .Nav}}{{range .Zones}}<a href="{{if eq $nav "overview"}}/{{else}}/{{$nav}}{{end}}?z={{zq .}}"{{if eq .ZoneID $cur}} class="on"{{end}}>{{.Name}}</a>{{end}}</nav>
+{{end}}
+<nav class="tabs">{{$z := zq .Zone}}{{$nav := .Nav}}
+  <a href="/?z={{$z}}"{{if eq $nav "overview"}} class="on"{{end}}>{{t "nav_overview"}}</a>
+  <a href="/movers?z={{$z}}"{{if eq $nav "movers"}} class="on"{{end}}>{{t "nav_movers"}}</a>
+  <a href="/faces?z={{$z}}"{{if eq $nav "faces"}} class="on"{{end}}>{{t "nav_faces"}}</a>
+  <a href="/history?z={{$z}}"{{if eq $nav "history"}} class="on"{{end}}>{{t "nav_history"}}</a>
+  <a href="/audit?z={{$z}}"{{if eq $nav "audit"}} class="on"{{end}}>{{t "nav_audit"}}</a>
+  <a href="/blocks?z={{$z}}"{{if eq $nav "blocks"}} class="on"{{end}}>{{t "nav_blocks"}}</a>
+</nav>
+{{end}}
+<main>
+{{if .Flash}}<div class="banner ok">{{.Flash}}</div>{{end}}
+{{if .Err}}<div class="banner err">{{.Err}}</div>{{end}}
+{{end}}
+
+{{define "foot"}}
+</main>
+<footer>FlareHound {{.Version}} · {{t "readonly_badge"}}{{if .Refresh}} · {{tf "auto_refresh" .Refresh}}{{end}} · {{tz}}</footer>
+</body>
+</html>
+{{end}}
+
+{{define "message"}}{{template "head" .}}
+<section class="card narrow"><h1>{{.Title}}</h1><p>{{.Msg}}</p><p><a href="/">← FlareHound</a></p></section>
+{{template "foot" .}}{{end}}
+
+{{define "login"}}{{template "head" .}}
+<section class="card narrow">
+<h1>{{t "login_title"}}</h1>
+{{if .Msg}}<p class="muted">{{.Msg}}</p>{{else}}
+<form method="post" action="/login" class="stack">
+  <input type="hidden" name="csrf" value="{{.Req.CSRF}}">
+  <input type="hidden" name="next" value="{{.Next}}">
+  <label>{{t "username"}}<input name="username" autocomplete="username" autocapitalize="none" required autofocus></label>
+  <label>{{t "password"}}<input name="password" type="password" autocomplete="current-password" required></label>
+  <button>{{t "sign_in"}}</button>
+</form>{{end}}
+</section>
+{{template "foot" .}}{{end}}
+
+{{define "totp"}}{{template "head" .}}
+<section class="card narrow">
+<h1>{{.Title}}</h1>
+{{if .Msg}}<p class="muted">{{.Msg}}</p>{{end}}
+<form method="post" action="{{.Action}}" class="stack">
+  <input type="hidden" name="csrf" value="{{.Req.CSRF}}">
+  <input type="hidden" name="next" value="{{.Next}}">
+  <label>{{t "totp_code"}}<input name="code" inputmode="numeric" pattern="[0-9 ]{6,7}" autocomplete="one-time-code" required autofocus></label>
+  <button>{{t "verify"}}</button>
+</form>
+</section>
+{{template "foot" .}}{{end}}
+
+{{define "setup"}}{{template "head" .}}
+<section class="card narrow">
+<h1>{{t "setup_title"}}</h1>
+<p class="muted">{{t "setup_desc"}}</p>
+<form method="post" action="/setup" class="stack">
+  <input type="hidden" name="csrf" value="{{.Req.CSRF}}">
+  <input type="hidden" name="token" value="{{.Token}}">
+  <label>{{t "username"}}<input name="username" autocomplete="username" autocapitalize="none" required></label>
+  <label>{{t "email"}}<input name="email" type="email" autocomplete="email"></label>
+  <label>{{t "password"}} <small>{{t "password_rule"}}</small><input name="password" type="password" minlength="10" autocomplete="new-password" required></label>
+  <label>{{t "password_again"}}<input name="password2" type="password" minlength="10" autocomplete="new-password" required></label>
+  <button>{{t "create"}}</button>
+</form>
+</section>
+{{template "foot" .}}{{end}}
+
+{{define "invite"}}{{template "head" .}}
+<section class="card narrow">
+<h1>{{t "invite_title"}}</h1>
+<p class="muted">{{tf "invite_desc" (roleName .Role)}}</p>
+<form method="post" action="/invite/{{.Token}}" class="stack">
+  <input type="hidden" name="csrf" value="{{.Req.CSRF}}">
+  <label>{{t "username"}}<input name="username" autocomplete="username" autocapitalize="none" required></label>
+  <label>{{t "email"}}<input name="email" type="email" autocomplete="email"></label>
+  <label>{{t "password"}} <small>{{t "password_rule"}}</small><input name="password" type="password" minlength="10" autocomplete="new-password" required></label>
+  <label>{{t "password_again"}}<input name="password2" type="password" minlength="10" autocomplete="new-password" required></label>
+  <button>{{t "create"}}</button>
+</form>
+</section>
+{{template "foot" .}}{{end}}
