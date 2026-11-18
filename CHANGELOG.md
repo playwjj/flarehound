@@ -2,6 +2,12 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.5.0 — 2026-11-18
+
+- **Sign in with Google or GitHub** (`console.oauth`). A linked identity is an additional way into an existing local account: users link it from their account page after re-entering their password; an identity that is not linked signs in to nothing — no account is created, nothing is matched by e-mail. Two-factor sign-in, disabled accounts, forced password changes and `require_totp` still apply. Users unlink their own; admins see and remove anyone's on the Users page; linking, unlinking and sign-ins are audited.
+- Authorization-code flow with PKCE; single-use `state` bound to the browser by a cookie (10 minutes); Google ID tokens checked for issuer, audience, expiry and nonce; GitHub identified by numeric user ID. Client secrets come from environment variables and are redacted from logs.
+- The v1.3 `external_identities` table gains `display` and `last_used` (migrated automatically). `doctor` prints the redirect URIs to register and warns about plain-HTTP base URLs.
+
 ## v1.4.0 — 2026-11-18
 
 - **Blocking from the console.** When the console process holds the write token (and only then — the watch must never have it), admins block, unblock and change expiry from the console. Movers and new faces offer a prefilled **block…** link. Every change is form → review → apply: the review shows the plan, the measured share and every guard-rail warning (shared code with the CLI); applying needs a review token bound to what was reviewed, the typed target for blocks that can hit real users, and a fresh TOTP code for accounts with two-factor sign-in. The guard rails run again server-side; the console audit log records the request under the account before Cloudflare is touched, then the outcome; changes are verified by read-back; the archive records the operator as `console:<account>`.

@@ -162,6 +162,20 @@ type Console struct {
 		// DisableLogin turns the built-in password login off.
 		DisableLogin bool `json:"disable_login"`
 	} `json:"proxy_auth"`
+	// OAuth adds third-party sign-in (v1.5). An external identity only
+	// signs in to the local account it was linked to; it never creates one.
+	OAuth struct {
+		Google *OAuthClient `json:"google,omitempty"`
+		GitHub *OAuthClient `json:"github,omitempty"`
+	} `json:"oauth"`
+}
+
+// OAuthClient is one provider's OAuth app. The secret comes from the
+// environment variable named by ClientSecretEnv.
+type OAuthClient struct {
+	ClientID        string `json:"client_id"`
+	ClientSecretEnv string `json:"client_secret_env"`
+	ClientSecret    string `json:"-"`
 }
 
 type Config struct {
@@ -233,8 +247,14 @@ type Config struct {
 
 // Secrets returns every secret value, for log redaction.
 func (c *Config) Secrets() []string {
-	return []string{c.APIToken, c.TelegramBotToken, c.WebhookURL,
+	s := []string{c.APIToken, c.TelegramBotToken, c.WebhookURL,
 		c.Chan.Slack, c.Chan.Discord, c.Chan.WeCom, c.Chan.Feishu, c.Chan.FeishuSecret, c.Chan.EmailPassword, c.HeartbeatURL}
+	for _, oc := range []*OAuthClient{c.Console.OAuth.Google, c.Console.OAuth.GitHub} {
+		if oc != nil {
+			s = append(s, oc.ClientSecret)
+		}
+	}
+	return s
 }
 
 var hhmm = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
@@ -509,6 +529,20 @@ func (c *Config) resolveConsole() error {
 	}
 	if pa.DisableLogin && pa.Header == "" {
 		return fmt.Errorf("config: console.proxy_auth.disable_login needs console.proxy_auth.header (nobody could sign in)")
+	}
+	for name, oc := range map[string]*OAuthClient{"google": cs.OAuth.Google, "github": cs.OAuth.GitHub} {
+		if oc == nil {
+			continue
+		}
+		if oc.ClientID == "" || oc.ClientSecretEnv == "" {
+			return fmt.Errorf("config: console.oauth.%s needs client_id and client_secret_env", name)
+		}
+		if oc.ClientSecret = os.Getenv(oc.ClientSecretEnv); oc.ClientSecret == "" {
+			return fmt.Errorf("config: console.oauth.%s.client_secret_env names %s, but that environment variable is empty", name, oc.ClientSecretEnv)
+		}
+		if cs.BaseURL == "" {
+			return fmt.Errorf("config: console.oauth needs console.base_url (the providers redirect back to <base_url>/oauth/%s/callback)", name)
+		}
 	}
 	return nil
 }

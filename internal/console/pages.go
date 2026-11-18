@@ -65,6 +65,11 @@ type page struct {
 	UntilTime time.Time
 	Effect    *Effect
 
+	// third-party sign-in
+	Providers  []*Provider
+	Identities []Identity
+	UserIDs    map[int64][]Identity // users page: identities per account
+
 	// snapshots
 	Snapshot   bool         // rendering a self-contained snapshot
 	CSS        template.CSS // inlined stylesheet (snapshots)
@@ -114,8 +119,17 @@ func (s *Server) funcs() template.FuncMap {
 			}
 			return name
 		},
-		"unix":      func(t time.Time) int64 { return t.Unix() },
-		"now":       func() time.Time { return s.Now() },
+		"unix": func(t time.Time) int64 { return t.Unix() },
+		"now":  func() time.Time { return s.Now() },
+		"providerLabel": func(name string) string {
+			switch name {
+			case "google":
+				return "Google"
+			case "github":
+				return "GitHub"
+			}
+			return name
+		},
 		"formQuery": func(f *blockForm) template.URL { return template.URL(f.query()) },
 		"fmtFace": func(fs []cfapi.Face) string {
 			var parts []string

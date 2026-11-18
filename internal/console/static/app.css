@@ -132,3 +132,11 @@ label.strong { color: var(--alert); font-weight: 600; }
 .snapnote { font-size: .8rem; }
 h1.snaph { margin: .2rem 0 .8rem; }
 @media (max-width: 480px) { dl.kv { grid-template-columns: 1fr; } dl.kv dd { margin-bottom: .4rem; } }
+
+/* v1.5 */
+.oauth { display: grid; gap: .5rem; margin-top: .8rem; }
+.oauth form { margin: 0; }
+.oauth button, .linkform button { width: 100%; }
+p.or { text-align: center; margin: .2rem 0; font-size: .85rem; }
+button.alt { background: var(--card); color: var(--fg); border: 1px solid var(--line); }
+.linkform .row { display: grid; gap: .5rem; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }

@@ -166,6 +166,24 @@
 {{end}}
 </section>
 
+{{if or .Providers .Identities}}
+<section class="card"><h2>{{t "identities"}}</h2>
+{{if .Identities}}<table class="list"><tbody>{{range .Identities}}<tr>
+  <td><b>{{providerLabel .Provider}}</b><br><small class="muted">{{.Display}}</small></td>
+  <td class="nowrap">{{t "created"}} {{when .CreatedAt}}{{if not .LastUsed.IsZero}}<br><small class="muted">{{t "last_used"}} {{ago .LastUsed}}</small>{{end}}</td>
+  <td><form method="post" action="/account/identities/unlink"><input type="hidden" name="csrf" value="{{$rq.CSRF}}"><input type="hidden" name="provider" value="{{.Provider}}"><input type="hidden" name="subject" value="{{.Subject}}"><button class="small">{{t "unlink"}}</button></form></td>
+</tr>{{end}}</tbody></table>{{else}}<p class="muted">{{t "identities_none"}}</p>{{end}}
+{{if .Providers}}
+<form method="post" class="stack linkform">
+  <input type="hidden" name="csrf" value="{{.Req.CSRF}}"><input type="hidden" name="intent" value="link">
+  <input type="text" name="username" value="{{.Req.User.Username}}" autocomplete="username" hidden>
+  <label>{{t "password_cur"}}<input name="current" type="password" autocomplete="current-password" required></label>
+  <div class="row">{{range .Providers}}<button class="alt" formaction="/oauth/{{.Name}}/start">{{tf "link_with" .Label}}</button>{{end}}</div>
+</form>
+<p class="note">{{t "identities_note"}}</p>{{end}}
+</section>
+{{end}}
+
 <section class="card"><h2>{{t "sessions"}}</h2>
 <table class="list"><thead><tr><th>{{t "created"}}</th><th>{{t "ip"}}</th><th>{{t "device"}}</th><th></th></tr></thead>
 <tbody>{{range .Sessions}}<tr>
@@ -189,7 +207,7 @@
   <td><b>{{.Username}}</b>{{if .Email}}<br><small class="muted">{{.Email}}</small>{{end}}</td>
   <td>{{roleName .Role}}</td>
   <td>{{if .Disabled}}<span class="bad">{{t "disabled"}}</span>{{else if locked .}}<span class="bad">{{t "locked"}}</span>{{else}}{{t "active"}}{{end}}{{if .MustChange}}<br><small class="muted">{{t "must_change"}}</small>{{end}}</td>
-  <td>{{if .TOTPEnabled}}{{t "yes"}}{{else}}{{t "no"}}{{end}}</td>
+  <td>{{if .TOTPEnabled}}{{t "yes"}}{{else}}{{t "no"}}{{end}}{{$uid := .ID}}{{range (index $.UserIDs .ID)}}<br><small class="muted">{{providerLabel .Provider}}: {{.Display}}</small>{{if ne $uid $rq.User.ID}}<form method="post" action="/users/{{$uid}}/unlink" class="op"><input type="hidden" name="csrf" value="{{$rq.CSRF}}"><input type="hidden" name="provider" value="{{.Provider}}"><input type="hidden" name="subject" value="{{.Subject}}"><button class="small">{{t "unlink"}}</button></form>{{end}}{{end}}</td>
   <td class="acts">{{if ne .ID $rq.User.ID}}{{$id := .ID}}
     {{if .Admin}}{{template "uop" (list "viewer" (print $id) $rq.CSRF "make_viewer")}}{{else}}{{template "uop" (list "admin" (print $id) $rq.CSRF "make_admin")}}{{end}}
     {{if .Disabled}}{{template "uop" (list "enable" (print $id) $rq.CSRF "enable")}}{{else}}{{template "uop" (list "disable" (print $id) $rq.CSRF "disable")}}{{end}}

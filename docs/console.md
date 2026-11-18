@@ -118,6 +118,38 @@ flarehound console reset-password --user NAME
 flarehound console reset-totp --user NAME
 ```
 
+### Sign in with Google or GitHub
+
+Third-party sign-in is an **additional** way into an existing account — never a way to get one:
+
+- Each person first signs in with their password, then links Google and/or GitHub under **Account** (re-entering the password). From then on the login page's *Sign in with Google / GitHub* works for them.
+- An identity that is not linked signs in to nothing. No account is created and nothing is matched by e-mail address.
+- Two-factor sign-in still applies after the provider, as do disabled accounts, forced password changes and `require_totp`. Passwords keep working.
+- Users unlink from their account page; admins see every account's linked identities on the Users page and can remove them. Linking, unlinking and every sign-in are in the account audit log.
+
+Set it up:
+
+1. Set `console.base_url` to the HTTPS address people use (providers redirect there).
+2. Create an OAuth app and register the redirect URI `<base_url>/oauth/<provider>/callback`:
+    - **Google**: Google Cloud console → APIs & Services → Credentials → *OAuth client ID* (Web application). Redirect URI `https://…/oauth/google/callback`.
+    - **GitHub**: Settings → Developer settings → *OAuth Apps* → New. Callback URL `https://…/oauth/github/callback`.
+3. Configure the client ID, and put the secret in an environment variable of the **console** process:
+
+```json
+"console": {
+  "enabled": true,
+  "base_url": "https://hound.example.ts.net",
+  "oauth": {
+    "google": { "client_id": "1234-abc.apps.googleusercontent.com", "client_secret_env": "GOOGLE_OAUTH_SECRET" },
+    "github": { "client_id": "Iv1.0123456789abcdef", "client_secret_env": "GITHUB_OAUTH_SECRET" }
+  }
+}
+```
+
+`flarehound doctor` prints the exact redirect URIs to register. With a provider configured, the console also connects out to that provider (Google: `accounts.google.com`, `oauth2.googleapis.com`; GitHub: `github.com`, `api.github.com`).
+
+How it is protected: authorization-code flow with PKCE; the `state` value is single use, expires in 10 minutes and must come back to the same browser (cookie); Google's ID token is checked for issuer, audience, expiry and nonce; GitHub accounts are identified by their numeric ID (logins can be renamed).
+
 ### Behind an authenticating proxy
 
 When Cloudflare Access, oauth2-proxy or similar already authenticates people, the console can take the identity from the header it injects:

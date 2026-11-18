@@ -78,7 +78,12 @@
   <label>{{t "username"}}<input name="username" autocomplete="username" autocapitalize="none" required autofocus></label>
   <label>{{t "password"}}<input name="password" type="password" autocomplete="current-password" required></label>
   <button>{{t "sign_in"}}</button>
-</form>{{end}}
+</form>
+{{if .Providers}}<div class="oauth">{{$rq := .Req}}{{$next := .Next}}
+  <p class="or muted">{{t "or"}}</p>
+  {{range .Providers}}<form method="post" action="/oauth/{{.Name}}/start"><input type="hidden" name="csrf" value="{{$rq.CSRF}}"><input type="hidden" name="intent" value="login"><input type="hidden" name="next" value="{{$next}}"><button class="alt">{{tf "sign_in_with" .Label}}</button></form>{{end}}
+  <p class="note">{{t "oauth_login_note"}}</p>
+</div>{{end}}{{end}}
 </section>
 {{template "foot" .}}{{end}}
 

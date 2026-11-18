@@ -315,6 +315,15 @@ func doctorConsole(d *doctorOut, cfg *config.Config, now time.Time) {
 	if cs.BaseURL != "" && strings.HasPrefix(cs.BaseURL, "http://") && !strings.Contains(cs.BaseURL, "://127.") && !strings.Contains(cs.BaseURL, "://localhost") {
 		d.warn("console.base_url %s is plain HTTP: passwords and session cookies would cross the network in clear text", cs.BaseURL)
 	}
+	for name, oc := range map[string]*config.OAuthClient{"Google": cs.OAuth.Google, "GitHub": cs.OAuth.GitHub} {
+		if oc == nil {
+			continue
+		}
+		d.ok("%s sign-in configured; redirect URI to register: %s/oauth/%s/callback", name, cs.BaseURL, strings.ToLower(name))
+		if strings.HasPrefix(cs.BaseURL, "http://") && !strings.Contains(cs.BaseURL, "://127.") && !strings.Contains(cs.BaseURL, "://localhost") {
+			d.warn("%s sign-in over plain HTTP: providers (Google in particular) refuse non-HTTPS redirect URIs except localhost", name)
+		}
+	}
 	if cs.ProxyAuth.Header != "" {
 		d.ok("proxy identity header %s trusted from %s", cs.ProxyAuth.Header, strings.Join(cs.TrustedProxies, ", "))
 	}

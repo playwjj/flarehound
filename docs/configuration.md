@@ -176,6 +176,8 @@ The web console (v1.3, read-only) — see [Web console](console.md).
 | `console.proxy_auth.header` | string | — | Trust an identity header injected by an authenticating proxy (e.g. `Cf-Access-Authenticated-User-Email`). Requires `trusted_proxies`. |
 | `console.proxy_auth.default_role` | string | `viewer` | Role for proxy identities that match no local account: `viewer` or `none` (refuse). |
 | `console.proxy_auth.disable_login` | bool | `false` | Turn the built-in password sign-in off (proxy identities only). |
+| `console.oauth.google` | object | — | Google sign-in: `{"client_id": "…", "client_secret_env": "GOOGLE_OAUTH_SECRET"}`. Needs `base_url`. See [third-party sign-in](console.md#sign-in-with-google-or-github). |
+| `console.oauth.github` | object | — | GitHub sign-in: `{"client_id": "…", "client_secret_env": "GITHUB_OAUTH_SECRET"}`. Needs `base_url`. |
 
 ## Environment variables at a glance
 

@@ -15,7 +15,7 @@ func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, localPath(r.URL.Query().Get("next")), http.StatusSeeOther)
 		return
 	}
-	p := page{Title: s.lang.t("login_title"), Next: localPath(r.URL.Query().Get("next"))}
+	p := page{Title: s.lang.t("login_title"), Next: localPath(r.URL.Query().Get("next")), Providers: s.ProviderList()}
 	if s.Cfg.Console.ProxyAuth.DisableLogin {
 		p.Msg = s.lang.t("login_disabled")
 	}
@@ -25,7 +25,7 @@ func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 	rq := reqOf(r)
 	next := localPath(r.PostFormValue("next"))
-	p := page{Title: s.lang.t("login_title"), Next: next}
+	p := page{Title: s.lang.t("login_title"), Next: next, Providers: s.ProviderList()}
 	if s.Cfg.Console.ProxyAuth.DisableLogin {
 		p.Msg = s.lang.t("login_disabled")
 		s.render(w, r, http.StatusForbidden, "login", p)
@@ -67,6 +67,14 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.DB.LoginOK(u.ID)
+	s.completeLogin(w, r, &u, "password", next)
+}
+
+// completeLogin starts a session for an authenticated first factor: a
+// pending one when the account has TOTP (the code comes next), else a
+// full one.
+func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, u *User, method, next string) {
+	rq := reqOf(r)
 	if rq.Session != nil { // replace any previous session (fixation)
 		_ = s.DB.EndSession(rq.Session.Token)
 	}
@@ -86,7 +94,7 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.setSession(w, r, sess, s.sessionTTL())
-	s.DB.Audit(u.Username, rq.IP, "login", u.Username, "password")
+	s.DB.Audit(u.Username, rq.IP, "login", u.Username, method)
 	http.Redirect(w, r, next, http.StatusSeeOther)
 }
 
@@ -292,7 +300,12 @@ func (s *Server) accountData(r *http.Request, p *page) error {
 		return nil
 	}
 	sessions, err := s.DB.UserSessions(rq.User.ID)
+	if err != nil {
+		return err
+	}
 	p.Sessions = sessions
+	p.Providers = s.ProviderList()
+	p.Identities, err = s.DB.Identities(rq.User.ID)
 	return err
 }
 
@@ -480,6 +493,14 @@ func (s *Server) usersData(p *page) error {
 	if p.Invites, err = s.DB.PendingInvites(); err != nil {
 		return err
 	}
+	ids, err := s.DB.Identities(0)
+	if err != nil {
+		return err
+	}
+	p.UserIDs = map[int64][]Identity{}
+	for _, i := range ids {
+		p.UserIDs[i.UserID] = append(p.UserIDs[i.UserID], i)
+	}
 	p.AuditLog, err = s.DB.AuditLog(100)
 	return err
 }
@@ -552,6 +573,8 @@ func (s *Server) userOp(w http.ResponseWriter, r *http.Request) {
 		if err = s.DB.SetTOTP(u.ID, "", false, 0); err == nil {
 			err = s.DB.EndUserSessions(u.ID, "")
 		}
+	case "unlink":
+		_, err = s.DB.UnlinkIdentity(u.ID, r.PostFormValue("provider"), r.PostFormValue("subject"))
 	case "signout":
 		keep := ""
 		if u.ID == rq.User.ID {

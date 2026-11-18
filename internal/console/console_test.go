@@ -391,6 +391,9 @@ func TestServerFlow(t *testing.T) {
 		if code != http.StatusOK {
 			t.Fatalf("GET %s: %d\n%s", p, code, body)
 		}
+		if strings.Contains(body, "%!") {
+			t.Fatalf("GET %s: broken format verb in page:\n%s", p, body)
+		}
 	}
 	_, body, _ = c.do("GET", "/movers", nil, nil)
 	if !strings.Contains(body, "Crawler/1.0") {

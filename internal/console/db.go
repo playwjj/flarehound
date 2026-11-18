@@ -69,6 +69,16 @@ CREATE TABLE IF NOT EXISTS invites (
 	used_at    INTEGER NOT NULL DEFAULT 0,
 	used_by    INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS oauth_states (
+	state_hash TEXT    PRIMARY KEY,
+	provider   TEXT    NOT NULL,
+	intent     TEXT    NOT NULL, -- login | link
+	user_id    INTEGER NOT NULL, -- link: the signed-in account
+	verifier   TEXT    NOT NULL, -- PKCE
+	nonce      TEXT    NOT NULL,
+	next       TEXT    NOT NULL,
+	expires_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS effects (
 	zone       TEXT    NOT NULL,
 	event_id   INTEGER NOT NULL, -- archive block_events.id
@@ -130,6 +140,10 @@ func OpenDB(path string) (*DB, error) {
 	}
 	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(dbSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("console schema: %w", err)
+	}
+	if err := migrate(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("console schema: %w", err)
 	}
@@ -741,4 +755,160 @@ func (d *DB) Snapshots(by int64, limit int) ([]Snapshot, error) {
 func (d *DB) RevokeSnapshot(id int64) error {
 	_, err := d.db.Exec(`UPDATE snapshots SET revoked = 1 WHERE id = ?`, id)
 	return err
+}
+
+// migrate adds columns introduced after a table was first created.
+func migrate(db *sql.DB) error {
+	cols := map[string]bool{}
+	rows, err := db.Query(`SELECT name FROM pragma_table_info('external_identities')`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			rows.Close()
+			return err
+		}
+		cols[n] = true
+	}
+	rows.Close()
+	for col, ddl := range map[string]string{
+		"display":   `ALTER TABLE external_identities ADD COLUMN display TEXT NOT NULL DEFAULT ''`,
+		"last_used": `ALTER TABLE external_identities ADD COLUMN last_used INTEGER NOT NULL DEFAULT 0`,
+	} {
+		if !cols[col] {
+			if _, err := db.Exec(ddl); err != nil {
+				return err
+			}
+		}
+	}
+	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS external_identities_user ON external_identities (user_id)`)
+	return err
+}
+
+// --- external identities (v1.5) ---
+
+// Identity is a third-party account linked to a local one.
+type Identity struct {
+	Provider  string
+	Subject   string // the provider's stable user ID
+	UserID    int64
+	Display   string // e-mail or login, for people
+	CreatedAt time.Time
+	LastUsed  time.Time
+}
+
+var ErrIdentityTaken = errors.New("this account is already linked to another FlareHound user")
+
+// LinkIdentity binds (provider, subject) to a local account.
+func (d *DB) LinkIdentity(provider, subject string, userID int64, display string) error {
+	var owner int64
+	err := d.db.QueryRow(`SELECT user_id FROM external_identities WHERE provider = ? AND subject = ?`, provider, subject).Scan(&owner)
+	switch {
+	case err == nil && owner != userID:
+		return ErrIdentityTaken
+	case err == nil:
+		_, err = d.db.Exec(`UPDATE external_identities SET display = ? WHERE provider = ? AND subject = ?`, display, provider, subject)
+		return err
+	case !errors.Is(err, sql.ErrNoRows):
+		return err
+	}
+	_, err = d.db.Exec(`INSERT INTO external_identities (provider, subject, user_id, created_at, display) VALUES (?, ?, ?, ?, ?)`,
+		provider, subject, userID, d.now().Unix(), truncate(display, 200))
+	return err
+}
+
+// IdentityOwner finds the local account an identity is linked to.
+func (d *DB) IdentityOwner(provider, subject string) (int64, bool, error) {
+	var id int64
+	err := d.db.QueryRow(`SELECT user_id FROM external_identities WHERE provider = ? AND subject = ?`, provider, subject).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	return id, err == nil, err
+}
+
+// TouchIdentity records a sign-in through an identity.
+func (d *DB) TouchIdentity(provider, subject, display string) error {
+	_, err := d.db.Exec(`UPDATE external_identities SET last_used = ?, display = CASE WHEN ? = '' THEN display ELSE ? END
+		WHERE provider = ? AND subject = ?`, d.now().Unix(), display, truncate(display, 200), provider, subject)
+	return err
+}
+
+// Identities lists an account's linked identities (all when userID is 0).
+func (d *DB) Identities(userID int64) ([]Identity, error) {
+	rows, err := d.db.Query(`SELECT provider, subject, user_id, display, created_at, last_used FROM external_identities
+		WHERE ? = 0 OR user_id = ? ORDER BY provider, created_at`, userID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Identity
+	for rows.Next() {
+		var i Identity
+		var c, l int64
+		if err := rows.Scan(&i.Provider, &i.Subject, &i.UserID, &i.Display, &c, &l); err != nil {
+			return nil, err
+		}
+		i.CreatedAt = time.Unix(c, 0)
+		if l > 0 {
+			i.LastUsed = time.Unix(l, 0)
+		}
+		out = append(out, i)
+	}
+	return out, rows.Err()
+}
+
+// UnlinkIdentity removes one of an account's identities (any account's when userID is 0).
+func (d *DB) UnlinkIdentity(userID int64, provider, subject string) (bool, error) {
+	res, err := d.db.Exec(`DELETE FROM external_identities WHERE provider = ? AND subject = ? AND (? = 0 OR user_id = ?)`,
+		provider, subject, userID, userID)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+
+// --- OAuth flow state ---
+
+// OAuthState is one pending authorization, single use.
+type OAuthState struct {
+	Provider, Intent string
+	UserID           int64
+	Verifier, Nonce  string
+	Next             string
+}
+
+// PutOAuthState stores a pending authorization under the state value.
+func (d *DB) PutOAuthState(state string, st OAuthState, ttl time.Duration) error {
+	now := d.now().Unix()
+	_, _ = d.db.Exec(`DELETE FROM oauth_states WHERE expires_at <= ?`, now)
+	_, err := d.db.Exec(`INSERT INTO oauth_states (state_hash, provider, intent, user_id, verifier, nonce, next, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		hashToken(state), st.Provider, st.Intent, st.UserID, st.Verifier, st.Nonce, st.Next, d.now().Add(ttl).Unix())
+	return err
+}
+
+// TakeOAuthState consumes a pending authorization (it cannot be replayed).
+func (d *DB) TakeOAuthState(state string) (OAuthState, bool, error) {
+	var st OAuthState
+	var exp int64
+	h := hashToken(state)
+	err := d.db.QueryRow(`SELECT provider, intent, user_id, verifier, nonce, next, expires_at FROM oauth_states WHERE state_hash = ?`, h).
+		Scan(&st.Provider, &st.Intent, &st.UserID, &st.Verifier, &st.Nonce, &st.Next, &exp)
+	if errors.Is(err, sql.ErrNoRows) {
+		return st, false, nil
+	}
+	if err != nil {
+		return st, false, err
+	}
+	res, err := d.db.Exec(`DELETE FROM oauth_states WHERE state_hash = ?`, h)
+	if err != nil {
+		return st, false, err
+	}
+	if n, _ := res.RowsAffected(); n != 1 || d.now().Unix() >= exp {
+		return st, false, nil
+	}
+	return st, true, nil
 }

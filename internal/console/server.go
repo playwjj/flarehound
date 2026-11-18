@@ -58,6 +58,11 @@ type Server struct {
 	Live  LiveAPI
 	Store *store.Store
 
+	// Third-party sign-in (v1.5): configured providers by name, and the
+	// client for their token / user endpoints.
+	OAuth      map[string]*Provider
+	HTTPClient *http.Client
+
 	tmpl    *template.Template
 	trusted []netip.Prefix
 	lang    lang
@@ -90,6 +95,7 @@ func New(cfg *config.Config, db *DB, arch Archive, auditor Auditor, version stri
 	s := &Server{Cfg: cfg, DB: db, Archive: arch, Auditor: auditor, Version: version, Now: time.Now,
 		trusted: cfg.TrustedProxies(), lang: lang(cfg.Report.Language), limiter: newLimiter(10, time.Minute),
 		auditCache: map[string]auditEntry{}, attemptsCache: map[string]attemptsEntry{}}
+	s.OAuth = builtinProviders(cfg.Console)
 	s.reviewKey = make([]byte, 32)
 	if _, err := rand.Read(s.reviewKey); err != nil {
 		return nil, "", err
@@ -199,6 +205,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /login/totp", s.totpPage)
 	mux.HandleFunc("POST /login/totp", s.totpPost)
 	mux.HandleFunc("POST /logout", s.logout)
+	mux.HandleFunc("POST /oauth/{provider}/start", s.oauthStart)
+	mux.HandleFunc("GET /oauth/{provider}/callback", s.oauthCallback)
 
 	// Signed in.
 	user := func(h http.HandlerFunc) http.Handler { return s.requireUser(h, false) }
@@ -230,6 +238,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /account/totp/confirm", user(s.totpConfirm))
 	mux.Handle("POST /account/totp/disable", user(s.totpDisable))
 	mux.Handle("POST /account/sessions/end", user(s.sessionEnd))
+	mux.Handle("POST /account/identities/unlink", user(s.identityUnlink))
 	mux.Handle("GET /stepup", user(s.stepUpPage))
 	mux.Handle("POST /stepup", user(s.stepUpPost))
 	mux.Handle("GET /users", admin(s.usersPage))
@@ -246,7 +255,7 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) base(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
-		h.Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; img-src 'self' data:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+		h.Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; img-src 'self' data:; form-action "+s.formAction()+"; frame-ancestors 'none'; base-uri 'none'")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "no-referrer")
