@@ -8,6 +8,8 @@ copyright: MIT © 2026 playwjj
 
 theme:
   name: material
+  logo: logo.png
+  favicon: logo.png
   features:
     - navigation.sections
     - navigation.top
