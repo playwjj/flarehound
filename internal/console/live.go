@@ -33,6 +33,7 @@ const (
 type LiveView struct {
 	From, To   time.Time
 	Rows       []MetricRow
+	Total      int64        // zone requests in the window (the trend strip's "now" point)
 	TopUA      []cfapi.Face // the hour's loudest faces, from the same measurement
 	TopASN     []cfapi.Face
 	Samples    int
@@ -148,16 +149,9 @@ func (s *Server) liveView(ctx context.Context, z config.Zone) *LiveView {
 	}
 	v.Samples, v.BaselineOK = n, n >= analyze.LongBaselineMinSamples
 	v.Rows = metricRows(s.eff(), z, cur, base, has)
-	if len(cur.TopUA) > liveFaces {
-		v.TopUA = cur.TopUA[:liveFaces]
-	} else {
-		v.TopUA = cur.TopUA
-	}
-	if len(cur.TopASN) > liveFaces {
-		v.TopASN = cur.TopASN[:liveFaces]
-	} else {
-		v.TopASN = cur.TopASN
-	}
+	v.Total = cur.Total
+	v.TopUA = cur.TopUA[:min(len(cur.TopUA), liveFaces)]
+	v.TopASN = cur.TopASN[:min(len(cur.TopASN), liveFaces)]
 	e.view = v
 	return v
 }

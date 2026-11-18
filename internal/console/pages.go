@@ -381,7 +381,7 @@ func (s *Server) buildView(ctx context.Context, view string, q url.Values) (stri
 		p := page{Title: s.lc(ctx).t("nav_overview"), Zone: z, Nav: "overview", Overview: &ov, Refresh: s.Cfg.Console.RefreshSeconds,
 			SnapView: view, SnapParams: url.Values{"z": {z.Name}}.Encode()}
 		p.Live = s.liveView(ctx, z)
-		if tr, ok := buildTrend(ctx, s.Archive, s.Analytics, z, s.Now(), s.Cfg.Location); ok {
+		if tr, ok := buildTrend(s.Archive, z, s.Now(), s.Cfg.Location, p.Live); ok {
 			p.Trend = tr
 		}
 		if ov.Has {

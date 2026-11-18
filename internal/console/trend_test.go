@@ -1,27 +1,13 @@
 package console
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/playwjj/flarehound/internal/analyze"
-	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/store"
 )
-
-// partialAnalytics answers the trend strip's one Count query.
-type partialAnalytics struct{ from time.Time }
-
-func (p *partialAnalytics) Count(_ context.Context, _ string, from, _ time.Time, _ cfapi.Filter) (int64, error) {
-	p.from = from
-	return 4242, nil
-}
-
-func (p *partialAnalytics) Top(_ context.Context, _ string, _, _ time.Time, _ string, _ int, _ cfapi.Filter) ([]cfapi.Face, error) {
-	return nil, nil
-}
 
 func TestBuildTrend(t *testing.T) {
 	cfg := testConfig(t)
@@ -41,24 +27,29 @@ func TestBuildTrend(t *testing.T) {
 		seed(h.Add(-24*time.Hour), int64(500*(i+1)))
 	}
 
-	pa := &partialAnalytics{}
-	html, ok := buildTrend(context.Background(), st, pa, zone, now, time.UTC)
+	// The live view's rolling hour (21:33-22:33) is the "now" point.
+	to := now.Add(-liveLag)
+	live := &LiveView{From: to.Add(-liveSpan), To: to, Total: 7777}
+	html, ok := buildTrend(st, zone, now, time.UTC, live)
 	if !ok || html == "" {
 		t.Fatal("trend strip not built from a seeded archive")
 	}
 	s := string(html)
-	for _, want := range []string{"l-total", "l-yday", "16", "22"} {
+	for _, want := range []string{"l-total", "l-yday", ">16<", ">21<", ">22:33<"} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("trend chart lacks %q:\n%s", want, s)
 		}
 	}
-	if !pa.from.Equal(hourStart) {
-		t.Fatalf("partial count window starts %v, want the hour in progress %v", pa.from, hourStart)
+
+	// Without a usable live view the strip ends at the newest closed hour.
+	html, ok = buildTrend(st, zone, now, time.UTC, &LiveView{Err: "boom"})
+	if !ok || strings.Contains(string(html), "22:") {
+		t.Fatalf("failed live view must not add a point:\n%s", html)
 	}
 
 	// No archive hours for today: no strip.
 	empty := openArchive(t, testConfig(t))
-	if _, ok := buildTrend(context.Background(), empty, pa, zone, now, time.UTC); ok {
+	if _, ok := buildTrend(empty, zone, now, time.UTC, live); ok {
 		t.Fatal("trend strip built without any of today's hours")
 	}
 }

@@ -2,6 +2,14 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.13.0 — 2026-11-18
+
+- **"What is rising right now" answerable in the console.** Three views for the everyday question the yesterday-anchored tiles could not answer:
+  - **Blocked board** on the movers page: sources (ASN, user agent) ranked by the requests stopped at the edge in the movers' window — 403 with no origin response, so a 403 the origin itself returned is not counted. A rise in the totals is attributed at a glance — old faces knocking, not a breach. Names open the drill-down. Live queries, cached 10 minutes (a failure 1 minute).
+  - **Trend strip** on the overview: the last six clock hours overlaid on the same hours yesterday, ending with the live 60 minutes against the same 60 minutes yesterday — the momentum view. No query of its own (it reuses the cached live measurement).
+  - **Live faces**: the live hour lists its five loudest user agents and ASNs under the tiles, labelled unsettled.
+- Console: space between the live hour and the "latest settled hour" section on the overview.
+
 ## v1.12.1 — 2026-11-18
 
 - Console: after the two-factor step-up, you are taken back to the page the action started from (e.g. "Mark known" on new faces) instead of the users page. The console sends no Referer, so the step-up now follows the form's own return address.

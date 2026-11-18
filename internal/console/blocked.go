@@ -1,8 +1,10 @@
 package console
 
 // The blocked board (movers page): who is knocking on the firewall in
-// the movers' window — sources ranked by the requests a rule already
-// stopped (edge 403; blocks and failed challenges both answer 403).
+// the movers' window — sources ranked by the requests the edge already
+// stopped: edge 403 with no origin response (a rule's block and a
+// failed challenge both answer 403; a 403 the origin itself returned
+// went through, so it is excluded).
 // The archive keeps only Top lists without a status split, so these
 // are live queries like the drill-down's, cached per window.
 //
@@ -23,9 +25,10 @@ import (
 )
 
 const (
-	blockedTTL   = 10 * time.Minute
-	blockedLimit = 8
-	edgeBlocked  = 403
+	blockedTTL    = 10 * time.Minute
+	blockedErrTTL = time.Minute // a failure is retried after this, not on every refresh
+	blockedLimit  = 8
+	edgeBlocked   = 403
 )
 
 // BlockedRow is one knocking source.
@@ -62,11 +65,17 @@ func blockedRows(faces []cfapi.Face, total int64) []BlockedRow {
 	return out
 }
 
+// blockedFilter selects requests stopped at the edge: 403 and never
+// sent to the origin (originResponseStatus 0).
+func blockedFilter() cfapi.Filter {
+	return cfapi.Filter{EdgeStatus: edgeBlocked, OriginStatusTo: 1}
+}
+
 // buildBlocked queries the window's blocked sources. hasASN=false
 // skips the ASN list on plans whose analytics have no ASN dimension.
 func buildBlocked(ctx context.Context, an Analytics, zone config.Zone, w store.Window, hasASN bool) *Blocked {
 	b := &Blocked{Window: w}
-	f := cfapi.Filter{EdgeStatus: edgeBlocked}
+	f := blockedFilter()
 	var (
 		wg        sync.WaitGroup
 		asns, uas []cfapi.Face
@@ -129,7 +138,14 @@ func (s *Server) blocked(ctx context.Context, z config.Zone, w store.Window, has
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.b != nil && s.Now().Sub(e.b.At) < blockedTTL && e.b.Err == "" {
+	// The board sits on an auto-refreshing page: a failure is cached
+	// briefly so a Cloudflare outage does not stall every refresh on
+	// fresh queries.
+	ttl := blockedTTL
+	if e.b != nil && e.b.Err != "" {
+		ttl = blockedErrTTL
+	}
+	if e.b != nil && s.Now().Sub(e.b.At) < ttl {
 		return e.b
 	}
 	qctx, cancel := context.WithTimeout(ctx, 45*time.Second)

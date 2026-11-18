@@ -44,6 +44,7 @@
 {{template "snapform" .}}
 {{template "foot" .}}{{end}}
 
+{{define "blockedname"}}{{$p := index . 0}}{{$dim := index . 1}}{{$name := index . 2}}{{if or $p.Snapshot (not (drillable $dim $name))}}<span class="mono" title="{{$name}}">{{short $name 80}}</span>{{else}}<a class="mono" title="{{$name}}" href="/movers/drill?z={{$p.Zone.Name}}&amp;dim={{$dim}}&amp;name={{$name}}">{{short $name 80}}</a>{{end}}{{end}}
 {{define "moverrows"}}{{$w := index . 0}}{{$rows := index . 1}}
 {{if not $rows}}<p class="muted">{{t "none"}}</p>{{else}}
 <table class="list">
@@ -75,12 +76,12 @@
 <p class="note">{{tf "movers_note" .TopN}}{{if eq $dim "path"}} {{t "path_note"}}{{end}}</p>
 {{end}}{{end}}
 {{with .Blocked}}{{if and (not .Err) .Total}}<section class="card"><h2>{{t "blocked_title"}}</h2>
-<p class="note">{{tf "blocked_total" .Total}} {{t "blocked_note"}}</p>
+<p class="note">{{tf "blocked_total" (num .Total)}} {{t "blocked_note"}}</p>
 {{if .ASNs}}<h3>{{t "dim_asn"}}</h3><table class="list"><thead><tr><th>{{t "name"}}</th><th class="r">{{t "stopped"}}</th><th class="r">{{t "share"}}</th></tr></thead><tbody>
-{{range .ASNs}}<tr><td class="name"><span class="mono">{{.Name}}</span>{{template "asninfo" (list .Name false "")}}</td><td class="r">{{num .Count}}</td><td class="r">{{printf "%.0f" .Share}}%</td></tr>{{end}}
+{{range .ASNs}}<tr><td class="name">{{template "blockedname" (list $ "asn" .Name)}}{{template "asninfo" (list .Name false "")}}</td><td class="r">{{num .Count}}</td><td class="r">{{printf "%.0f" .Share}}%</td></tr>{{end}}
 </tbody></table>{{end}}
 {{if .UAs}}<h3>{{t "dim_ua"}}</h3><table class="list"><thead><tr><th>{{t "name"}}</th><th class="r">{{t "stopped"}}</th><th class="r">{{t "share"}}</th></tr></thead><tbody>
-{{range .UAs}}<tr><td class="name"><span class="mono" title="{{.Name}}">{{short .Name 80}}</span></td><td class="r">{{num .Count}}</td><td class="r">{{printf "%.0f" .Share}}%</td></tr>{{end}}
+{{range .UAs}}<tr><td class="name">{{template "blockedname" (list $ "ua" .Name)}}</td><td class="r">{{num .Count}}</td><td class="r">{{printf "%.0f" .Share}}%</td></tr>{{end}}
 </tbody></table>{{end}}
 </section>{{end}}{{end}}
 {{template "snapform" .}}

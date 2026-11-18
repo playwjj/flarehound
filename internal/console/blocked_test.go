@@ -13,14 +13,18 @@ import (
 )
 
 // knockAnalytics answers only edge-403 queries, with distinctive data.
-type knockAnalytics struct{ err error }
+type knockAnalytics struct {
+	err   error
+	calls int
+}
 
 func (k *knockAnalytics) Count(_ context.Context, _ string, _, _ time.Time, fl cfapi.Filter) (int64, error) {
+	k.calls++
 	if k.err != nil {
 		return 0, k.err
 	}
-	if fl.EdgeStatus != edgeBlocked {
-		return 0, errors.New("blocked board must filter on edge 403")
+	if fl != blockedFilter() {
+		return 0, errors.New("blocked board must filter on edge 403 without origin response")
 	}
 	return 1000, nil
 }
@@ -29,8 +33,8 @@ func (k *knockAnalytics) Top(_ context.Context, _ string, _, _ time.Time, dim st
 	if k.err != nil {
 		return nil, k.err
 	}
-	if fl.EdgeStatus != edgeBlocked {
-		return nil, errors.New("blocked board must filter on edge 403")
+	if fl != blockedFilter() {
+		return nil, errors.New("blocked board must filter on edge 403 without origin response")
 	}
 	switch dim {
 	case cfapi.DimASN:
@@ -76,9 +80,31 @@ func TestBlockedBoardOnMoversPage(t *testing.T) {
 	e := newWriteEnv(t, false)
 	e.srv.Analytics = &knockAnalytics{}
 	_, body, _ := e.admin.do("GET", "/movers?dim=ua", nil, nil)
-	for _, want := range []string{"Stopped at the edge", "Knocker/9.9", "AS45102", "1000 stopped in this hour"} {
+	for _, want := range []string{"Stopped at the edge", "Knocker/9.9", "AS45102", "1,000 stopped in this hour", "/movers/drill?z=example.com&amp;dim=asn&amp;name=AS45102"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("movers page lacks blocked-board %q:\n%s", want, body)
 		}
+	}
+}
+
+// A failed board is cached briefly: an auto-refreshing movers page must
+// not re-run three live queries on every refresh while Cloudflare fails.
+func TestBlockedErrorBackoff(t *testing.T) {
+	e := newWriteEnv(t, false)
+	k := &knockAnalytics{err: errors.New("boom")}
+	e.srv.Analytics = k
+	now := time.Date(2026, 11, 18, 22, 40, 0, 0, time.UTC)
+	e.srv.Now = func() time.Time { return now }
+	zone := config.Zone{Name: "example.com", ZoneID: "z1"}
+	w := store.Window{From: now.Truncate(time.Hour).Add(-time.Hour), To: now.Truncate(time.Hour)}
+	e.srv.blocked(context.Background(), zone, w, true)
+	e.srv.blocked(context.Background(), zone, w, true)
+	if k.calls != 1 {
+		t.Fatalf("failed board re-queried within the backoff: %d count calls", k.calls)
+	}
+	now = now.Add(blockedErrTTL)
+	k.err = nil
+	if b := e.srv.blocked(context.Background(), zone, w, true); b.Err != "" || k.calls != 2 {
+		t.Fatalf("board not retried after the backoff: err=%q calls=%d", b.Err, k.calls)
 	}
 }

@@ -34,7 +34,7 @@ header.top { display: flex; align-items: center; justify-content: space-between;
 .brand { font-weight: 700; color: var(--accent); letter-spacing: .02em; display: inline-flex; align-items: center; gap: .45rem; }
 a.brand { position: relative; padding-left: 58px; }
 .brand img { position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: 48px; height: 48px; }
-.split { display: flex; gap: 0 1.2rem; flex-wrap: wrap; }
+.split { display: flex; gap: 0 1.2rem; flex-wrap: wrap; margin-bottom: 1.2rem; }
 .split > div { flex: 1 1 280px; min-width: 0; }
 .login-logo { display: block; width: 72px; height: 72px; margin: 0 auto .4rem; }
 nav.user { display: flex; align-items: center; gap: .8rem; font-size: .9rem; }
@@ -164,7 +164,7 @@ button.alt { background: var(--card); color: var(--fg); border: 1px solid var(--
 
 /* live + drill-down */
 h2.sec { font-size: 1rem; margin: .4rem 0 .6rem; }
-details.settled { margin: .4rem 0 .8rem; }
+details.settled { margin: 1rem 0 .8rem; padding-top: .8rem; border-top: 1px solid var(--line); }
 details.settled summary { color: var(--muted); font-size: .88rem; margin-bottom: .6rem; }
 .wrapname { word-break: break-all; }
 
