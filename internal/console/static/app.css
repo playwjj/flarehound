@@ -32,7 +32,8 @@ h3 { font-size: .95rem; margin: 1rem 0 .4rem; }
 header.top { display: flex; align-items: center; justify-content: space-between; gap: .5rem;
   padding: .6rem 1rem; background: var(--card); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 2; }
 .brand { font-weight: 700; color: var(--accent); letter-spacing: .02em; display: inline-flex; align-items: center; gap: .45rem; }
-.brand img { width: 40px; height: 40px; }
+a.brand { position: relative; padding-left: 58px; }
+.brand img { position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: 48px; height: 48px; }
 .login-logo { display: block; width: 72px; height: 72px; margin: 0 auto .4rem; }
 nav.user { display: flex; align-items: center; gap: .8rem; font-size: .9rem; }
 nav.user form { margin: 0; }
