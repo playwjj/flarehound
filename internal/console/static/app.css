@@ -96,6 +96,7 @@ svg.chart .band { fill: var(--band); }
 svg.chart .median { fill: none; stroke: var(--median); stroke-width: 1; stroke-dasharray: 2 3; }
 svg.chart .l-total { fill: none; stroke: var(--l-total); stroke-width: 2; stroke-linejoin: round; }
 svg.chart .l-dyn { fill: none; stroke: var(--l-dyn); stroke-width: 1.5; stroke-dasharray: 5 3; }
+svg.chart .l-yday { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 5 3; }
 svg.chart .tick { stroke-width: 1.5; stroke: var(--muted); opacity: .6; }
 svg.chart .ev-alert, svg.chart .ev-block { stroke: var(--alert); }
 svg.chart .ev-recovered, svg.chart .ev-unblock, svg.chart .ev-expire { stroke: var(--ok); }

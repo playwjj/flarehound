@@ -34,6 +34,7 @@
 <p class="meta">{{tf "alerts_24h" .AlertsToday}} · {{t "baseline"}} = {{t "baseline_desc"}}</p>
 {{end}}
 {{end}}
+{{if .Trend}}<section class="card"><h2>{{t "trend_title"}}</h2>{{.Trend}}<p class="legend">{{t "trend_note"}}</p></section>{{end}}
 {{if .Chart}}<section class="card"><h2>{{t "last_48h"}}</h2>{{.Chart}}<p class="legend">{{t "hist_legend"}}</p></section>{{end}}
 <p class="note">{{t "settled_note"}}</p>
 {{template "snapform" .}}
