@@ -488,16 +488,17 @@ func (s *Server) undo(w http.ResponseWriter, r *http.Request) {
 
 // BlockRow is one block as Cloudflare holds it, joined with the audit log.
 type BlockRow struct {
-	Target        block.Target
-	Action        string
-	Mechanism     string
-	RuleID        string
-	Event         store.BlockEvent // newest audit record (zero when none)
-	HasEvent      bool
-	Missing       bool // in the audit log, not in Cloudflare
-	Attempts      int64
-	AttemptsKnown bool
-	AttemptsFrom  time.Time
+	Target          block.Target
+	Action          string
+	Mechanism       string
+	RuleID          string
+	Event           store.BlockEvent // newest audit record (zero when none)
+	HasEvent        bool
+	Missing         bool // in the audit log, not in Cloudflare
+	Attempts        int64
+	AttemptsKnown   bool
+	AttemptsPending bool // being computed in the background
+	AttemptsFrom    time.Time
 }
 
 type attemptsEntry struct {
@@ -516,6 +517,7 @@ type liveBlocks struct {
 	Err        string
 	Enforcer   *health.Beat
 	EnforceOld bool // TTL blocks exist but the enforcer is not running
+	Pending    bool // some attempts are still being computed
 }
 
 func (s *Server) loadLive(ctx context.Context, z config.Zone) liveBlocks {
@@ -546,9 +548,12 @@ func (s *Server) loadLive(ctx context.Context, z config.Zone) liveBlocks {
 		if c := caps.FirewallFrom(from, now); c.After(from) {
 			from = c
 		}
+		// Whole hours: a stable window start, so the cache can hit.
+		from = from.Truncate(time.Hour)
 		row.AttemptsFrom = from
 		if !(caps.Probed && !caps.FirewallEnabled) {
-			row.Attempts, row.AttemptsKnown = s.attempts(ctx, z, x, from, now)
+			row.Attempts, row.AttemptsKnown, row.AttemptsPending = s.attemptsAsync(z, x, from)
+			lb.Pending = lb.Pending || row.AttemptsPending
 		}
 		lb.Rows = append(lb.Rows, row)
 	}
@@ -572,20 +577,46 @@ func (s *Server) loadLive(ctx context.Context, z config.Zone) liveBlocks {
 	return lb
 }
 
-func (s *Server) attempts(ctx context.Context, z config.Zone, x block.Entry, from, to time.Time) (int64, bool) {
+// attemptsAsync returns a block's attempts from the cache and refreshes
+// stale or missing entries in the background: one query per day of the
+// window per block is too slow to run while a page waits. pending is true
+// while no value exists yet.
+func (s *Server) attemptsAsync(z config.Zone, x block.Entry, from time.Time) (n int64, known, pending bool) {
 	key := z.ZoneID + "|" + x.RuleID + "|" + x.Target.String() + "|" + strconv.FormatInt(from.Unix(), 10)
 	s.attemptsMu.Lock()
+	defer s.attemptsMu.Unlock()
 	e, ok := s.attemptsCache[key]
-	s.attemptsMu.Unlock()
 	if ok && s.Now().Sub(e.at) < attemptsTTL {
-		return e.n, e.ok
+		return e.n, e.ok, false
 	}
-	n, err := block.Attempts(ctx, s.Live, z.ZoneID, x.RuleID, x.Target, from, to)
-	e = attemptsEntry{at: s.Now(), n: n, ok: err == nil}
-	s.attemptsMu.Lock()
-	s.attemptsCache[key] = e
-	s.attemptsMu.Unlock()
-	return e.n, e.ok
+	if !s.attemptsBusy[key] {
+		s.attemptsBusy[key] = true
+		s.attemptsWG.Add(1)
+		go func() {
+			defer s.attemptsWG.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), writeTO)
+			defer cancel()
+			n, err := block.Attempts(ctx, s.Live, z.ZoneID, x.RuleID, x.Target, from, s.Now())
+			s.attemptsMu.Lock()
+			s.attemptsCache[key] = attemptsEntry{at: s.Now(), n: n, ok: err == nil}
+			delete(s.attemptsBusy, key)
+			s.attemptsMu.Unlock()
+		}()
+	}
+	if ok { // stale but shown while it refreshes
+		return e.n, e.ok, false
+	}
+	return 0, false, true
+}
+
+// warmBlocks refreshes every zone's block list and attempts in the
+// background, so the blocks page opens on fresh numbers.
+func (s *Server) warmBlocks(ctx context.Context) {
+	for _, z := range s.Cfg.Cloudflare.Zones {
+		cctx, cancel := context.WithTimeout(ctx, writeTO)
+		s.loadLive(cctx, z)
+		cancel()
+	}
 }
 
 // --- before / after comparison ---
@@ -734,6 +765,7 @@ func (s *Server) Background(ctx context.Context) {
 	defer t.Stop()
 	for {
 		s.warmEffects(ctx)
+		s.warmBlocks(ctx)
 		select {
 		case <-ctx.Done():
 			return

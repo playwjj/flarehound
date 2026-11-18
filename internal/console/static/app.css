@@ -140,3 +140,15 @@ h1.snaph { margin: .2rem 0 .8rem; }
 p.or { text-align: center; margin: .2rem 0; font-size: .85rem; }
 button.alt { background: var(--card); color: var(--fg); border: 1px solid var(--line); }
 .linkform .row { display: grid; gap: .5rem; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+
+/* Narrow screens: wide tables become one card per row, each value labelled. */
+@media (max-width: 640px) {
+  table.rsp thead { display: none; }
+  table.rsp, table.rsp tbody, table.rsp tr, table.rsp td { display: block; width: 100%; }
+  table.rsp tr { border-bottom: 1px solid var(--line); padding: .5rem 0; }
+  table.rsp td { border: 0; padding: .15rem 0 .15rem 6.8rem; position: relative; min-height: 1.4rem; text-align: left; }
+  table.rsp td.r { text-align: left; }
+  table.rsp td[data-label]::before { content: attr(data-label); position: absolute; left: 0; width: 6.3rem; color: var(--muted); font-size: .78rem; }
+  table.rsp td:not([data-label]) { padding-left: 0; }
+  table.rsp td.acts { min-width: 0; }
+}

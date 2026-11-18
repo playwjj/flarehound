@@ -2,6 +2,14 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.5.1 — 2026-11-18
+
+- Sessions in use are no longer signed out after a fixed 12 hours: the session cookie now slides with the server-side session. Sessions waiting for their two-factor code keep their 5-minute lifetime instead of being extended.
+- Blocks page: attempts are computed in the background (the page opens immediately, shows "computing…" and refreshes once), refreshed every 10 minutes, and cached under a stable whole-hour window — previously the cache never hit for blocks older than 7 days or without an audit record.
+- Phones: wide tables (blocks, block log, users, snapshots, timeline, sessions, audit log) turn into one labelled card per row below 640 px.
+- Fixed the Chinese "alerts in the last 24 h" line on the overview; tests now fail on any missing UI string, mismatched translation arguments or broken format verb.
+- `docker-compose.yml`: optional `flarehound-console` service (profile `console`); `console --listen` overrides `console.listen`.
+
 ## v1.5.0 — 2026-11-18
 
 - **Sign in with Google or GitHub** (`console.oauth`). A linked identity is an additional way into an existing local account: users link it from their account page after re-entering their password; an identity that is not linked signs in to nothing — no account is created, nothing is matched by e-mail. Two-factor sign-in, disabled accounts, forced password changes and `require_totp` still apply. Users unlink their own; admins see and remove anyone's on the Users page; linking, unlinking and sign-ins are audited.

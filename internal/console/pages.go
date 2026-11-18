@@ -445,6 +445,9 @@ func (s *Server) blocksPage(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 		lb := s.loadLive(ctx, z)
 		p.LiveB = &lb
+		if lb.Pending {
+			p.Refresh = 15 // attempts arrive shortly
+		}
 	}
 	s.render(w, r, http.StatusOK, "blocks", p)
 }

@@ -394,3 +394,37 @@ func TestSnapshots(t *testing.T) {
 		t.Fatalf("revoked snapshot still served: %d", code)
 	}
 }
+
+func TestBlocksAttemptsAsync(t *testing.T) {
+	e := newWriteEnv(t, true)
+	c := e.admin
+	form := url.Values{"type": {"asn"}, "value": {"24940"}, "action": {"challenge"}}
+	_, csrf, tok := e.review(t, c, clone(form))
+	form.Set("csrf", csrf)
+	form.Set("review", tok)
+	if code, _, _ := c.do("POST", "/blocks/apply", form, nil); code != http.StatusSeeOther {
+		t.Fatalf("apply: %d", code)
+	}
+	// Some background work may already have started on the redirect.
+	e.srv.attemptsWG.Wait()
+	e.srv.attemptsMu.Lock()
+	e.srv.attemptsCache = map[string]attemptsEntry{}
+	e.srv.attemptsMu.Unlock()
+
+	_, body, _ := c.do("GET", "/blocks", nil, nil)
+	if !strings.Contains(body, "computing") || !strings.Contains(body, `http-equiv="refresh" content="15"`) {
+		t.Fatalf("first load should show attempts as pending with a quick refresh:\n%s", body)
+	}
+	e.srv.attemptsWG.Wait()
+	_, body, _ = c.do("GET", "/blocks", nil, nil)
+	if strings.Contains(body, "computing") || strings.Contains(body, `content="15"`) {
+		t.Fatal("attempts still pending after the background query finished")
+	}
+	e.srv.attemptsWG.Wait()
+	e.srv.attemptsMu.Lock()
+	n := len(e.srv.attemptsCache)
+	e.srv.attemptsMu.Unlock()
+	if n != 1 {
+		t.Fatalf("cache keys are not stable across loads: %d entries for one block", n)
+	}
+}

@@ -33,3 +33,32 @@ services:
     volumes:
       - ./config.json:/app/config.json:ro
       - ./data:/app/data
+
+  # Optional (v1.3+ web console). Reads the same archive; listens inside
+  # the container on 0.0.0.0, published to this host's loopback only —
+  # reach it through Tailscale, a TLS reverse proxy or Cloudflare Tunnel.
+  # Needs "console": {"enabled": true} in config.json.
+  #   docker compose --profile console up -d
+  #   docker compose run --rm flarehound-console console init-admin --user you
+  flarehound-console:
+    image: passport888/flarehound:latest
+    profiles: ["console"]
+    restart: unless-stopped
+    command: ["-config", "/app/config.json", "console", "--listen", "0.0.0.0:8640"]
+    ports:
+      - "127.0.0.1:8640:8640"
+    healthcheck:
+      test: ["CMD", "flarehound", "-config", "/app/config.json", "health", "--file", "heartbeat-console", "--max-age", "15m"]
+      interval: 5m
+      start_period: 1m
+    environment:
+      CF_API_TOKEN: ${CF_API_TOKEN:-}
+      # In-console blocking (v1.4): give the write token to this service
+      # only — never to the watchdog above. Leave empty for read-only.
+      CF_WRITE_TOKEN: ${CF_CONSOLE_WRITE_TOKEN:-}
+      # Third-party sign-in (v1.5), referenced by name from config.json.
+      GOOGLE_OAUTH_SECRET: ${GOOGLE_OAUTH_SECRET:-}
+      GITHUB_OAUTH_SECRET: ${GITHUB_OAUTH_SECRET:-}
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - ./data:/app/data

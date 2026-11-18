@@ -100,12 +100,12 @@
 {{template "snapform" .}}
 <section class="card"><h2>{{t "events"}}</h2>
 {{if not .History.Events}}<p class="muted">{{t "none"}}</p>{{else}}
-<table class="list">
+<table class="list rsp">
 <thead><tr><th>{{t "time"}}</th><th>{{t "event"}}</th><th>{{t "detail"}}</th></tr></thead>
 <tbody>{{range .History.Events}}<tr>
-  <td class="nowrap">{{when .At}}</td>
-  <td><span class="ev ev-{{.Kind}}">{{evName .Kind}}</span> <span class="mono">{{.Label}}</span></td>
-  <td class="muted">{{short .Detail 160}}</td>
+  <td data-label="{{t "time"}}" class="nowrap">{{when .At}}</td>
+  <td data-label="{{t "event"}}"><span class="ev ev-{{.Kind}}">{{evName .Kind}}</span> <span class="mono">{{.Label}}</span></td>
+  <td data-label="{{t "detail"}}" class="muted">{{short .Detail 160}}</td>
 </tr>{{end}}</tbody></table>{{end}}
 </section>
 {{template "foot" .}}{{end}}
@@ -185,10 +185,10 @@
 {{end}}
 
 <section class="card"><h2>{{t "sessions"}}</h2>
-<table class="list"><thead><tr><th>{{t "created"}}</th><th>{{t "ip"}}</th><th>{{t "device"}}</th><th></th></tr></thead>
+<table class="list rsp"><thead><tr><th>{{t "created"}}</th><th>{{t "ip"}}</th><th>{{t "device"}}</th><th></th></tr></thead>
 <tbody>{{range .Sessions}}<tr>
-  <td class="nowrap">{{when .CreatedAt}}<br><small class="muted">{{ago .LastSeen}}</small></td>
-  <td class="mono">{{.IP}}</td><td class="muted">{{short .UA 60}}</td>
+  <td data-label="{{t "created"}}" class="nowrap">{{when .CreatedAt}}<br><small class="muted">{{ago .LastSeen}}</small></td>
+  <td data-label="{{t "ip"}}" class="mono">{{.IP}}</td><td data-label="{{t "device"}}" class="muted">{{short .UA 60}}</td>
   <td>{{if isNow . $rq}}<span class="tag">{{t "this_session"}}</span>{{else}}<form method="post" action="/account/sessions/end"><input type="hidden" name="csrf" value="{{$rq.CSRF}}"><input type="hidden" name="id" value="{{.Hash}}"><button class="small">{{t "end"}}</button></form>{{end}}</td>
 </tr>{{end}}</tbody></table>
 <form method="post" action="/account/sessions/end"><input type="hidden" name="csrf" value="{{.Req.CSRF}}"><input type="hidden" name="all" value="1"><button class="small">{{t "end_others"}}</button></form>
@@ -201,14 +201,14 @@
 {{if .Secret}}<div class="banner info">{{t "temp_pw_note"}} <b>{{.SecretFor}}</b>: <code class="secret">{{.Secret}}</code></div>{{end}}
 {{if .InviteLink}}<div class="banner info">{{t "invite_link_note"}}<br><code class="wrap">{{.InviteLink}}</code></div>{{end}}
 <section class="card"><h1>{{t "users_title"}}</h1>
-<table class="list">
+<table class="list rsp">
 <thead><tr><th>{{t "username"}}</th><th>{{t "role"}}</th><th>{{t "status"}}</th><th>{{t "twofa"}}</th><th>{{t "actions"}}</th></tr></thead>
 <tbody>{{range .Users}}<tr>
-  <td><b>{{.Username}}</b>{{if .Email}}<br><small class="muted">{{.Email}}</small>{{end}}</td>
-  <td>{{roleName .Role}}</td>
-  <td>{{if .Disabled}}<span class="bad">{{t "disabled"}}</span>{{else if locked .}}<span class="bad">{{t "locked"}}</span>{{else}}{{t "active"}}{{end}}{{if .MustChange}}<br><small class="muted">{{t "must_change"}}</small>{{end}}</td>
-  <td>{{if .TOTPEnabled}}{{t "yes"}}{{else}}{{t "no"}}{{end}}{{$uid := .ID}}{{range (index $.UserIDs .ID)}}<br><small class="muted">{{providerLabel .Provider}}: {{.Display}}</small>{{if ne $uid $rq.User.ID}}<form method="post" action="/users/{{$uid}}/unlink" class="op"><input type="hidden" name="csrf" value="{{$rq.CSRF}}"><input type="hidden" name="provider" value="{{.Provider}}"><input type="hidden" name="subject" value="{{.Subject}}"><button class="small">{{t "unlink"}}</button></form>{{end}}{{end}}</td>
-  <td class="acts">{{if ne .ID $rq.User.ID}}{{$id := .ID}}
+  <td data-label="{{t "username"}}"><b>{{.Username}}</b>{{if .Email}}<br><small class="muted">{{.Email}}</small>{{end}}</td>
+  <td data-label="{{t "role"}}">{{roleName .Role}}</td>
+  <td data-label="{{t "status"}}">{{if .Disabled}}<span class="bad">{{t "disabled"}}</span>{{else if locked .}}<span class="bad">{{t "locked"}}</span>{{else}}{{t "active"}}{{end}}{{if .MustChange}}<br><small class="muted">{{t "must_change"}}</small>{{end}}</td>
+  <td data-label="{{t "twofa"}}">{{if .TOTPEnabled}}{{t "yes"}}{{else}}{{t "no"}}{{end}}{{$uid := .ID}}{{range (index $.UserIDs .ID)}}<br><small class="muted">{{providerLabel .Provider}}: {{.Display}}</small>{{if ne $uid $rq.User.ID}}<form method="post" action="/users/{{$uid}}/unlink" class="op"><input type="hidden" name="csrf" value="{{$rq.CSRF}}"><input type="hidden" name="provider" value="{{.Provider}}"><input type="hidden" name="subject" value="{{.Subject}}"><button class="small">{{t "unlink"}}</button></form>{{end}}{{end}}</td>
+  <td data-label="{{t "actions"}}" class="acts">{{if ne .ID $rq.User.ID}}{{$id := .ID}}
     {{if .Admin}}{{template "uop" (list "viewer" (print $id) $rq.CSRF "make_viewer")}}{{else}}{{template "uop" (list "admin" (print $id) $rq.CSRF "make_admin")}}{{end}}
     {{if .Disabled}}{{template "uop" (list "enable" (print $id) $rq.CSRF "enable")}}{{else}}{{template "uop" (list "disable" (print $id) $rq.CSRF "disable")}}{{end}}
     {{if locked .}}{{template "uop" (list "unlock" (print $id) $rq.CSRF "unlock")}}{{end}}
@@ -240,8 +240,8 @@
 </section>
 
 <section class="card"><h2>{{t "audit_log"}}</h2>
-<table class="list"><thead><tr><th>{{t "time"}}</th><th>{{t "actor"}}</th><th>{{t "action"}}</th><th>{{t "detail"}}</th></tr></thead>
-<tbody>{{range .AuditLog}}<tr><td class="nowrap">{{when .At}}</td><td>{{.Actor}}<br><small class="muted mono">{{.IP}}</small></td><td class="mono">{{.Action}}</td><td class="muted">{{.Target}} {{.Detail}}</td></tr>{{end}}</tbody></table>
+<table class="list rsp"><thead><tr><th>{{t "time"}}</th><th>{{t "actor"}}</th><th>{{t "action"}}</th><th>{{t "detail"}}</th></tr></thead>
+<tbody>{{range .AuditLog}}<tr><td data-label="{{t "time"}}" class="nowrap">{{when .At}}</td><td data-label="{{t "actor"}}">{{.Actor}}<br><small class="muted mono">{{.IP}}</small></td><td data-label="{{t "action"}}" class="mono">{{.Action}}</td><td data-label="{{t "detail"}}" class="muted">{{.Target}} {{.Detail}}</td></tr>{{end}}</tbody></table>
 </section>
 {{template "foot" .}}{{end}}
 

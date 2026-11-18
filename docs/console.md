@@ -21,25 +21,14 @@ flarehound -config config.json console
 
 If no account exists, the console also logs a one-time setup link (`/setup?token=…`) that creates the first admin and then stops working.
 
-In Docker, run it as a second service from the same image and data volume. Put `CF_WRITE_TOKEN` in **this** service only if you want in-console blocking — never in the watch service:
+In Docker, `docker-compose.yml` has an optional `flarehound-console` service (profile `console`) on the same image and data volume. It listens on `0.0.0.0:8640` inside the container (`console --listen`), published to the host's loopback only:
 
-```yaml
-  console:
-    image: passport888/flarehound:latest
-    command: ["-config", "/app/config.json", "console"]
-    environment:
-      - CF_API_TOKEN=${CF_API_TOKEN}
-      - CF_WRITE_TOKEN=${CF_WRITE_TOKEN}   # optional: in-console blocking
-    volumes:
-      - ./config.json:/app/config.json:ro
-      - ./data:/app/data
-    ports:
-      - "127.0.0.1:8640:8640"
-    healthcheck:
-      test: ["CMD", "flarehound", "-config", "/app/config.json", "health", "--file", "heartbeat-console", "--max-age", "15m"]
+```bash
+docker compose --profile console up -d
+docker compose run --rm flarehound-console console init-admin --user you
 ```
 
-Inside a container, set `"listen": "0.0.0.0:8640"` and publish the port only to the host (`127.0.0.1:8640:8640`) or to your tunnel.
+For in-console blocking, set `CF_CONSOLE_WRITE_TOKEN` (passed to this service as `CF_WRITE_TOKEN`) — never give the write token to the `flarehound` watch service. For Google / GitHub sign-in, set `GOOGLE_OAUTH_SECRET` / `GITHUB_OAUTH_SECRET`.
 
 ## Reaching it from your phone
 

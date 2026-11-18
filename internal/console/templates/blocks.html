@@ -7,16 +7,16 @@
   {{if .EnforceOld}}<div class="banner warn">{{t "enforcer_off"}}</div>{{else if .Enforcer}}<p class="meta">{{t "enforcer_on"}} {{ago .Enforcer.At}}</p>{{end}}
   <section class="card"><h2>{{t "active_blocks"}}</h2>
   {{if not .Rows}}<p class="muted">{{t "none"}}</p>{{else}}
-  <table class="list">
+  <table class="list rsp">
   <thead><tr><th>{{t "value"}}</th><th>{{t "action"}}</th><th class="r">{{t "attempts"}}</th><th>{{t "expires"}}</th><th>{{t "actions"}}</th></tr></thead>
   <tbody>{{range .Rows}}<tr>
-    <td><span class="mono">{{.Target}}</span><br><small class="muted">{{.Mechanism}}{{if .HasEvent}} · {{when .Event.At}} · {{.Event.Actor}}{{end}}</small>
+    <td data-label="{{t "value"}}"><span class="mono">{{.Target}}</span><br><small class="muted">{{.Mechanism}}{{if .HasEvent}} · {{when .Event.At}} · {{.Event.Actor}}{{end}}</small>
       {{if .Missing}}<br><span class="bad">{{t "missing_cf"}}</span>{{else if not .HasEvent}}<br><small class="muted">{{t "no_audit"}}</small>{{end}}
       {{if and .HasEvent .Event.Reason}}<br><small class="muted">{{.Event.Reason}}</small>{{end}}</td>
-    <td>{{.Action}}</td>
-    <td class="r">{{if .AttemptsKnown}}{{num .Attempts}}<br><small class="muted">{{t "since"}} {{when .AttemptsFrom}}</small>{{else}}<span class="muted">—</span>{{end}}</td>
-    <td class="nowrap">{{if and .HasEvent (not .Event.ExpiresAt.IsZero)}}{{when .Event.ExpiresAt}}{{else}}{{t "permanent"}}{{end}}</td>
-    <td class="acts">{{if and $can (not .Missing)}}
+    <td data-label="{{t "action"}}">{{.Action}}</td>
+    <td data-label="{{t "attempts"}}" class="r">{{if .AttemptsKnown}}{{num .Attempts}}<br><small class="muted">{{t "since"}} {{when .AttemptsFrom}}</small>{{else if .AttemptsPending}}<span class="muted">{{t "computing"}}</span>{{else}}<span class="muted">—</span>{{end}}</td>
+    <td data-label="{{t "expires"}}" class="nowrap">{{if and .HasEvent (not .Event.ExpiresAt.IsZero)}}{{when .Event.ExpiresAt}}{{else}}{{t "permanent"}}{{end}}</td>
+    <td data-label="{{t "actions"}}" class="acts">{{if and $can (not .Missing)}}
       <form method="post" action="/blocks/unblock/review" class="op"><input type="hidden" name="csrf" value="{{$rq.CSRF}}"><input type="hidden" name="z" value="{{$z.Name}}"><input type="hidden" name="type" value="{{.Target.Type}}"><input type="hidden" name="value" value="{{.Target.Value}}"><button class="small">{{t "unblock"}}</button></form>
       <form method="post" action="/blocks/renew/review" class="op"><input type="hidden" name="csrf" value="{{$rq.CSRF}}"><input type="hidden" name="z" value="{{$z.Name}}"><input type="hidden" name="type" value="{{.Target.Type}}"><input type="hidden" name="value" value="{{.Target.Value}}">
         <select name="for" class="tiny"><option value="24h">+24 h</option><option value="7d">+7 {{t "days"}}</option><option value="30d">+30 {{t "days"}}</option><option value="">{{t "permanent"}}</option></select><button class="small">{{t "renew"}}</button></form>
@@ -28,22 +28,22 @@
 <p class="note">{{t "blocks_ro"}}</p>
 <section class="card"><h2>{{t "active_blocks"}}</h2>
 {{if not $.Active}}<p class="muted">{{t "none"}}</p>{{else}}
-<table class="list">
+<table class="list rsp">
 <thead><tr><th>{{t "type"}}</th><th>{{t "value"}}</th><th>{{t "action"}}</th><th>{{t "expires"}}</th><th>{{t "reason"}}</th></tr></thead>
 <tbody>{{range $.Active}}<tr>
-  <td>{{.Type}}</td><td class="mono">{{.Value}}</td><td>{{.Action}}</td>
-  <td class="nowrap">{{if .ExpiresAt.IsZero}}{{t "permanent"}}{{else}}{{when .ExpiresAt}}{{end}}</td>
-  <td class="muted">{{.Reason}}<br><small>{{when .At}} · {{.Actor}}</small></td>
+  <td data-label="{{t "type"}}">{{.Type}}</td><td data-label="{{t "value"}}" class="mono">{{.Value}}</td><td data-label="{{t "action"}}">{{.Action}}</td>
+  <td data-label="{{t "expires"}}" class="nowrap">{{if .ExpiresAt.IsZero}}{{t "permanent"}}{{else}}{{when .ExpiresAt}}{{end}}</td>
+  <td data-label="{{t "reason"}}" class="muted">{{.Reason}}<br><small>{{when .At}} · {{.Actor}}</small></td>
 </tr>{{end}}</tbody></table>{{end}}
 </section>
 {{end}}
 <section class="card"><h2>{{t "block_log"}}</h2>
 {{if not .Log}}<p class="muted">{{t "none"}}</p>{{else}}
-<table class="list">
+<table class="list rsp">
 <thead><tr><th>{{t "time"}}</th><th>{{t "op"}}</th><th>{{t "value"}}</th><th>{{t "actor"}}</th><th></th></tr></thead>
 <tbody>{{range .Log}}<tr>
-  <td class="nowrap">{{when .At}}<br><small class="muted">#{{.ID}}</small></td><td><span class="ev ev-{{.Op}}">{{evName .Op}}</span> {{.Action}}{{if and (eq .Op "renew") (not .ExpiresAt.IsZero)}}<br><small class="muted">→ {{when .ExpiresAt}}</small>{{end}}</td>
-  <td><span class="mono">{{.Type}} {{.Value}}</span>{{if .Reason}}<br><small class="muted">{{.Reason}}</small>{{end}}</td><td>{{.Actor}}</td>
+  <td data-label="{{t "time"}}" class="nowrap">{{when .At}}<br><small class="muted">#{{.ID}}</small></td><td data-label="{{t "op"}}"><span class="ev ev-{{.Op}}">{{evName .Op}}</span> {{.Action}}{{if and (eq .Op "renew") (not .ExpiresAt.IsZero)}}<br><small class="muted">→ {{when .ExpiresAt}}</small>{{end}}</td>
+  <td data-label="{{t "value"}}"><span class="mono">{{.Type}} {{.Value}}</span>{{if .Reason}}<br><small class="muted">{{.Reason}}</small>{{end}}</td><td data-label="{{t "actor"}}">{{.Actor}}</td>
   <td class="acts">{{if $.WriteOn}}{{if eq .Op "block"}}<a class="act" href="/blocks/effect/{{.ID}}?z={{zq $z}}">{{t "effect"}}</a> {{end}}{{if $can}}<a class="act" href="/blocks/undo/{{.ID}}?z={{zq $z}}">{{t "undo"}}</a>{{end}}{{end}}</td>
 </tr>{{end}}</tbody></table>
 {{if $.WriteOn}}<p class="note">{{t "undo_note"}}</p>{{end}}{{end}}
@@ -189,12 +189,12 @@
 <section class="card"><h1>{{t "snap_title"}}</h1>
 <p class="note">{{t "snap_note"}}</p>
 {{if not .Snapshots}}<p class="muted">{{t "none"}}</p>{{else}}{{$rq := .Req}}{{$now := now}}
-<table class="list">
+<table class="list rsp">
 <thead><tr><th>{{t "name"}}</th><th>{{t "created"}}</th><th>{{t "status"}}</th><th></th></tr></thead>
 <tbody>{{range .Snapshots}}<tr>
-  <td>{{.Title}}<br><small class="muted">#{{.ID}} · {{.Creator}}</small></td>
-  <td class="nowrap">{{when .CreatedAt}}</td>
-  <td>{{if .Revoked}}<span class="muted">{{t "snap_revoked"}}</span>{{else if .Live $now}}{{t "snap_live_until"}} {{when .ExpiresAt}}{{else}}<span class="muted">{{t "snap_expired"}}</span>{{end}}</td>
+  <td data-label="{{t "name"}}">{{.Title}}<br><small class="muted">#{{.ID}} · {{.Creator}}</small></td>
+  <td data-label="{{t "created"}}" class="nowrap">{{when .CreatedAt}}</td>
+  <td data-label="{{t "status"}}">{{if .Revoked}}<span class="muted">{{t "snap_revoked"}}</span>{{else if .Live $now}}{{t "snap_live_until"}} {{when .ExpiresAt}}{{else}}<span class="muted">{{t "snap_expired"}}</span>{{end}}</td>
   <td class="acts"><a class="act" href="/snapshots/{{.ID}}/download">{{t "download"}}</a>
     {{if .Live $now}}<form method="post" action="/snapshots/{{.ID}}/revoke" class="op"><input type="hidden" name="csrf" value="{{$rq.CSRF}}"><button class="small">{{t "revoke"}}</button></form>{{end}}</td>
 </tr>{{end}}</tbody></table>{{end}}

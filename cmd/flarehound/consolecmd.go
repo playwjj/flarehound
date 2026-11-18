@@ -34,7 +34,7 @@ import (
 
 const consoleUsage = `Web console (set "console": {"enabled": true} first; blocking needs the write token in the console's environment):
 
-  flarehound console                               serve the console (default 127.0.0.1:8640)
+  flarehound console [--listen ADDR]               serve the console (default console.listen, 127.0.0.1:8640)
   flarehound console init-admin --user NAME [--email ADDR]
                                                    create an admin account (password from the
                                                    terminal, or FLAREHOUND_ADMIN_PASSWORD)
@@ -52,6 +52,7 @@ func runConsole(ctx context.Context, cfgPath string, args []string, redactor *lo
 	fs.StringVar(&cfgPath, "config", cfgPath, "path to config file")
 	user := fs.String("user", "", "account name")
 	email := fs.String("email", "", "e-mail address (optional)")
+	listen := fs.String("listen", "", "serve: listen address, overriding console.listen (e.g. 0.0.0.0:8640 inside a container)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -65,6 +66,9 @@ func runConsole(ctx context.Context, cfgPath string, args []string, redactor *lo
 		return 1
 	}
 	redactor.Add(cfg.Secrets()...)
+	if *listen != "" {
+		cfg.Console.Listen = *listen
+	}
 
 	db, err := console.OpenDB(cfg.Console.DBFile)
 	if err != nil {

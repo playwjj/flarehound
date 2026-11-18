@@ -266,6 +266,7 @@ var dict = map[string][2]string{
 	"oauth_state":           {"This sign-in attempt expired or was started elsewhere. Try again.", "本次登录已过期或不是在本浏览器发起的，请重试。"},
 	"oauth_denied":          {"The sign-in was cancelled or refused by the provider.", "登录被取消或被对方服务拒绝。"},
 	"oauth_failed":          {"Sign-in with the provider failed. Details are in the account audit log.", "第三方登录失败，详情见账号审计日志。"},
+	"computing":             {"computing…", "计算中…"},
 }
 
 type lang string

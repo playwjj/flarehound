@@ -444,14 +444,16 @@ func (d *DB) SessionByToken(token string) (Session, bool, error) {
 	return s, true, nil
 }
 
-// TouchSession slides the idle expiry, at most once a minute.
-func (d *DB) TouchSession(s Session, ttl time.Duration) error {
+// TouchSession slides the idle expiry, at most once a minute, and
+// reports whether it did (the caller then refreshes the cookie). Sessions
+// still waiting for their second factor keep their short fixed lifetime.
+func (d *DB) TouchSession(s Session, ttl time.Duration) (bool, error) {
 	now := d.now()
-	if now.Sub(s.LastSeen) < time.Minute {
-		return nil
+	if !s.MFAOK || now.Sub(s.LastSeen) < time.Minute {
+		return false, nil
 	}
 	_, err := d.db.Exec(`UPDATE sessions SET last_seen = ?, expires_at = ? WHERE token_hash = ?`, now.Unix(), now.Add(ttl).Unix(), s.Hash)
-	return err
+	return err == nil, err
 }
 
 // PromoteSession marks the second factor as passed and rotates the token

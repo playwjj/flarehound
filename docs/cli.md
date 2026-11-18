@@ -42,7 +42,7 @@ flarehound -config config.json -backfill 28
 | `rules list|add|edit|delete|move|backups|restore|log` | write | [Rule changes](rules.md) |
 | `ratelimit add` | write | [Rule changes](rules.md) |
 | `cache add` | write | [Rule changes](rules.md) |
-| `console` | read | Serve the [web console](console.md) |
+| `console [--listen ADDR]` | read (+ write, optional) | Serve the [web console](console.md); `--listen` overrides `console.listen` |
 | `console init-admin --user NAME [--email ADDR]` | — | Create an admin account (password from the terminal or `FLAREHOUND_ADMIN_PASSWORD`) |
 | `console users` | — | List console accounts |
 | `console reset-password --user NAME` | — | New password, unlock, end all sessions (local recovery) |

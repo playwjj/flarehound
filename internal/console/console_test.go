@@ -548,3 +548,25 @@ func TestProxyIdentity(t *testing.T) {
 		t.Fatalf("untrusted peer with identity header: %d", w.Code)
 	}
 }
+
+func TestSessionSliding(t *testing.T) {
+	db := testDB(t)
+	u, _ := db.CreateUser("alice", "", "alice-password", RoleAdmin, false)
+	full, _ := db.CreateSession(u.ID, true, time.Hour, "ip", "ua")
+	pending, _ := db.CreateSession(u.ID, false, preMFATTL, "ip", "ua")
+	base := time.Now()
+	db.now = func() time.Time { return base.Add(2 * time.Minute) }
+	if slid, _ := db.TouchSession(full, time.Hour); !slid {
+		t.Fatal("full session not slid")
+	}
+	if slid, _ := db.TouchSession(pending, time.Hour); slid {
+		t.Fatal("pending (pre-TOTP) session extended")
+	}
+	db.now = func() time.Time { return base.Add(6 * time.Minute) }
+	if _, ok, _ := db.SessionByToken(pending.Token); ok {
+		t.Fatal("pending session outlived its 5 minutes")
+	}
+	if _, ok, _ := db.SessionByToken(full.Token); !ok {
+		t.Fatal("slid session expired")
+	}
+}

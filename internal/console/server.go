@@ -81,6 +81,8 @@ type Server struct {
 	reviewKey     []byte
 	attemptsMu    sync.Mutex
 	attemptsCache map[string]attemptsEntry
+	attemptsBusy  map[string]bool
+	attemptsWG    sync.WaitGroup // background attempt queries (tests wait on it)
 }
 
 type auditEntry struct {
@@ -94,7 +96,7 @@ type auditEntry struct {
 func New(cfg *config.Config, db *DB, arch Archive, auditor Auditor, version string) (*Server, string, error) {
 	s := &Server{Cfg: cfg, DB: db, Archive: arch, Auditor: auditor, Version: version, Now: time.Now,
 		trusted: cfg.TrustedProxies(), lang: lang(cfg.Report.Language), limiter: newLimiter(10, time.Minute),
-		auditCache: map[string]auditEntry{}, attemptsCache: map[string]attemptsEntry{}}
+		auditCache: map[string]auditEntry{}, attemptsCache: map[string]attemptsEntry{}, attemptsBusy: map[string]bool{}}
 	s.OAuth = builtinProviders(cfg.Console)
 	s.reviewKey = make([]byte, 32)
 	if _, err := rand.Read(s.reviewKey); err != nil {
@@ -284,7 +286,12 @@ func (s *Server) base(next http.Handler) http.Handler {
 					// leftover cookie.
 					if rq.Proxy == "" || identityMatches(u, rq.Proxy) {
 						rq.Session, rq.User, rq.CSRF = &sess, &u, sess.CSRF
-						_ = s.DB.TouchSession(sess, s.sessionTTL())
+						// Slide the cookie with the server-side session:
+						// people in use are not signed out after a fixed time.
+						if slid, _ := s.DB.TouchSession(sess, s.sessionTTL()); slid {
+							http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: sess.Token, Path: "/", HttpOnly: true,
+								Secure: secure, SameSite: http.SameSiteLaxMode, MaxAge: int(s.sessionTTL().Seconds())})
+						}
 					}
 				}
 			}
