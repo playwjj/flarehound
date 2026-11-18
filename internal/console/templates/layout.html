@@ -9,7 +9,9 @@
 <style>{{.CSS}}</style>
 {{else}}{{if .Refresh}}<meta http-equiv="refresh" content="{{.Refresh}}">{{end}}
 <title>{{.Title}} · FlareHound</title>
-<link rel="stylesheet" href="/static/app.css">{{end}}
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" type="image/png" href="/static/logo.png">
+<link rel="apple-touch-icon" href="/static/logo.png">{{end}}
 </head>
 <body>
 {{if .Snapshot}}
@@ -18,7 +20,7 @@
 <h1 class="snaph">{{.Title}}</h1>
 {{else}}
 <header class="top">
-  <a class="brand" href="/{{if .Zone.Name}}?z={{zq .Zone}}{{end}}">FlareHound</a>
+  <a class="brand" href="/{{if .Zone.Name}}?z={{zq .Zone}}{{end}}"><img src="/static/logo.png" alt="" width="26" height="26">FlareHound</a>
   <nav class="user">
   <form method="post" action="/lang" class="langsw"><input type="hidden" name="csrf" value="{{.Req.CSRF}}"><input type="hidden" name="lang" value="{{if eq .Lang "zh"}}en{{else}}zh{{end}}"><input type="hidden" name="next" value="{{.Here}}"><button class="link" title="{{t "lang_switch"}}">{{if eq .Lang "zh"}}EN{{else}}中文{{end}}</button></form>
   {{if and .Req.User (or (not .Req.Session) .Req.Session.MFAOK)}}
@@ -73,6 +75,7 @@
 
 {{define "login"}}{{template "head" .}}
 <section class="card narrow">
+<img class="login-logo" src="/static/logo.png" alt="FlareHound" width="72" height="72">
 <h1>{{t "login_title"}}</h1>
 {{if .Msg}}<p class="muted">{{.Msg}}</p>{{else}}
 <form method="post" action="/login" class="stack">

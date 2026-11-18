@@ -244,6 +244,18 @@ func (s *Server) Handler() http.Handler {
 	static := http.FileServerFS(assets)
 	mux.Handle("GET /static/", static)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "ok") })
+	// Browsers ask for /favicon.ico even on pages that declare no icon;
+	// the logo (static/logo.png, also linked from the page head) is the icon.
+	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		b, err := assets.ReadFile("static/logo.png")
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Cache-Control", "public, max-age=604800")
+		_, _ = w.Write(b)
+	})
 
 	// Anonymous.
 	mux.HandleFunc("GET /login", s.loginPage)
