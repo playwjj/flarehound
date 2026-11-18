@@ -47,6 +47,8 @@ nav:
       - One-click blocking: blocking.md
       - Rule changes: rules.md
       - WAF rule audit: audit.md
+      - WAF basics: waf-guide.md
+      - WAF 入门（中文）: waf-guide-zh.md
   - Reference:
       - Command line: cli.md
       - Limitations: limitations.md

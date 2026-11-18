@@ -243,9 +243,16 @@ func serveConsole(ctx context.Context, cfg *config.Config, db *console.DB) int {
 		log.Printf("console: %v", err)
 		return 1
 	}
+	// Live views (read token): the last hour with the watch's own
+	// queries, and the movers' drill-down.
+	srv.Measure, srv.Analytics = runner.Measure, cfapi.New(cfg.APIToken)
+	// WAF rules: listed with the read token (Zone → WAF: Read), changed
+	// with the write token; backups and the change log live in the archive.
+	srv.RulesRead, srv.Store = cfapi.NewREST(cfg.APIToken), st
 	mode := "read-only"
 	if writeToken != "" {
 		srv.Write, srv.Live, srv.Store = cfapi.NewREST(writeToken), cfapi.New(cfg.APIToken), st
+		srv.RulesWrite = cfapi.NewREST(writeToken)
 		mode = "blocking enabled for admins"
 		go srv.Background(ctx)
 	}

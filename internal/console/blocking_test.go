@@ -367,7 +367,7 @@ func TestSnapshots(t *testing.T) {
 	if code != http.StatusOK || !strings.Contains(snap, "Crawler/1.0") {
 		t.Fatalf("public snapshot: %d", code)
 	}
-	if strings.Contains(snap, "csrf") || strings.Contains(snap, "<form") || strings.Contains(snap, "<script") || strings.Contains(snap, "/static/") {
+	if strings.Contains(snap, "csrf") || strings.Contains(snap, "/movers/drill") || strings.Contains(snap, "<form") || strings.Contains(snap, "<script") || strings.Contains(snap, "/static/") {
 		t.Fatal("snapshot carries forms, tokens or external resources")
 	}
 	style := regexp.MustCompile(`(?s)<style>(.*?)</style>`).FindStringSubmatch(snap)

@@ -46,14 +46,14 @@ With `base_url` set, alerts link to the movers view, recoveries and daily report
 
 | Page | What it answers |
 |---|---|
-| **Overview** | The newest settled hour against the 28-day same-hour median: zone requests, Worker calls and CPU P50, uncached (`dynamic`), origin 5xx — each with its change, its alert line and a status (normal / watch / over the line). 48-hour chart with the baseline. A stale-data warning when the watch has not archived recently. |
-| **Movers** | Who is up, who is down: user agents, ASNs and uncached paths ranked by absolute change against the baseline. |
+| **Overview** | **The last 60 minutes, live**: queried from Cloudflare with the watch's own queries (at most once a minute), ending a few minutes ago for ingestion lag and marked *not settled*, against the 28-day baseline blended from the two clock hours it spans. Below it, the newest settled hour from the archive. Each line shows its change, its alert line and a status (normal / watch / over the line); 48-hour chart with the baseline. If the live query fails, the settled hour is shown with a note. |
+| **Movers** | Who is up, who is down: user agents, ASNs and uncached paths ranked by absolute change against the baseline. Tap an entry to **drill down**: its paths, status codes, cache status and the other dimension (ASNs of a user agent, user agents of an ASN), now and in the same hour yesterday, each part drillable in turn. |
 | **New faces** | User agents, ASNs and paths first seen in the last 24 h / 7 / 30 days, with their current volume. Entries in `known_faces` are marked. |
 | **History** | 24 h / 7 d / 30 d (or ending on a chosen date): requests and `dynamic` against a 28-day same-hour P25–P75 band, plus a timeline of alerts, recoveries, blocks, unblocks, expiries and rule changes. |
 | **WAF audit** | The same audit as `flarehound audit`, cached for 30 minutes; re-run on demand (once a minute at most). |
 | **Blocks** | With the write token: the blocks as Cloudflare holds them, joined with the audit log, attempts since each block, expiry, the rule quota and whether `flarehound enforce` is running; unblock, change expiry, undo, before/after. Without it: the audit log's view. |
 
-All numbers come from settled hourly windows in the archive — the same windows, calibration and baseline the alerts use. The hour in progress is not shown.
+Apart from the live hour and the drill-down, all numbers come from settled hourly windows in the archive — the same windows, queries and baseline the alerts use. The live hour uses the same queries on a rolling window; the drill-down queries Cloudflare live (it keeps about 31 days) and caches each breakdown for 10 minutes.
 
 ### Reading the movers
 
@@ -82,6 +82,20 @@ The same steps apply to **unblock** and to **change expiry** (+24 h, +7 days, +3
 **Expiry** stays the job of `flarehound enforce` (CLI, or the `admin` service in docker-compose). The blocks page shows when it last ran and warns when blocks have an expiry but the enforcer is not running.
 
 The CLI (`flarehound block / unblock / blocks / enforce`) is unchanged and remains the fallback when the console is down.
+
+## WAF rules
+
+**WAF rules** lists the zone's custom and rate-limit rules in execution order, each with a plain-words explanation ("If the path starts with /login and not a Cloudflare-verified bot → managed challenge"), its action and state. It reads them with the read token (Zone → WAF: Read; Zone: Read for the quota).
+
+With the write token, admins can also:
+
+- **add a rule from a recipe** — the recipe catalogue explains each one; the form asks only for what it needs (paths, IPs, a secret header …);
+- **enable / disable**, **move up / to the top**, **delete** a rule;
+- **restore** a backup (one is taken before every change).
+
+Every change goes through a review page — the rule in plain words, the exact change, the quota after, warnings — and is applied with the same safeguards as blocking: a review token bound to what was reviewed *and to the ruleset version it was planned on* (if someone else changed the rules meanwhile, you are asked to review again), a fresh two-factor code for accounts with TOTP, the account audit log written before Cloudflare is touched, a phase backup, read-back verification, and the execution log. FlareHound's own block rules are shown but managed on the blocks page.
+
+The **WAF audit** page puts **How to fix** first — each finding with what to do and a **Fix with a recipe** link (or the CLI command) — and keeps the full report below. New to this? [WAF basics](waf-guide.md) / [中文](waf-guide-zh.md).
 
 ## Read-only snapshots
 

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -162,5 +163,52 @@ func TestHourly(t *testing.T) {
 	got, err := c.Hourly(context.Background(), "zone", from, to, Filter{CacheStatus: "dynamic"})
 	if err != nil || got[from] != 5 || got[from.Add(time.Hour)] != 7 || !strings.Contains(q, "datetimeHour") {
 		t.Fatalf("%v %v %s", got, err, q)
+	}
+}
+
+func TestReadRetriesWriteDoesNot(t *testing.T) {
+	old := retryDelays
+	retryDelays = []time.Duration{time.Millisecond, time.Millisecond}
+	defer func() { retryDelays = old }()
+
+	var n atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if n.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/graphql") {
+			b, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(b), "query") {
+				t.Errorf("retried GraphQL request lost its body: %q", b)
+			}
+			_, _ = w.Write([]byte(`{"data":{"viewer":{"zones":[{"httpRequestsAdaptiveGroups":[{"count":7}]}]}}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"success":true,"result":{}}`))
+	}))
+	defer srv.Close()
+
+	c := New("t")
+	c.endpoint = srv.URL + "/graphql"
+	if _, err := c.Count(context.Background(), "z", time.Now().Add(-time.Hour), time.Now(), Filter{}); err != nil {
+		t.Fatalf("GraphQL read not retried after a 503: %v", err)
+	}
+	if n.Load() != 2 {
+		t.Fatalf("GraphQL attempts: %d", n.Load())
+	}
+
+	n.Store(0)
+	r := NewREST("t")
+	r.base = srv.URL
+	if _, err := r.do(context.Background(), http.MethodPost, "/zones/z/rulesets", map[string]any{"x": 1}, nil); err == nil {
+		t.Fatal("write after a 503 reported success")
+	}
+	if n.Load() != 1 {
+		t.Fatalf("a write was retried: %d attempts", n.Load())
+	}
+	n.Store(0)
+	if _, err := r.do(context.Background(), http.MethodGet, "/zones/z", nil, nil); err != nil {
+		t.Fatalf("REST read not retried: %v", err)
 	}
 }

@@ -1,0 +1,116 @@
+{{define "rules"}}{{template "head" .}}
+{{$z := .Zone}}{{$rq := .Req}}{{$can := .CanRules}}
+{{with .Rules}}{{$ph := .Phase}}
+<nav class="seg">
+  <a href="/rules?z={{zq $z}}&amp;phase=custom"{{if eq $ph "custom"}} class="on"{{end}}>{{t "phase_custom"}}</a>
+  <a href="/rules?z={{zq $z}}&amp;phase=ratelimit"{{if eq $ph "ratelimit"}} class="on"{{end}}>{{t "phase_ratelimit"}}</a>
+</nav>
+<section class="card">
+<h1>{{t "nav_rules"}} · {{$z.Name}}</h1>
+<p class="note">{{t "rules_order_note"}}</p>
+{{if .Err}}<div class="banner warn">{{.Err}}</div>{{else}}
+<p class="meta">{{tf "rules_quota" .Used .Limit}}{{if .Plan}} · {{.Plan}}{{end}}{{if .Version}} · v{{.Version}}{{end}}</p>
+{{if $can}}<p><a class="btn" href="/rules/recipes?z={{zq $z}}">＋ {{t "add_from_recipe"}}</a></p>{{end}}
+{{if not .Rules}}<p class="muted">{{t "none"}}</p>{{else}}
+<ol class="rulelist">
+{{range .Rules}}<li class="{{if not .Enabled}}off{{end}}">
+  <div class="rh"><span class="pos">#{{.Pos}}</span> <span class="act act-{{.Action}}">{{.Action}}</span>{{if not .Enabled}} <span class="tag">{{t "disabled"}}</span>{{end}}{{if .Managed}} <span class="tag">{{t "fh_block_rule"}}</span>{{end}} <b>{{.Desc}}</b></div>
+  <div class="rs">{{.Sentence}}</div>
+  <details><summary>{{t "expression"}}</summary><code class="wrap">{{.Expr}}</code></details>
+  {{if and $can (not .Managed)}}<div class="racts">
+    {{$id := .ID}}
+    {{if .Enabled}}{{template "rop" (list "disable" $id $ph $z.Name $rq.CSRF "rule_disable")}}{{else}}{{template "rop" (list "enable" $id $ph $z.Name $rq.CSRF "rule_enable")}}{{end}}
+    {{if gt .Pos 1}}{{template "rop" (list "up" $id $ph $z.Name $rq.CSRF "rule_up")}}{{template "rop" (list "top" $id $ph $z.Name $rq.CSRF "rule_top")}}{{end}}
+    {{template "rop" (list "delete" $id $ph $z.Name $rq.CSRF "rule_delete")}}
+  </div>{{else if .Managed}}<div class="racts"><a class="act" href="/blocks?z={{zq $z}}">{{t "nav_blocks"}} →</a></div>{{end}}
+</li>{{end}}
+</ol>{{end}}
+{{end}}
+</section>
+{{end}}
+{{if .Backups}}{{$rq := .Req}}
+<section class="card"><h2>{{t "rule_backups"}}</h2>
+<p class="note">{{t "rule_backups_note"}}</p>
+<table class="list rsp"><thead><tr><th>#</th><th>{{t "time"}}</th><th>{{t "phase"}}</th><th>{{t "reason"}}</th><th></th></tr></thead>
+<tbody>{{range .Backups}}<tr>
+  <td data-label="#">{{.ID}}</td><td class="nowrap" data-label="{{t "time"}}">{{when .At}}</td><td data-label="{{t "phase"}}">{{phaseShort .Phase}}</td><td class="muted" data-label="{{t "reason"}}">{{.Reason}}</td>
+  <td>{{template "rop" (list "restore" (print .ID) (phaseShort .Phase) $z.Name $rq.CSRF "rule_restore")}}</td>
+</tr>{{end}}</tbody></table>
+</section>{{end}}
+<p class="note">{{t "rules_help"}} <a href="/rules/recipes?z={{zq .Zone}}">{{t "recipes_title"}}</a> · <a href="/audit?z={{zq .Zone}}">{{t "nav_audit"}}</a></p>
+{{template "foot" .}}{{end}}
+
+{{define "rop"}}<form method="post" action="/rules/review" class="op"><input type="hidden" name="csrf" value="{{index . 4}}"><input type="hidden" name="op" value="{{index . 0}}"><input type="hidden" name="sel" value="{{index . 1}}"><input type="hidden" name="phase" value="{{index . 2}}"><input type="hidden" name="z" value="{{index . 3}}"><button class="small">{{t (index . 5)}}</button></form>{{end}}
+
+{{define "recipes"}}{{template "head" .}}
+{{$z := .Zone}}{{$can := .CanRules}}
+<section class="card">
+<h1>{{t "recipes_title"}}</h1>
+<p class="note">{{t "recipes_intro"}}</p>
+</section>
+{{range .Recipes}}
+<section class="card recipe">
+  <h2>{{tr .Title}}</h2>
+  <p>{{tr .Summary}}</p>
+  <details><summary>{{t "recipe_why"}}</summary><p class="muted">{{tr .Why}}</p></details>
+  {{if $can}}<p><a class="btn" href="/rules/recipe/{{.Name}}?z={{zq $z}}">{{t "recipe_use"}}</a></p>{{else}}<p class="note">CLI: <code>flarehound rules recipe {{.Name}}</code></p>{{end}}
+</section>
+{{end}}
+<section class="card"><h2>{{t "basics_title"}}</h2>
+<ol class="basics">
+  <li>{{t "basics_order"}}</li>
+  <li>{{t "basics_bots"}}</li>
+  <li>{{t "basics_block"}}</li>
+  <li>{{t "basics_skip"}}</li>
+  <li>{{t "basics_paths"}}</li>
+</ol></section>
+{{template "foot" .}}{{end}}
+
+{{define "recipe"}}{{template "head" .}}
+{{$in := .Inputs}}
+{{with .Recipe}}
+<section class="card">
+<h1>{{tr .Title}}</h1>
+<p>{{tr .Summary}}</p>
+<details open><summary>{{t "recipe_why"}}</summary><p class="muted">{{tr .Why}}</p></details>
+<form method="post" action="/rules/review" class="stack">
+  <input type="hidden" name="csrf" value="{{$.Req.CSRF}}"><input type="hidden" name="z" value="{{$.Zone.Name}}">
+  <input type="hidden" name="op" value="recipe"><input type="hidden" name="recipe" value="{{.Name}}">
+  {{range .Params}}{{$v := index $in .Name}}
+  <label>{{tr .Label}}{{if .Required}} *{{end}}
+    {{if .Choices}}<select name="in_{{.Name}}">{{$cur := $v}}{{range .Choices}}<option value="{{.}}"{{if eq . $cur}} selected{{end}}>{{.}}</option>{{end}}</select>
+    {{else if .Secret}}<input name="in_{{.Name}}" type="password" autocomplete="new-password">
+    {{else}}<input name="in_{{.Name}}" value="{{if $v}}{{$v}}{{else}}{{.Default}}{{end}}" autocapitalize="none" autocomplete="off">{{end}}
+    {{if or (index .Help 0) (index .Help 1)}}<small class="muted">{{tr .Help}}</small>{{end}}
+  </label>{{end}}
+  <button>{{t "review_btn"}}</button>
+</form>
+</section>
+{{end}}
+<p><a href="/rules/recipes?z={{zq .Zone}}">← {{t "recipes_title"}}</a></p>
+{{template "foot" .}}{{end}}
+
+{{define "rulereview"}}{{template "head" .}}
+<section class="card">
+<h1>{{t "rule_review"}} · {{.Zone.Name}}</h1>
+{{with .Recipe}}<h2>{{tr .Title}}</h2>{{end}}
+{{if .Sentence}}<p class="rs big">{{.Sentence}}</p>{{end}}
+{{range .Notes}}<div class="banner info">{{.}}</div>{{end}}
+{{with .Plan}}
+<pre class="report">{{range .Lines}}{{.}}
+{{end}}</pre>
+{{range .Warnings}}<div class="banner warn">⚠ {{.}}</div>{{end}}
+<p class="note">{{t "rule_apply_note"}}</p>
+{{end}}
+{{if .Token}}{{with .RuleOp}}
+<form method="post" action="/rules/apply" class="stack confirm">
+  <input type="hidden" name="csrf" value="{{$.Req.CSRF}}"><input type="hidden" name="review" value="{{$.Token}}"><input type="hidden" name="version" value="{{$.RSVersion}}">
+  <input type="hidden" name="z" value="{{.Zone.Name}}"><input type="hidden" name="op" value="{{.Op}}"><input type="hidden" name="sel" value="{{.Sel}}">
+  <input type="hidden" name="phase" value="{{.Phase}}"><input type="hidden" name="recipe" value="{{.Recipe}}">
+  {{range $k, $v := .Inputs}}<input type="hidden" name="in_{{$k}}" value="{{$v}}">{{end}}
+  {{if $.Req.User.TOTPEnabled}}<label>{{t "totp_code"}}<input name="code" inputmode="numeric" autocomplete="one-time-code" required></label>{{end}}
+  <button class="danger">{{t "apply_btn"}}</button>
+</form>{{end}}{{end}}
+<p><a href="/rules?z={{zq .Zone}}">← {{t "nav_rules"}}</a></p>
+</section>
+{{template "foot" .}}{{end}}

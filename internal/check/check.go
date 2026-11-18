@@ -202,6 +202,13 @@ func StatePath(cfg *config.Config, zone config.Zone) string {
 	return strings.TrimSuffix(cfg.StateFile, ".json") + "-" + slug + ".json"
 }
 
+// Measure reads the detection metrics of any window with exactly the
+// queries the watch uses — the console's live view must never disagree
+// with the alerts on what a number means.
+func (r *Runner) Measure(ctx context.Context, zone config.Zone, from, to time.Time) (analyze.Metrics, error) {
+	return r.fetch(ctx, zone, schedule.Window{From: from, To: to}, currentTop)
+}
+
 func (r *Runner) fetch(ctx context.Context, zone config.Zone, w schedule.Window, top int) (analyze.Metrics, error) {
 	var m analyze.Metrics
 	var err error

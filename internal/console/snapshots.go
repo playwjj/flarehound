@@ -8,6 +8,7 @@ package console
 // export time — no token, no account data, no form.
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
@@ -33,8 +34,8 @@ func (s *Server) loadCSS() error {
 }
 
 // renderSnapshot renders a view as a standalone document.
-func (s *Server) renderSnapshot(view string, q url.Values) (string, string, string, error) {
-	name, p, err := s.buildView(view, q)
+func (s *Server) renderSnapshot(ctx context.Context, view string, q url.Values) (string, string, string, error) {
+	name, p, err := s.buildView(ctx, view, q)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -59,7 +60,7 @@ func (s *Server) snapshotCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad parameters", http.StatusBadRequest)
 		return
 	}
-	html, title, zone, err := s.renderSnapshot(view, q)
+	html, title, zone, err := s.renderSnapshot(r.Context(), view, q)
 	if err != nil {
 		s.fail(w, r, err)
 		return

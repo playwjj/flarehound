@@ -326,3 +326,27 @@ func TestReadBackMismatchIsReported(t *testing.T) {
 		t.Fatalf("audit %+v", log)
 	}
 }
+
+func TestSkipNeedsParameters(t *testing.T) {
+	st := State{Phase: cfapi.PhaseCustom, Plan: "pro", Ruleset: cfapi.RawRuleset{Rules: []map[string]any{
+		{"id": "s1", "action": "skip", "expression": "cf.client.bot", "description": "bots", "enabled": true,
+			"action_parameters": map[string]any{"ruleset": "current"}},
+		{"id": "b1", "action": "block", "expression": `ip.src eq 192.0.2.1`, "description": "bad ip", "enabled": true},
+	}}}
+	if _, err := st.PlanAdd(CustomRule("cf.client.bot", "x", "skip", true), ""); err == nil || !strings.Contains(err.Error(), "--skip") {
+		t.Fatalf("skip rule without parameters accepted: %v", err)
+	}
+	p, err := st.PlanEdit("s1", map[string]any{"action": "managed_challenge"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := p.New["action_parameters"]; ok {
+		t.Fatal("skip parameters kept on a non-skip rule")
+	}
+	if _, err := st.PlanEdit("b1", map[string]any{"action": "skip"}); err == nil {
+		t.Fatal("block turned into skip without saying what it skips")
+	}
+	if _, err := st.PlanEdit("b1", map[string]any{"action": "skip", "action_parameters": map[string]any{"ruleset": "current"}}); err != nil {
+		t.Fatalf("block → skip with parameters: %v", err)
+	}
+}

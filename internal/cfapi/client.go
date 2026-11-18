@@ -180,7 +180,9 @@ func (c *Client) queryInto(ctx context.Context, q string, out any) error {
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.http.Do(req)
+	// Analytics queries only read: a dropped connection, a rate limit or a
+	// Cloudflare 5xx is retried a couple of times before it fails a round.
+	resp, err := doRetry(ctx, c.http, req, body)
 	if err != nil {
 		return err
 	}
@@ -666,4 +668,32 @@ func (c *Client) Hourly(ctx context.Context, zoneID string, from, to time.Time, 
 		out[t.UTC()] += r.Count
 	}
 	return out, nil
+}
+
+// retryDelays are the waits before each retry of a read request.
+var retryDelays = []time.Duration{time.Second, 3 * time.Second}
+
+// doRetry sends a read-only request, retrying transport errors, 429 and
+// 5xx responses. body is the request body to resend (nil for none). Never
+// used for writes: a retried write could be applied twice.
+func doRetry(ctx context.Context, hc *http.Client, req *http.Request, body []byte) (*http.Response, error) {
+	for attempt := 0; ; attempt++ {
+		if attempt > 0 && body != nil {
+			req.Body = io.NopCloser(bytes.NewReader(body))
+		}
+		resp, err := hc.Do(req)
+		retry := err != nil || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
+		if !retry || attempt >= len(retryDelays) || ctx.Err() != nil {
+			return resp, err
+		}
+		if resp != nil {
+			io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+			resp.Body.Close()
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(retryDelays[attempt]):
+		}
+	}
 }

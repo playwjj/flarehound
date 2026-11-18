@@ -112,6 +112,7 @@ func runSubcommand(ctx context.Context, cfgPath, verb string, args []string, red
 	fs.StringVar(&rf.phase, "phase", "", "rules: custom (default), ratelimit or cache")
 	fs.StringVar(&rf.expr, "expr", "", "rules: rule expression (Cloudflare rules language)")
 	fs.StringVar(&rf.desc, "desc", "", "rules: rule description")
+	fs.StringVar(&rf.skip, "skip", "", "rules (action skip): what to skip — rules, ratelimit, managed, bots, legacy (comma-separated; default rules)")
 	fs.StringVar(&rf.before, "before", "", "rules: place before rule N|ID")
 	fs.BoolVar(&rf.last, "last", false, "rules move: move to the end")
 	fs.BoolVar(&rf.disabled, "disabled", false, "rules add: create disabled")
@@ -126,9 +127,23 @@ func runSubcommand(ctx context.Context, cfgPath, verb string, args []string, red
 	hbAge := fs.Duration("max-age", 0, "health: maximum heartbeat age (default: two rounds + 20m, or 15m for the enforcer)")
 	once := fs.Bool("once", false, "enforce: one pass, then exit")
 	interval := fs.Duration("interval", 5*time.Minute, "enforce: time between passes")
+	fs.StringVar(&rf.ips, "ips", "", "rules recipe: IPs or ranges (comma-separated)")
+	fs.StringVar(&rf.asns, "asns", "", "rules recipe: ASNs (comma-separated)")
+	fs.StringVar(&rf.header, "header", "", "rules recipe: secret header name")
+	fs.StringVar(&rf.secretEnv, "secret-env", "", "rules recipe: environment variable holding the secret header value")
 	if err := fs.Parse(rest); err != nil {
 		return 2
 	}
+	fs.Visit(func(fl *flag.Flag) {
+		switch fl.Name {
+		case "requests":
+			rf.requestsSet = true
+		case "period":
+			rf.periodSet = true
+		case "timeout":
+			rf.timeoutSet = true
+		}
+	})
 	if fs.NArg() > 0 {
 		fmt.Fprintf(os.Stderr, "unexpected arguments: %v\n\n%s", fs.Args(), blockUsage)
 		return 2

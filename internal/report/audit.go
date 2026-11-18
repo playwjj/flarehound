@@ -5,7 +5,16 @@ import (
 	"strings"
 
 	"github.com/playwjj/flarehound/internal/waf"
+	"github.com/playwjj/flarehound/internal/wafkit"
 )
+
+// quoteArg quotes a shell argument when it needs it.
+func quoteArg(s string) string {
+	if s != "" && !strings.ContainsAny(s, " \t'\"*?$`\\;&|<>(){}[]!#~") {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
 
 // AuditData is one WAF audit for rendering.
 type AuditData struct {
@@ -269,6 +278,26 @@ func Audit(language string, d AuditData, reason string) string {
 	}
 	b.WriteString("\n")
 	l.auditBody(&b, d, true)
-	b.WriteString(l.t("Read-only: FlareHound never edits these rules.", "只读：FlareHound 不会修改这些规则。"))
+	if d.NA == "" {
+		if fs := wafkit.Fixes(d.Result, string(l)); len(fs) > 0 {
+			b.WriteString(l.t("\nHow to fix\n", "\n怎么修\n"))
+			for i, f := range fs {
+				fmt.Fprintf(&b, "%d. %s\n   %s\n", i+1, f.Problem, f.Advice)
+				switch {
+				case f.Recipe != "":
+					cmd := "flarehound rules recipe " + f.Recipe
+					if p := f.Inputs.Get("paths"); p != "" {
+						cmd += " --path " + quoteArg(p)
+					}
+					fmt.Fprintf(&b, "   %s %s\n", l.t("→", "→"), cmd)
+				case f.Command != "":
+					fmt.Fprintf(&b, "   → %s\n", f.Command)
+				}
+			}
+			b.WriteString(l.t("Every change is shown in full and confirmed before it is made; see `flarehound rules recipes`.\n",
+				"每项修改执行前都会完整展示并要求确认；配方列表见 `flarehound rules recipes`。\n"))
+		}
+	}
+	b.WriteString(l.t("The audit is read-only: nothing changes unless you run a fix yourself.", "体检本身只读：除非你自己执行修复，否则不会改动任何规则。"))
 	return b.String()
 }

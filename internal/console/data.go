@@ -91,36 +91,17 @@ func staleAfter(cfg *config.Config) time.Duration {
 	return cfg.IntradayInterval() + cfg.IntradayOffset() + 30*time.Minute
 }
 
-// BuildOverview computes the overview from the newest archived hour.
-func BuildOverview(a Archive, cfg *config.Config, zone config.Zone, now time.Time) (Overview, error) {
-	var ov Overview
-	w, ok, err := a.LatestHour(zone.ZoneID)
-	if err != nil || !ok {
-		return ov, err
-	}
-	ov.Window, ov.Has = w, true
-	ov.Stale = now.Sub(w.To) > staleAfter(cfg)
-	samples, err := a.SameHourSnapshots(zone.ZoneID, w.From, w.To, analyze.LongBaselineDays)
-	if err != nil {
-		return ov, err
-	}
-	ov.Samples = len(samples)
-	ov.BaselineOK = ov.Samples >= analyze.LongBaselineMinSamples
-	var ms []analyze.Metrics
-	for _, s := range samples {
-		ms = append(ms, s.Metrics)
-	}
-	base := analyze.Median(ms)
-	has := len(ms) > 0
+// metricRows compares cur with base line by line, each against its alert
+// line from the config (the same lines the watch uses).
+func metricRows(cfg *config.Config, zone config.Zone, cur, base analyze.Metrics, has bool) []MetricRow {
+	var rows []MetricRow
 	th := cfg.Thresholds
-	cur := w.Metrics
-
 	add := func(r MetricRow) {
 		r.HasBase = has
 		if has {
 			r.Pct = pct(r.Cur, r.Base)
 		}
-		ov.Rows = append(ov.Rows, r)
+		rows = append(rows, r)
 	}
 	add(MetricRow{Key: "m_total", Cur: float64(cur.Total), Base: float64(base.Total),
 		Status: upStatus(float64(cur.Total), float64(base.Total), th.TotalUpPct, th.MinCount, has), LineDesc: plusPct(th.TotalUpPct)})
@@ -147,6 +128,29 @@ func BuildOverview(a Archive, cfg *config.Config, zone config.Zone, now time.Tim
 		o5.Status = StatusOK
 	}
 	add(o5)
+	return rows
+}
+
+// BuildOverview computes the overview from the newest archived hour.
+func BuildOverview(a Archive, cfg *config.Config, zone config.Zone, now time.Time) (Overview, error) {
+	var ov Overview
+	w, ok, err := a.LatestHour(zone.ZoneID)
+	if err != nil || !ok {
+		return ov, err
+	}
+	ov.Window, ov.Has = w, true
+	ov.Stale = now.Sub(w.To) > staleAfter(cfg)
+	samples, err := a.SameHourSnapshots(zone.ZoneID, w.From, w.To, analyze.LongBaselineDays)
+	if err != nil {
+		return ov, err
+	}
+	ov.Samples = len(samples)
+	ov.BaselineOK = ov.Samples >= analyze.LongBaselineMinSamples
+	var ms []analyze.Metrics
+	for _, s := range samples {
+		ms = append(ms, s.Metrics)
+	}
+	ov.Rows = metricRows(cfg, zone, w.Metrics, analyze.Median(ms), len(ms) > 0)
 
 	day := w.To.Add(-24 * time.Hour)
 	if as, err := a.AlertsDetailed(zone.ZoneID, day, w.To.Add(time.Second), 100); err == nil {

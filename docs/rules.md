@@ -1,5 +1,7 @@
 # Rule changes
 
+New to WAF rules? Read [WAF basics](waf-guide.md) ([中文](waf-guide-zh.md)) and start from the recipes.
+
 The execution module applies rule changes — including the challenge, rate-limit and cache suggestions from alerts — to three Cloudflare phases:
 
 | `--phase` | Cloudflare phase | Write-token permission |
@@ -13,8 +15,10 @@ It uses the same separate write token as [blocking](blocking.md) (`CF_WRITE_TOKE
 ## Commands
 
 ```bash
-flarehound rules list [--phase custom|ratelimit|cache]
-flarehound rules add --action ACTION --expr EXPR --desc TEXT [--before N|ID] [--disabled]
+flarehound rules list [--phase custom|ratelimit|cache]      # each rule with a plain-words explanation
+flarehound rules recipes                                     # ready-made rules, explained
+flarehound rules recipe NAME [--path P] [--action A] [--ips IPS] [--asns ASNS] [--header NAME --secret-env VAR] [--skip SCOPES]
+flarehound rules add --action ACTION --expr EXPR --desc TEXT [--before N|ID] [--disabled] [--skip SCOPES]
 flarehound rules edit N|ID [--expr EXPR] [--action ACTION] [--desc TEXT] [--enabled true|false]
 flarehound rules delete N|ID
 flarehound rules move N|ID (--before N|ID | --last)
@@ -28,6 +32,8 @@ flarehound cache add --path PATTERN [--ttl 1d]
 - `N` is the rule's position in `rules list`; `ID` is the Cloudflare rule ID (or its `ref`).
 - `--path` takes a pattern with `*` wildcard and turns it into an expression (`/x` → `eq`, `/x*` → `starts_with`, other `*` patterns → `wildcard`); `--expr` takes a full expression instead.
 - `rules add` needs `--action` (a Cloudflare action such as `block` or `managed_challenge`), `--expr` (or `--path`) and `--desc`.
+- **Skip rules** (`--action skip`) must say what they skip: `--skip rules` (the remaining custom rules — the default), `ratelimit`, `managed` (managed rules), `bots` (Super Bot Fight Mode), `legacy` (security level, browser integrity check, UA blocking, zone lockdown …), comma-separated. FlareHound builds the `action_parameters` Cloudflare requires; editing a skip rule into another action removes them.
+- **Recipes** build a complete rule from a few inputs and place it by the skips → blocks → challenges order: `protect-paths`, `ratelimit-paths`, `allow-service`, `allow-verified-bots`, `challenge-cloud-on-paths`. Each prints what it does, why, the rule in plain words and any caveat before the usual confirmation. A secret header value is read from the environment variable named by `--secret-env`, never from the command line. See [WAF basics](waf-guide.md#recipes).
 - `ratelimit add` builds a per-IP rule (counted per IP and data center): `--requests` per `--period` seconds, mitigation `--timeout` seconds, default action `managed_challenge`.
 - `cache add` builds a rule that makes matching requests eligible for cache with an edge TTL overriding the origin (`--ttl`, default `1d`; Go durations or `Nd`).
 - `--observe 5m` (custom and rate-limit changes) watches the changed rule's firewall events afterwards and reports the count. Zero only means "no matching traffic yet or not ingested"; on plans without firewall events it is skipped.

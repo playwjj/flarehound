@@ -8,7 +8,7 @@
 
 Cloudflare gives you data. FlareHound gives you the conclusion.
 
-> Status: **v1.5.1** — web console with in-console blocking, undo, before/after, read-only snapshots and Google / GitHub sign-in. Documentation: **https://playwjj.github.io/flarehound/** · Changelog: [CHANGELOG.md](CHANGELOG.md)
+> Status: **v1.7** — WAF basics, rule recipes and plain-words rules; live hour and movers drill-down; web console with in-console blocking, undo, before/after, read-only snapshots and Google / GitHub sign-in. Documentation: **https://playwjj.github.io/flarehound/** · Changelog: [CHANGELOG.md](CHANGELOG.md)
 >
 > **Direction:** FlareHound is growing a built-in web console — live movers (who is up, who is down), new-face tracking, history against the long-term baseline, the WAF audit, and in-console blocking with per-account audit — landing in v1.3–v1.5. Notifications become the alerting layer that brings you to the console. See the [web console revision note](docs/web-console-revision.md).
 >
@@ -146,6 +146,18 @@ flarehound enforce           # long-running: lifts blocks whose --for has passed
 Before anything changes you see the exact plan — the rule it edits and the expression afterwards, the custom-rule quota, the target's measured share of the last hour's excess, and every warning — and confirm once. FlareHound only ever edits its own objects (rules named `flarehound-…`, the IP list `flarehound_block`), merges each target type into one rule so your quota is barely touched, keeps verified search bots allowed on ASN and country rules, and reads the result back to verify. It refuses to block Cloudflare's ranges, your origin IPs (from DNS), private ranges and anything on your `blocking.never_block` list. Blocking a residential/backbone ASN or a whole country requires retyping the ASN or country code. Every action lands in an append-only audit log, and the daily report lists each block's attempts — lift a block when the attempts stop, not when it gets quiet.
 
 In Docker: `docker compose --profile admin up -d` starts the enforcer with the write token, and `docker compose run --rm flarehound-admin block …` runs commands.
+
+## WAF basics and recipes
+
+New to WAF rules? [WAF basics](docs/waf-guide.md) ([中文](docs/waf-guide-zh.md)) covers order, verified bots, block vs challenge and narrow skips, and the recipes do it for you:
+
+```bash
+flarehound rules recipes
+flarehound rules recipe protect-paths --path '/login*, /admin*'
+flarehound audit          # ends with "How to fix"
+```
+
+Every rule is explained in plain words (`flarehound rules list`, the console's WAF rules page), and every change is shown in full, confirmed, backed up and read back.
 
 ## Applying rule changes
 

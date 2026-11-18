@@ -152,3 +152,24 @@ button.alt { background: var(--card); color: var(--fg); border: 1px solid var(--
   table.rsp td:not([data-label]) { padding-left: 0; }
   table.rsp td.acts { min-width: 0; }
 }
+
+/* live + drill-down */
+h2.sec { font-size: 1rem; margin: .4rem 0 .6rem; }
+details.settled { margin: .4rem 0 .8rem; }
+details.settled summary { color: var(--muted); font-size: .88rem; margin-bottom: .6rem; }
+.wrapname { word-break: break-all; }
+
+/* WAF rules */
+ol.rulelist { list-style: none; padding: 0; margin: 0; }
+ol.rulelist li { border-top: 1px solid var(--line); padding: .7rem 0; }
+ol.rulelist li.off { opacity: .6; }
+.rh { font-size: .9rem; }
+.rh .pos { color: var(--muted); font-variant-numeric: tabular-nums; }
+.act-block { background: var(--alert-bg); border-radius: 4px; padding: 0 .35rem; font-size: .78rem; }
+.act-managed_challenge, .act-js_challenge, .act-challenge { background: var(--watch-bg); border-radius: 4px; padding: 0 .35rem; font-size: .78rem; }
+.act-skip { background: var(--ok-bg); border-radius: 4px; padding: 0 .35rem; font-size: .78rem; }
+.rs { margin: .35rem 0; font-size: .92rem; }
+.rs.big { font-size: 1rem; padding: .6rem .8rem; background: var(--bg); border-radius: 8px; }
+.racts { margin-top: .4rem; }
+ol.fixes li, ol.basics li { margin-bottom: .7rem; }
+section.recipe h2 { margin-bottom: .3rem; }

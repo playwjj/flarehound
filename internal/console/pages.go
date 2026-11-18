@@ -17,7 +17,9 @@ import (
 	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/config"
 	"github.com/playwjj/flarehound/internal/report"
+	"github.com/playwjj/flarehound/internal/ruleexec"
 	"github.com/playwjj/flarehound/internal/store"
+	"github.com/playwjj/flarehound/internal/wafkit"
 )
 
 // page is the data every template receives.
@@ -40,6 +42,8 @@ type page struct {
 
 	// views
 	Overview *Overview
+	Live     *LiveView
+	Drill    *Drill
 	Chart    template.HTML
 	Movers   *Movers
 	Dim      string
@@ -64,6 +68,20 @@ type page struct {
 	Until     int64
 	UntilTime time.Time
 	Effect    *Effect
+
+	// WAF rules (v1.7)
+	Rules     *rulesView
+	CanRules  bool
+	Backups   []store.RuleBackup
+	Recipes   []wafkit.Recipe
+	Recipe    *wafkit.Recipe
+	Inputs    map[string]string
+	RuleOp    *ruleOp
+	Plan      *ruleexec.Plan
+	Sentence  string
+	Notes     []string
+	RSVersion string // ruleset version the review was planned on
+	Fixes     []wafkit.Fix
 
 	// third-party sign-in
 	Providers  []*Provider
@@ -98,6 +116,7 @@ type auditView struct {
 	NA       string
 	Err      bool
 	Refused  bool
+	Fixes    []wafkit.Fix
 }
 
 func urlQuery(s string) string { return url.QueryEscape(s) }
@@ -109,8 +128,8 @@ func (s *Server) funcs() template.FuncMap {
 		"rowsCtx": func(p page, rows []Mover) []any {
 			ctx := struct {
 				Dim, ZoneName, Reason string
-				Can                   bool
-			}{p.Dim, p.Zone.Name, "movers: " + p.Dim, p.CanWrite && !p.Snapshot}
+				Can, Snap             bool
+			}{p.Dim, p.Zone.Name, "movers: " + p.Dim, p.CanWrite && !p.Snapshot, p.Snapshot}
 			return []any{ctx, rows}
 		},
 		"blockValue": func(dim, name string) string {
@@ -121,6 +140,15 @@ func (s *Server) funcs() template.FuncMap {
 		},
 		"unix": func(t time.Time) int64 { return t.Unix() },
 		"now":  func() time.Time { return s.Now() },
+		"sub":  func(a, b int64) int64 { return a - b },
+		"tr": func(f [2]string) string {
+			if s.lang == "zh" {
+				return f[1]
+			}
+			return f[0]
+		},
+		"phaseShort": func(p string) string { return ruleexec.PhaseName(p) },
+		"drillable":  func(dim, name string) bool { _, ok := drillFilter(dim, name); return ok },
 		"providerLabel": func(name string) string {
 			switch name {
 			case "google":
@@ -300,7 +328,7 @@ func (s *Server) zoneOf(q url.Values) config.Zone {
 }
 
 // buildView builds one exportable view: template name and page data.
-func (s *Server) buildView(view string, q url.Values) (string, page, error) {
+func (s *Server) buildView(ctx context.Context, view string, q url.Values) (string, page, error) {
 	z := s.zoneOf(q)
 	switch view {
 	case viewOverview:
@@ -310,6 +338,7 @@ func (s *Server) buildView(view string, q url.Values) (string, page, error) {
 		}
 		p := page{Title: s.lang.t("nav_overview"), Zone: z, Nav: "overview", Overview: &ov, Refresh: s.Cfg.Console.RefreshSeconds,
 			SnapView: view, SnapParams: url.Values{"z": {z.Name}}.Encode()}
+		p.Live = s.liveView(ctx, z)
 		if ov.Has {
 			// Up to the end of the hour in progress, so a fresh block or
 			// alert is on the chart (its traffic point is simply not there yet).
@@ -369,7 +398,7 @@ func (s *Server) buildView(view string, q url.Values) (string, page, error) {
 
 func (s *Server) viewPage(view string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		name, p, err := s.buildView(view, r.URL.Query())
+		name, p, err := s.buildView(r.Context(), view, r.URL.Query())
 		if err != nil {
 			s.fail(w, r, err)
 			return
@@ -399,7 +428,7 @@ func (s *Server) facesPage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) auditPage(w http.ResponseWriter, r *http.Request) {
 	z := s.zone(r)
 	e, _ := s.cachedAudit(r.Context(), z, false)
-	s.render(w, r, http.StatusOK, "audit", page{Title: s.lang.t("nav_audit"), Zone: z, Nav: "audit", Audit: s.auditView(e, false)})
+	s.render(w, r, http.StatusOK, "audit", page{Title: s.lang.t("nav_audit"), Zone: z, Nav: "audit", Audit: s.auditView(e, false), CanRules: s.canEditRules(r)})
 }
 
 func (s *Server) auditRun(w http.ResponseWriter, r *http.Request) {
@@ -408,7 +437,7 @@ func (s *Server) auditRun(w http.ResponseWriter, r *http.Request) {
 	if !refused {
 		s.audit(r, "waf_audit_run", z.Name, "")
 	}
-	s.render(w, r, http.StatusOK, "audit", page{Title: s.lang.t("nav_audit"), Zone: z, Nav: "audit", Audit: s.auditView(e, refused)})
+	s.render(w, r, http.StatusOK, "audit", page{Title: s.lang.t("nav_audit"), Zone: z, Nav: "audit", Audit: s.auditView(e, refused), CanRules: s.canEditRules(r)})
 }
 
 func (s *Server) auditView(e auditEntry, refused bool) *auditView {
@@ -421,6 +450,7 @@ func (s *Server) auditView(e auditEntry, refused bool) *auditView {
 	v.NA = e.data.NA
 	if v.NA == "" {
 		v.Problems = e.data.Result.Problems()
+		v.Fixes = wafkit.Fixes(e.data.Result, string(s.lang))
 	}
 	v.Text = report.Audit(string(s.lang), e.data, "")
 	return v

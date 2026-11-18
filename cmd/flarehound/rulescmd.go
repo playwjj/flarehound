@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -15,14 +16,18 @@ import (
 	"github.com/playwjj/flarehound/internal/config"
 	"github.com/playwjj/flarehound/internal/ruleexec"
 	"github.com/playwjj/flarehound/internal/suggest"
+	"github.com/playwjj/flarehound/internal/wafkit"
 )
 
 const rulesUsage = `
 Rule changes (v0.7 execution module; write token; every change is shown in
 full, confirmed, backed up, read back and logged — there is no --yes):
 
-  flarehound rules list [--phase custom|ratelimit|cache]
-  flarehound rules add --action ACTION --expr EXPR --desc TEXT [--before N|ID] [--disabled]
+  flarehound rules list [--phase custom|ratelimit|cache]   each rule with a plain-words explanation
+  flarehound rules recipes                  ready-made rules for common needs, explained
+  flarehound rules recipe NAME [--path P] [--action A] [--ips IPS] [--asns ASNS] [--header NAME --secret-env VAR]
+                            [--skip SCOPES] [--requests N --period S --timeout S]
+  flarehound rules add --action ACTION --expr EXPR --desc TEXT [--before N|ID] [--disabled] [--skip SCOPES]
   flarehound rules edit N|ID [--expr EXPR] [--action ACTION] [--desc TEXT] [--enabled true|false]
   flarehound rules delete N|ID
   flarehound rules move N|ID (--before N|ID | --last)
@@ -34,13 +39,17 @@ full, confirmed, backed up, read back and logged — there is no --yes):
 
   N is the rule's position in "rules list"; --phase selects custom (default),
   ratelimit or cache. --observe 5m watches the changed rule's firewall events.
+  --skip (with --action skip) says what a skip rule skips: rules (the remaining
+  custom rules, default), ratelimit, managed, bots, legacy — comma-separated.
 `
 
 type rulesFlags struct {
-	phase, action, expr, desc, before, enabled, path, ttl string
-	last, disabled                                        bool
-	requests, period, timeout                             int
-	observe                                               time.Duration
+	phase, action, expr, desc, before, enabled, path, ttl, skip string
+	ips, asns, header, secretEnv                                string
+	requestsSet, periodSet, timeoutSet                          bool
+	last, disabled                                              bool
+	requests, period, timeout                                   int
+	observe                                                     time.Duration
 }
 
 // rulesCommand runs one execution-module command against one zone.
@@ -79,7 +88,30 @@ func rulesCommand(ctx context.Context, cfg *config.Config, x *ruleexec.Executor,
 		if err != nil {
 			return err
 		}
-		return listRules(out, zone, st)
+		return listRules(out, zone, st, cfg.Report.Language)
+	case "recipes":
+		lang := cfg.Report.Language
+		for _, r := range wafkit.Recipes() {
+			fmt.Fprintf(out, "%s\n  %s\n  %s\n", r.Name, r.T(r.Title, lang), r.T(r.Summary, lang))
+			var ps []string
+			for _, p := range r.Params {
+				d := p.Default
+				if d == "" && len(p.Choices) > 0 {
+					d = p.Choices[0]
+				}
+				if d != "" {
+					ps = append(ps, recipeFlag(p.Name)+" ("+d+")")
+				} else {
+					ps = append(ps, recipeFlag(p.Name))
+				}
+			}
+			if len(ps) > 0 {
+				fmt.Fprintf(out, "  inputs: %s\n", strings.Join(ps, ", "))
+			}
+			fmt.Fprintln(out)
+		}
+		fmt.Fprintln(out, "Run one: flarehound rules recipe NAME [inputs]  — the full change is shown before anything is applied.")
+		return nil
 	case "backups":
 		bs, err := x.Store.RuleBackups(zone.ZoneID, "", 50)
 		if err != nil {
@@ -124,6 +156,15 @@ func rulesCommand(ctx context.Context, cfg *config.Config, x *ruleexec.Executor,
 				return errors.New("rules add needs --action, --expr and --desc")
 			}
 			rule = ruleexec.CustomRule(expr, f.desc, f.action, !f.disabled)
+			if f.action == "skip" {
+				ap, err := wafkit.SkipParams(splitScopes(f.skip))
+				if err != nil {
+					return err
+				}
+				rule["action_parameters"] = ap
+			} else if f.skip != "" {
+				return errors.New("--skip only goes with --action skip")
+			}
 		case "ratelimit-add":
 			phase = cfapi.PhaseRateLimit
 			if expr == "" {
@@ -156,6 +197,47 @@ func rulesCommand(ctx context.Context, cfg *config.Config, x *ruleexec.Executor,
 			}
 		}
 		plan, err = st.PlanAdd(rule, f.before)
+	case "recipe":
+		name, err := arg()
+		if err != nil {
+			return fmt.Errorf("rules recipe needs a recipe name: %s", strings.Join(wafkit.Names(), ", "))
+		}
+		r, ok := wafkit.RecipeByName(name)
+		if !ok {
+			return fmt.Errorf("no recipe %q; see `flarehound rules recipes`", name)
+		}
+		in := map[string]string{"paths": f.path, "action": f.action, "ips": f.ips, "asns": f.asns, "header": f.header, "skip": f.skip}
+		if f.requestsSet {
+			in["requests"] = fmt.Sprint(f.requests)
+		}
+		if f.periodSet {
+			in["period"] = fmt.Sprint(f.period)
+		}
+		if f.timeoutSet {
+			in["timeout"] = fmt.Sprint(f.timeout)
+		}
+		if f.secretEnv != "" {
+			if in["secret"] = os.Getenv(f.secretEnv); in["secret"] == "" {
+				return fmt.Errorf("--secret-env names %s, but that environment variable is empty", f.secretEnv)
+			}
+		}
+		phase = r.Phase
+		if st, err = x.Load(ctx, phase); err != nil {
+			return err
+		}
+		b, err := r.Build(in, st.Plan)
+		if err != nil {
+			return fmt.Errorf("recipe %s: %w", name, err)
+		}
+		lang := cfg.Report.Language
+		fmt.Fprintf(out, "\n%s\n%s\n\n%s\n\n%s\n", r.T(r.Title, lang), r.T(r.Summary, lang), wrap(r.T(r.Why, lang), 78), wafkit.RuleSentence(b.Rule, lang))
+		for _, w := range b.Warnings {
+			fmt.Fprintf(out, "NOTE: %s\n", r.T(w, lang))
+		}
+		plan, err = st.PlanAdd(b.Rule, wafkit.Before(st.Ruleset.Rules, b.Place))
+		if err != nil {
+			return err
+		}
 	case "edit":
 		sel, err := arg()
 		if err != nil {
@@ -167,6 +249,16 @@ func rulesCommand(ctx context.Context, cfg *config.Config, x *ruleexec.Executor,
 		}
 		if f.action != "" {
 			patch["action"] = f.action
+		}
+		if f.skip != "" || f.action == "skip" {
+			if f.action != "" && f.action != "skip" {
+				return errors.New("--skip only goes with --action skip")
+			}
+			ap, err := wafkit.SkipParams(splitScopes(f.skip))
+			if err != nil {
+				return err
+			}
+			patch["action_parameters"] = ap
 		}
 		if f.desc != "" {
 			patch["description"] = f.desc
@@ -181,7 +273,7 @@ func rulesCommand(ctx context.Context, cfg *config.Config, x *ruleexec.Executor,
 			return errors.New("--enabled takes true or false")
 		}
 		if len(patch) == 0 {
-			return errors.New("rules edit needs at least one of --expr, --action, --desc, --enabled")
+			return errors.New("rules edit needs at least one of --expr, --action, --skip, --desc, --enabled")
 		}
 		if st, err = x.Load(ctx, phase); err != nil {
 			return err
@@ -263,6 +355,16 @@ func rulesCommand(ctx context.Context, cfg *config.Config, x *ruleexec.Executor,
 
 var errAborted = errors.New("aborted, nothing changed")
 
+func splitScopes(s string) []string {
+	var out []string
+	for _, x := range strings.Split(s, ",") {
+		if x = strings.TrimSpace(x); x != "" {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
 func firstNonEmpty(a ...string) string {
 	for _, s := range a {
 		if s != "" {
@@ -272,27 +374,56 @@ func firstNonEmpty(a ...string) string {
 	return ""
 }
 
-func listRules(out io.Writer, zone config.Zone, st ruleexec.State) error {
+// recipeFlag names the CLI flag for a recipe input.
+func recipeFlag(param string) string {
+	switch param {
+	case "paths":
+		return "--path"
+	case "secret":
+		return "--secret-env VAR"
+	}
+	return "--" + param
+}
+
+// wrap breaks text at spaces (Chinese text has none and stays one line).
+func wrap(s string, width int) string {
+	var b strings.Builder
+	n := 0
+	for _, w := range strings.Fields(s) {
+		if n > 0 && n+1+len([]rune(w)) > width {
+			b.WriteString("\n")
+			n = 0
+		} else if n > 0 {
+			b.WriteString(" ")
+			n++
+		}
+		b.WriteString(w)
+		n += len([]rune(w))
+	}
+	return b.String()
+}
+
+func listRules(out io.Writer, zone config.Zone, st ruleexec.State, lang string) error {
 	fmt.Fprintf(out, "Zone %s — %s rules: %d of %d (%s plan)", zone.Name, ruleexec.PhaseName(st.Phase), len(st.Ruleset.Rules), st.Limit(), st.Plan)
 	if st.Ruleset.Version != "" {
 		fmt.Fprintf(out, ", ruleset version %s", st.Ruleset.Version)
 	}
 	fmt.Fprintln(out)
-	tw := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "#\tACTION\tENABLED\tDESCRIPTION\tEXPRESSION")
 	for i, r := range st.Ruleset.Rules {
 		desc, _ := r["description"].(string)
 		expr, _ := r["expression"].(string)
-		if len([]rune(expr)) > 90 {
-			expr = string([]rune(expr)[:90]) + "…"
+		state := ""
+		if r["enabled"] == false {
+			state = "  [disabled]"
 		}
-		enabled := r["enabled"] != false
 		if ruleexec.Managed(r) {
 			desc += " [FlareHound block]"
 		}
-		fmt.Fprintf(tw, "%d\t%v\t%v\t%s\t%s\n", i+1, r["action"], enabled, desc, expr)
+		fmt.Fprintf(out, "\n#%d  %v%s  %s\n", i+1, r["action"], state, desc)
+		fmt.Fprintf(out, "    → %s\n", wafkit.RuleSentence(r, lang))
+		fmt.Fprintf(out, "    %s\n", expr)
 	}
-	return tw.Flush()
+	return nil
 }
 
 // observe watches a changed rule's firewall events for a while (SPEC

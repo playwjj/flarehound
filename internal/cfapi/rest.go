@@ -100,7 +100,12 @@ func (c *REST) do(ctx context.Context, method, path string, body, out any) (*env
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := c.http.Do(req)
+	var resp *http.Response
+	if method == http.MethodGet {
+		resp, err = doRetry(ctx, c.http, req, nil) // reads only: writes are never retried
+	} else {
+		resp, err = c.http.Do(req)
+	}
 	if err != nil {
 		var ue *url.Error
 		if errors.As(err, &ue) {

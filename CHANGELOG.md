@@ -2,6 +2,19 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.7.0 — 2026-11-18
+
+WAF made approachable, plus the live hour and the movers drill-down (v1.6, released with this version).
+
+- **WAF basics and rule recipes.** A guide ("WAF basics" in the documentation, in English and Chinese) — order, verified bots, block vs challenge, narrow skips, sensitive paths — and ready-made rules: `protect-paths`, `ratelimit-paths`, `allow-service` (requires IPs, an ASN or a secret header — never a path or user agent alone), `allow-verified-bots` (`cf.client.bot`, never the user agent), `challenge-cloud-on-paths`. Each explains what it does, why and what it does not do; rules are placed by the skips → blocks → challenges order; protective recipes exclude verified bots. CLI: `flarehound rules recipes`, `flarehound rules recipe NAME`.
+- **Plain-words explanations** of every rule ("If the path starts with /login and not a Cloudflare-verified bot → managed challenge") in `rules list`, the console and every review.
+- **Skip rules fixed.** `rules add --action skip` produced a rule without the `action_parameters` Cloudflare requires, so it was rejected. `--skip rules,ratelimit,managed,bots,legacy` now says what is skipped (default: the remaining custom rules); a skip without it is caught before sending; turning a skip rule into another action drops its parameters.
+- **The audit says how to fix.** `flarehound audit` and the console's audit page end with one fix per finding: a recipe with its inputs filled in, or a `rules move / delete / edit` command.
+- **Console: WAF rules page.** Custom and rate-limit rules with explanations (read token); for admins of a console holding the write token: add from a recipe, enable / disable, move up / to top, delete, restore a backup — reviewed, bound to the ruleset version reviewed, TOTP-confirmed, audited first, backed up, read back.
+- **Reliability.** Read-only Cloudflare requests (GraphQL analytics and REST GETs) are retried twice on connection errors, 429 and 5xx; writes are never retried. A failed live query is retried after 10 seconds instead of a minute.
+- **Live hour on the overview** (v1.6). The last 60 minutes, queried from Cloudflare with exactly the watch's queries (`check.Runner.Measure`), ending 5 minutes ago for ingestion lag and marked *not settled*, against the 28-day same-hour baseline blended across the two clock hours the window spans. Shared by all viewers and re-queried at most once a minute; the newest settled hour moves below it, and comes back as the main view (with a note) when the live query fails.
+- **Movers drill-down** (v1.6). Every user agent, ASN and uncached path on the movers and new-faces pages opens a breakdown for the movers' window and the same hour yesterday: paths, status codes, cache status, and ASNs of a user agent / user agents of an ASN — each drillable further, with the block link where it applies. Live queries, cached 10 minutes. Snapshots keep plain text (no links).
+
 ## v1.5.1 — 2026-11-18
 
 - Sessions in use are no longer signed out after a fixed 12 hours: the session cookie now slides with the server-side session. Sessions waiting for their two-factor code keep their 5-minute lifetime instead of being extended.

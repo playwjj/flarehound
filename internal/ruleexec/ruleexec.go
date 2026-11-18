@@ -184,6 +184,18 @@ func clone(r map[string]any) map[string]any {
 	return out
 }
 
+// checkSkip: Cloudflare rejects a skip rule that does not say what it
+// skips; catch it before anything is sent, with the fix.
+func checkSkip(r map[string]any) error {
+	if str(r, "action") != "skip" {
+		return nil
+	}
+	if ap, ok := r["action_parameters"].(map[string]any); !ok || len(ap) == 0 {
+		return fmt.Errorf("a skip rule must say what it skips: add --skip rules (the remaining custom rules), or a list such as --skip rules,ratelimit")
+	}
+	return nil
+}
+
 func validateExpr(expr string) error {
 	if strings.TrimSpace(expr) == "" {
 		return fmt.Errorf("empty expression")
@@ -208,6 +220,9 @@ func position(s State, before string) (map[string]any, int, error) {
 // PlanAdd plans a new rule, appended or placed before another rule.
 func (s State) PlanAdd(rule map[string]any, before string) (Plan, error) {
 	p := Plan{Op: OpAdd, Phase: s.Phase, New: clone(rule)}
+	if err := checkSkip(rule); err != nil {
+		return p, err
+	}
 	if err := validateExpr(str(rule, "expression")); err != nil {
 		return p, err
 	}
@@ -245,7 +260,19 @@ func (s State) PlanEdit(sel string, patch map[string]any) (Plan, error) {
 	}
 	p := Plan{Op: OpEdit, Phase: s.Phase, Index: i, RuleID: str(r, "id"), Old: clone(r), New: clone(r), WantPos: i}
 	for k, v := range patch {
-		p.New[k] = v
+		if v == nil {
+			delete(p.New, k)
+		} else {
+			p.New[k] = v
+		}
+	}
+	// A skip rule's action_parameters say what it skips: they go with the
+	// action, and other actions must not carry them.
+	if str(p.Old, "action") == "skip" && str(p.New, "action") != "skip" && patch["action_parameters"] == nil {
+		delete(p.New, "action_parameters")
+	}
+	if err := checkSkip(p.New); err != nil {
+		return p, err
 	}
 	if err := validateExpr(str(p.New, "expression")); err != nil {
 		return p, err

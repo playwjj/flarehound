@@ -27,6 +27,7 @@ import (
 	"github.com/playwjj/flarehound/internal/blockcli"
 	"github.com/playwjj/flarehound/internal/config"
 	"github.com/playwjj/flarehound/internal/report"
+	"github.com/playwjj/flarehound/internal/ruleexec"
 	"github.com/playwjj/flarehound/internal/store"
 )
 
@@ -63,6 +64,16 @@ type Server struct {
 	OAuth      map[string]*Provider
 	HTTPClient *http.Client
 
+	// Live queries with the read token: the last hour on the overview
+	// (Measure) and the movers' drill-down (Analytics). Unset: archive only.
+	Measure   LiveMetrics
+	Analytics Analytics
+
+	// WAF rules (v1.7): read with the read token, changed with the write
+	// token (unset: list only / no rules page).
+	RulesRead  ruleexec.API
+	RulesWrite ruleexec.API
+
 	tmpl    *template.Template
 	trusted []netip.Prefix
 	lang    lang
@@ -82,7 +93,12 @@ type Server struct {
 	attemptsMu    sync.Mutex
 	attemptsCache map[string]attemptsEntry
 	attemptsBusy  map[string]bool
-	attemptsWG    sync.WaitGroup // background attempt queries (tests wait on it)
+
+	liveMu     sync.Mutex
+	liveCache  map[string]*liveEntry
+	drillMu    sync.Mutex
+	drillCache map[string]*drillEntry
+	attemptsWG sync.WaitGroup // background attempt queries (tests wait on it)
 }
 
 type auditEntry struct {
@@ -96,7 +112,8 @@ type auditEntry struct {
 func New(cfg *config.Config, db *DB, arch Archive, auditor Auditor, version string) (*Server, string, error) {
 	s := &Server{Cfg: cfg, DB: db, Archive: arch, Auditor: auditor, Version: version, Now: time.Now,
 		trusted: cfg.TrustedProxies(), lang: lang(cfg.Report.Language), limiter: newLimiter(10, time.Minute),
-		auditCache: map[string]auditEntry{}, attemptsCache: map[string]attemptsEntry{}, attemptsBusy: map[string]bool{}}
+		auditCache: map[string]auditEntry{}, attemptsCache: map[string]attemptsEntry{}, attemptsBusy: map[string]bool{},
+		liveCache: map[string]*liveEntry{}, drillCache: map[string]*drillEntry{}}
 	s.OAuth = builtinProviders(cfg.Console)
 	s.reviewKey = make([]byte, 32)
 	if _, err := rand.Read(s.reviewKey); err != nil {
@@ -216,9 +233,15 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /{$}", user(s.viewPage(viewOverview)))
 	mux.Handle("GET /movers", user(s.viewPage(viewMovers)))
 	mux.Handle("GET /faces", user(s.facesPage))
+	mux.Handle("GET /movers/drill", user(s.drillPage))
 	mux.Handle("GET /history", user(s.viewPage(viewHistory)))
 	mux.Handle("GET /audit", user(s.auditPage))
 	mux.Handle("POST /audit/run", user(s.auditRun))
+	mux.Handle("GET /rules", user(s.rulesPage))
+	mux.Handle("GET /rules/recipes", user(s.recipesPage))
+	mux.Handle("GET /rules/recipe/{name}", admin(s.requireRules(s.recipeForm)))
+	mux.Handle("POST /rules/review", admin(s.requireRules(s.ruleReview)))
+	mux.Handle("POST /rules/apply", admin(s.requireRules(s.ruleApply)))
 	mux.Handle("GET /blocks", user(s.blocksPage))
 	mux.Handle("GET /blocks/new", admin(s.requireWrite(s.blockNewPage)))
 	mux.Handle("POST /blocks/review", admin(s.requireWrite(s.blockReview)))

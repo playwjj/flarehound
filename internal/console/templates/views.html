@@ -2,14 +2,8 @@
 <p class="meta">{{t "window"}} <b>{{when .Window.From}}–{{hm .Window.To}}</b> · {{t "saved_at"}} {{ago .Window.SavedAt}}</p>
 {{end}}
 
-{{define "overview"}}{{template "head" .}}
-{{with .Overview}}
-{{if not .Has}}<section class="card"><p>{{t "no_data"}}</p></section>{{else}}
-{{if .Stale}}<div class="banner warn">{{t "stale"}}</div>{{end}}
-{{template "windowline" .}}
-{{if not .BaselineOK}}<p class="note">{{if .Samples}}{{tf "baseline_thin" .Samples 20}}{{else}}{{t "baseline_none"}}{{end}}</p>{{end}}
-<section class="tiles">
-{{range .Rows}}
+{{define "tiles"}}<section class="tiles">
+{{range .}}
 <div class="tile st-{{.Status}}">
   <div class="tl">{{t .Key}}{{if .Subject}} · <span class="mono">{{.Subject}}</span>{{end}}</div>
   <div class="tv">{{numf .Cur .Unit}}</div>
@@ -17,7 +11,26 @@
   <div class="ts"><span class="dot"></span>{{t (print "st_" .Status)}} <span class="muted">· {{t "alert_line"}} {{.LineDesc}}</span></div>
 </div>
 {{end}}
-</section>
+</section>{{end}}
+
+{{define "overview"}}{{template "head" .}}
+{{$liveOK := false}}
+{{with .Live}}{{if .Err}}<div class="banner warn">{{t "liveq_err"}} <small>{{short .Err 200}}</small></div>{{else}}{{$liveOK = true}}
+<h2 class="sec">{{t "live_title"}} <span class="muted">{{hm .From}}–{{hm .To}}</span> <span class="tag">{{t "unsettled"}}</span></h2>
+{{if not .BaselineOK}}<p class="note">{{if .Samples}}{{tf "baseline_thin" .Samples 20}}{{else}}{{t "baseline_none"}}{{end}}</p>{{end}}
+{{template "tiles" .Rows}}
+<p class="note">{{t "live_note"}}</p>
+{{end}}{{end}}
+{{with .Overview}}
+{{if not .Has}}<section class="card"><p>{{t "no_data"}}</p></section>{{else}}
+{{if .Stale}}<div class="banner warn">{{t "stale"}}</div>{{end}}
+{{if $liveOK}}<details class="settled"><summary>{{t "settled_title"}} · {{when .Window.From}}–{{hm .Window.To}}</summary>
+{{if not .BaselineOK}}<p class="note">{{if .Samples}}{{tf "baseline_thin" .Samples 20}}{{else}}{{t "baseline_none"}}{{end}}</p>{{end}}
+{{template "tiles" .Rows}}</details>
+{{else}}<h2 class="sec">{{t "settled_title"}}</h2>
+{{template "windowline" .}}
+{{if not .BaselineOK}}<p class="note">{{if .Samples}}{{tf "baseline_thin" .Samples 20}}{{else}}{{t "baseline_none"}}{{end}}</p>{{end}}
+{{template "tiles" .Rows}}{{end}}
 <p class="meta">{{tf "alerts_24h" .AlertsToday}} · {{t "baseline"}} = {{t "baseline_desc"}}</p>
 {{end}}
 {{end}}
@@ -32,7 +45,7 @@
 <thead><tr><th>{{t "name"}}</th><th class="r">{{t "current"}}</th><th class="r">{{t "baseline"}}</th><th class="r">{{t "change"}}</th></tr></thead>
 <tbody>
 {{range $rows}}<tr>
-  <td class="name"><span class="mono" title="{{.Name}}">{{short .Name 80}}</span>{{if .Known}} <span class="tag">{{t "known"}}</span>{{end}}{{template "blocklink" (list $w.Dim .Name $w.ZoneName $w.Reason $w.Can)}}</td>
+  <td class="name">{{if or $w.Snap (not (drillable $w.Dim .Name))}}<span class="mono" title="{{.Name}}">{{short .Name 80}}</span>{{else}}<a class="mono" title="{{.Name}}" href="/movers/drill?z={{$w.ZoneName}}&amp;dim={{$w.Dim}}&amp;name={{.Name}}">{{short .Name 80}}</a>{{end}}{{if .Known}} <span class="tag">{{t "known"}}</span>{{end}}{{template "blocklink" (list $w.Dim .Name $w.ZoneName $w.Reason $w.Can)}}</td>
   <td class="r">{{if .CurCapped}}&lt; {{end}}{{num .Cur}}</td>
   <td class="r">{{if .BaseCapped}}&lt; {{end}}{{num .Base}}</td>
   <td class="r"><b>{{if or .BaseCapped .CurCapped}}≈{{end}}{{delta .Delta}}</b>{{if .HasPct}}<br><small class="muted">{{pct .Pct}}</small>{{end}}</td>
@@ -75,7 +88,7 @@
 <table class="list">
 <thead><tr><th>{{t "name"}}</th><th>{{t "first_seen"}}</th><th class="r">{{t "now"}}</th><th class="r">{{t "peak"}}</th></tr></thead>
 <tbody>{{range .Faces}}<tr>
-  <td class="name"><span class="mono" title="{{.Name}}">{{short .Name 80}}</span>{{if .Known}} <span class="tag">{{t "known"}}</span>{{end}}{{template "blocklink" (list .Dim .Name $.Zone.Name "new face" $.CanWrite)}}</td>
+  <td class="name">{{if drillable .Dim .Name}}<a class="mono" title="{{.Name}}" href="/movers/drill?z={{$.Zone.Name}}&amp;dim={{.Dim}}&amp;name={{.Name}}">{{short .Name 80}}</a>{{else}}<span class="mono" title="{{.Name}}">{{short .Name 80}}</span>{{end}}{{if .Known}} <span class="tag">{{t "known"}}</span>{{end}}{{template "blocklink" (list .Dim .Name $.Zone.Name "new face" $.CanWrite)}}</td>
   <td>{{when .FirstSeen}}<br><small class="muted">{{ago .FirstSeen}}</small></td>
   <td class="r">{{if .InCur}}{{num .Cur}}{{else}}<span class="muted">{{t "not_in_top"}}</span>{{end}}</td>
   <td class="r">{{num .MaxCount}}<br><small class="muted">{{t "last_seen"}} {{ago .LastSeen}}</small></td>
@@ -117,7 +130,12 @@
 {{if .Refused}}<div class="banner info">{{t "audit_wait"}}</div>{{end}}
 {{if .Err}}<div class="banner err">{{t "error"}}</div>{{else}}
 {{if .NA}}<div class="banner warn">{{.NA}}</div>{{else}}<p><b class="{{if .Problems}}bad{{else}}good{{end}}">{{.Problems}}</b> {{t "audit_problems"}}</p>{{end}}
-<pre class="report">{{.Text}}</pre>{{end}}
+{{if .Fixes}}<h2>{{t "how_to_fix"}}</h2>
+<ol class="fixes">{{range .Fixes}}<li><b>{{.Problem}}</b><br><span class="muted">{{.Advice}}</span>
+  {{if .Recipe}}<br>{{if $.CanRules}}<a class="act" href="/rules/recipe/{{.Recipe}}?z={{zq $.Zone}}{{with .Inputs.Get "paths"}}&amp;paths={{.}}{{end}}">{{t "fix_with_recipe"}} →</a>{{else}}<code>flarehound rules recipe {{.Recipe}}{{with .Inputs.Get "paths"}} --path '{{.}}'{{end}}</code>{{end}}
+  {{else if .Command}}<br>{{if $.CanRules}}<a class="act" href="/rules?z={{zq $.Zone}}">{{t "fix_in_rules"}} →</a> {{end}}<code>{{.Command}}</code>{{end}}</li>{{end}}</ol>
+{{end}}
+<details><summary>{{t "full_report"}}</summary><pre class="report">{{.Text}}</pre></details>{{end}}
 <p class="meta">{{tf "audit_cached" (when .At)}}</p>
 {{end}}
 <form method="post" action="/audit/run"><input type="hidden" name="csrf" value="{{.Req.CSRF}}"><input type="hidden" name="z" value="{{.Zone.Name}}"><button>{{t "audit_run"}}</button></form>
@@ -248,3 +266,35 @@
 {{define "uop"}}<form method="post" action="/users/{{index . 1}}/{{index . 0}}" class="op"><input type="hidden" name="csrf" value="{{index . 2}}"><button class="small">{{t (index . 3)}}</button></form>{{end}}
 
 {{define "blocklink"}}{{$dim := index . 0}}{{if and (index . 4) (or (eq $dim "ua") (eq $dim "asn"))}} <a class="act" href="/blocks/new?z={{index . 2}}&amp;type={{$dim}}&amp;value={{blockValue $dim (index . 1)}}&amp;reason={{index . 3}}">{{t "block_this"}}</a>{{end}}{{end}}
+
+{{define "drill"}}{{template "head" .}}
+{{$z := .Zone}}{{$can := .CanWrite}}
+{{with .Drill}}
+<section class="card">
+<h1><span class="muted">{{t (print "dim_" .Dim)}}</span> <span class="mono wrapname">{{.Name}}</span></h1>
+{{template "blocklink" (list .Dim .Name $z.Name "drill-down" $can)}}
+{{if .Err}}<div class="banner err">{{.Err}}</div>{{else}}
+<dl class="kv">
+  <dt>{{t "window"}}</dt><dd>{{when .From}}–{{hm .To}}</dd>
+  <dt>{{t "current"}}</dt><dd><b>{{num .Cur}}</b></dd>
+  <dt>{{t "yesterday"}}</dt><dd>{{num .Prev}} <span class="muted">({{delta (sub .Cur .Prev)}})</span></dd>
+</dl>
+{{end}}
+</section>
+{{range .Sections}}
+<section class="card"><h2>{{t .Key}}</h2>
+{{if .Err}}<p class="bad">{{short .Err 200}}</p>{{else if not .Rows}}<p class="muted">{{t "none"}}</p>{{else}}{{$sd := .Dim}}
+<table class="list rsp">
+<thead><tr><th>{{t "name"}}</th><th class="r">{{t "current"}}</th><th class="r">{{t "share"}}</th><th class="r">{{t "yesterday"}}</th></tr></thead>
+<tbody>{{range .Rows}}<tr>
+  <td class="name" data-label="{{t "name"}}">{{if and $sd (drillable $sd .Name)}}<a class="mono" href="/movers/drill?z={{$z.Name}}&amp;dim={{$sd}}&amp;name={{.Name}}">{{short .Name 90}}</a>{{else}}<span class="mono">{{short .Name 90}}</span>{{end}}</td>
+  <td class="r" data-label="{{t "current"}}">{{num .Cur}}</td>
+  <td class="r" data-label="{{t "share"}}">{{printf "%.1f%%" .Share}}</td>
+  <td class="r" data-label="{{t "yesterday"}}">{{if .PrevKnow}}{{num .Prev}}{{else}}<span class="muted">{{t "not_in_top"}}</span>{{end}}</td>
+</tr>{{end}}</tbody></table>{{end}}
+</section>
+{{end}}
+<p class="note">{{t "drill_note"}}</p>
+{{else}}<section class="card"><p>{{.Err}}</p></section>{{end}}
+<p><a href="/movers?z={{zq .Zone}}&amp;dim={{.Dim}}">← {{t "nav_movers"}}</a></p>
+{{template "foot" .}}{{end}}

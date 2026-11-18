@@ -90,3 +90,17 @@ func Classify(asn int, name string) Network {
 	}
 	return Unknown
 }
+
+// HostingASNs returns the built-in hosting / cloud networks, sorted.
+func HostingASNs() []int {
+	out := make([]int, 0, len(hostingASNs))
+	for a := range hostingASNs {
+		out = append(out, a)
+	}
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j] < out[j-1]; j-- {
+			out[j], out[j-1] = out[j-1], out[j]
+		}
+	}
+	return out
+}

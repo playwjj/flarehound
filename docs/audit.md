@@ -19,6 +19,10 @@ flarehound audit --zone example.com
 
 Turn it off with `waf_audit.disabled: true`.
 
+## How to fix
+
+The full audit (`flarehound audit`, the console's WAF audit page, the ruleset-change message) ends with **How to fix**: one entry per finding with what to do and a ready command — a [recipe](waf-guide.md#recipes) with its inputs filled in (`flarehound rules recipe protect-paths --path '/login*, /admin*'`), or a `rules move / delete / edit` command. Nothing changes unless you run it, and every change is shown and confirmed first. In the console, admins of a console holding the write token get **Fix with a recipe** links.
+
 ## Checks
 
 ### Coverage gaps
