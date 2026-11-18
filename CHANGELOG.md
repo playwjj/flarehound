@@ -2,6 +2,10 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.11.1 — 2026-11-18
+
+- Console: the "Mark known" button no longer crowds the name and tags before it (overview, movers, drill-down).
+
 ## v1.11.0 — 2026-11-18
 
 - **WAF audit coverage per zone.** With several zones, each zone's coverage check probes only its own hosts (global `waf_audit.hosts` are filtered to the zone and its subdomains), and sensitive paths can be set per zone (`cloudflare.zones[].waf_audit.sensitive_paths`, plus optional `hosts`). The global list is only the default — for the single zone, or with several for the zones the global hosts belong to (the first zone when none are set). A zone without a list of its own now says "coverage not configured" instead of being scored against another site's paths and hosts; `doctor` says so too. The rule-interaction analysis is unchanged.

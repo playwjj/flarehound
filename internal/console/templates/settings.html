@@ -166,7 +166,7 @@
 </section>
 {{template "foot" .}}{{end}}
 
-{{define "knownbtn"}}{{if index . 3}}{{$dim := index . 0}}{{if or (eq $dim "ua") (eq $dim "asn")}}<form method="post" action="/settings/known/mark" class="op"><input type="hidden" name="csrf" value="{{index . 2}}"><input type="hidden" name="op" value="known_add"><input type="hidden" name="dim" value="{{$dim}}"><input type="hidden" name="name" value="{{index . 1}}"><input type="hidden" name="next" value="{{index . 4}}"><button class="small" title="{{t "known_mark_title"}}">{{t "known_mark"}}</button></form>{{end}}{{end}}{{end}}
+{{define "knownbtn"}}{{if index . 3}}{{$dim := index . 0}}{{if or (eq $dim "ua") (eq $dim "asn")}}<form method="post" action="/settings/known/mark" class="op known"><input type="hidden" name="csrf" value="{{index . 2}}"><input type="hidden" name="op" value="known_add"><input type="hidden" name="dim" value="{{$dim}}"><input type="hidden" name="name" value="{{index . 1}}"><input type="hidden" name="next" value="{{index . 4}}"><button class="small" title="{{t "known_mark_title"}}">{{t "known_mark"}}</button></form>{{end}}{{end}}{{end}}
 
 {{define "asninfo"}}{{$in := asnInfo (index . 0)}}{{if $in.ASN}}<span class="asnname">{{if $in.Label}} · {{$in.Label}}{{end}} · <span class="net net-{{$in.Type}}">{{t (print "net_" $in.Type)}}</span>{{if index . 1}} <a class="act" href="/settings/asn/name?asn={{$in.ASN}}&amp;next={{index . 2}}">{{if $in.Custom}}{{t "asn_rename"}}{{else}}{{t "asn_name_it"}}{{end}}</a>{{end}}</span>{{end}}{{end}}
 
