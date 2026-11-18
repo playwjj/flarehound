@@ -570,3 +570,15 @@ func TestSessionSliding(t *testing.T) {
 		t.Fatal("slid session expired")
 	}
 }
+
+func TestQRSVG(t *testing.T) {
+	secret, _ := NewTOTPSecret()
+	svg, err := qrSVG(TOTPURI("FlareHound", "someone.with.a.long.name@example.com", secret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(svg)
+	if !strings.HasPrefix(s, `<svg class="qr"`) || !strings.Contains(s, `fill="#fff"`) || strings.Count(s, "M") < 50 {
+		t.Fatalf("qr svg: %.200s", s)
+	}
+}

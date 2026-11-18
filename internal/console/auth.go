@@ -15,7 +15,10 @@ func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, localPath(r.URL.Query().Get("next")), http.StatusSeeOther)
 		return
 	}
-	p := page{Title: s.lang.t("login_title"), Next: localPath(r.URL.Query().Get("next")), Providers: s.ProviderList()}
+	p := page{Title: s.lang.t("login_title"), Next: localPath(r.URL.Query().Get("next")), Providers: s.ProviderList(), ResetOn: s.resetOn()}
+	if r.URL.Query().Get("reset") == "1" {
+		p.Flash = s.lang.t("reset_done")
+	}
 	if s.Cfg.Console.ProxyAuth.DisableLogin {
 		p.Msg = s.lang.t("login_disabled")
 	}
@@ -25,7 +28,7 @@ func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 	rq := reqOf(r)
 	next := localPath(r.PostFormValue("next"))
-	p := page{Title: s.lang.t("login_title"), Next: next, Providers: s.ProviderList()}
+	p := page{Title: s.lang.t("login_title"), Next: next, Providers: s.ProviderList(), ResetOn: s.resetOn()}
 	if s.Cfg.Console.ProxyAuth.DisableLogin {
 		p.Msg = s.lang.t("login_disabled")
 		s.render(w, r, http.StatusForbidden, "login", p)
@@ -329,6 +332,9 @@ func (s *Server) accountPage(w http.ResponseWriter, r *http.Request) {
 		if u.TOTPSecret != "" && !u.TOTPEnabled {
 			p.TOTPSecret = GroupSecret(u.TOTPSecret)
 			p.TOTPURI = TOTPURI("FlareHound", u.Username, u.TOTPSecret)
+			if svg, err := qrSVG(p.TOTPURI); err == nil {
+				p.TOTPQR = svg
+			}
 		}
 	}
 	p.Flash = r.URL.Query().Get("ok")

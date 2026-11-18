@@ -324,6 +324,11 @@ func doctorConsole(d *doctorOut, cfg *config.Config, now time.Time) {
 			d.warn("%s sign-in over plain HTTP: providers (Google in particular) refuse non-HTTPS redirect URIs except localhost", name)
 		}
 	}
+	if cfg.Notify.Email != nil && cs.BaseURL != "" && !cs.ProxyAuth.DisableLogin {
+		d.ok("password reset by e-mail available (through notify.email's SMTP server)")
+	} else {
+		d.warn("password reset by e-mail off (needs notify.email and console.base_url): admins reset passwords, or `flarehound console reset-password`")
+	}
 	if cs.ProxyAuth.Header != "" {
 		d.ok("proxy identity header %s trusted from %s", cs.ProxyAuth.Header, strings.Join(cs.TrustedProxies, ", "))
 	}

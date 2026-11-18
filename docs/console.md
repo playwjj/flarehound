@@ -110,10 +110,12 @@ The **Snapshots** page lists them (admins see all, others their own): download t
 - **Roles**: `admin` (manages accounts; blocks when the console holds the write token) and `viewer` (reads, creates snapshots).
 - **No self-sign-up**. Admins create accounts on the Users page (a temporary password is shown once; the user must change it at first sign-in) or issue a single-use invitation link (72 hours).
 - **Passwords**: at least 10 characters, stored as argon2id hashes. Changing a password signs out every other session.
-- **Two-factor sign-in (TOTP)**: each user can turn it on under Account (any authenticator app; the key is shown for manual entry with an `otpauth://` URI). `console.require_totp` makes it mandatory. Accounts with TOTP confirm a fresh code before account administration (step-up).
+- **Two-factor sign-in (TOTP)**: each user can turn it on under Account — scan the QR code with any authenticator app (or type the key shown next to it). `console.require_totp` makes it mandatory. Accounts with TOTP confirm a fresh code before account administration (step-up).
 - **Throttling**: 10 sign-in attempts per minute per IP; 5 consecutive failures lock an account for 15 minutes (admins can unlock).
 - **Sessions** are server-side and revocable: users see and end their own; admins can sign anyone out or disable an account (which ends its sessions).
 - **Audit log**: sign-ins, failures, password and 2FA changes, account administration and audit re-runs, with account and IP — on the Users page.
+
+**Forgot your password?** With `notify.email` (the SMTP settings used for notifications) and `console.base_url` configured, the sign-in page offers a reset by e-mail: a single-use link valid for 30 minutes goes to the address on the account. The page answers the same whether or not the account exists; at most one mail per account every 10 minutes. A reset ends every session of the account and does not bypass two-factor sign-in. Without SMTP, an admin resets the password (Users page), or use the local commands below.
 
 Local recovery (on the machine, no web sign-in needed):
 

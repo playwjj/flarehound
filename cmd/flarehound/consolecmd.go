@@ -28,6 +28,7 @@ import (
 	"github.com/playwjj/flarehound/internal/console"
 	"github.com/playwjj/flarehound/internal/health"
 	"github.com/playwjj/flarehound/internal/logx"
+	"github.com/playwjj/flarehound/internal/notify"
 	"github.com/playwjj/flarehound/internal/report"
 	"github.com/playwjj/flarehound/internal/store"
 )
@@ -246,6 +247,11 @@ func serveConsole(ctx context.Context, cfg *config.Config, db *console.DB) int {
 	// Live views (read token): the last hour with the watch's own
 	// queries, and the movers' drill-down.
 	srv.Measure, srv.Analytics, srv.Caps = runner.Measure, cfapi.New(cfg.APIToken), runner.Caps
+	// Password reset by e-mail through notify.email's SMTP settings.
+	if e := cfg.Notify.Email; e != nil && cs.BaseURL != "" {
+		srv.Mail = console.SMTPSender(notify.Email{Host: e.Host, Port: e.Port, TLS: e.TLS, Username: e.Username,
+			Password: cfg.Chan.EmailPassword, From: e.From})
+	}
 	// WAF rules: listed with the read token (Zone → WAF: Read), changed
 	// with the write token; backups and the change log live in the archive.
 	srv.RulesRead, srv.Store = cfapi.NewREST(cfg.APIToken), st

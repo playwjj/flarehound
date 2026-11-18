@@ -328,6 +328,19 @@ var dict = map[string][2]string{
 	"free_rl_fixed":         {"Fixed at 10 seconds on the Free plan.", "Free 套餐固定为 10 秒。"},
 	"snap_pruned":           {"This snapshot's page was removed: its link expired or was revoked more than 30 days ago. The record stays in the list.", "该快照的页面已清理：链接过期或吊销已超过 30 天。记录仍保留在列表中。"},
 	"snap_pruned_short":     {"page removed (retention)", "页面已按保留期清理"},
+	"totp_scan":             {"Scan with your authenticator app, or type the key below.", "用认证器应用扫描二维码，或手动输入下面的密钥。"},
+	"forgot_link":           {"Forgot your password?", "忘记口令？"},
+	"forgot_title":          {"Reset your password", "重置口令"},
+	"forgot_desc":           {"Enter your username or e-mail. If the account exists and has an e-mail address, a single-use link valid for 30 minutes is sent there. Two-factor sign-in still applies afterwards.", "输入用户名或邮箱。如果账号存在且登记了邮箱，会向该邮箱发送一个 30 分钟内有效、只能用一次的链接。重置后登录仍需二次验证。"},
+	"forgot_identity":       {"Username or e-mail", "用户名或邮箱"},
+	"forgot_send":           {"Send the link", "发送链接"},
+	"forgot_sent":           {"If that account exists and has an e-mail address, a reset link is on its way (valid for 30 minutes). No mail? Ask an admin to reset your password.", "如果该账号存在且登记了邮箱，重置链接已发出（30 分钟内有效）。没收到？请联系管理员重置口令。"},
+	"reset_title":           {"Choose a new password", "设置新口令"},
+	"reset_for":             {"Account: %s", "账号：%s"},
+	"reset_bad":             {"This reset link is invalid, used or expired. Request a new one from the sign-in page.", "重置链接无效、已使用或已过期。请从登录页重新申请。"},
+	"reset_done":            {"Password changed. Every session of the account was signed out; sign in with the new password.", "口令已修改，该账号的所有会话均已退出，请用新口令登录。"},
+	"reset_mail_subject":    {"FlareHound console — password reset", "FlareHound 控制台——重置口令"},
+	"reset_mail_body":       {"Someone asked to reset the password of the FlareHound console account %s.\n\nTo choose a new password, open this link (single use, valid for %[3]d minutes):\n%[2]s\n\nRequested from %[4]s (%[5]s).\nIf this was not you, ignore this mail: your password stays as it is.", "有人申请重置 FlareHound 控制台账号 %s 的口令。\n\n如需设置新口令，请打开以下链接（只能使用一次，%[3]d 分钟内有效）：\n%[2]s\n\n申请来源：%[4]s（%[5]s）。\n如果不是你本人操作，请忽略本邮件，你的口令不会改变。"},
 }
 
 type lang string

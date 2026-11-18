@@ -104,6 +104,8 @@ type page struct {
 	Sessions   []Session
 	TOTPSecret string
 	TOTPURI    string
+	TOTPQR     template.HTML
+	ResetOn    bool // password reset by e-mail is available
 	Users      []User
 	Invites    []Invite
 	AuditLog   []AuditEntry

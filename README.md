@@ -8,7 +8,7 @@
 
 Cloudflare gives you data. FlareHound gives you the conclusion.
 
-> Status: **v1.7.1** — WAF basics, rule recipes and plain-words rules; live hour and movers drill-down; web console with in-console blocking, undo, before/after, read-only snapshots and Google / GitHub sign-in. Documentation: **https://playwjj.github.io/flarehound/** · Changelog: [CHANGELOG.md](CHANGELOG.md)
+> Status: **v1.7.2** — WAF basics, rule recipes and plain-words rules; live hour and movers drill-down; web console with in-console blocking, undo, before/after, read-only snapshots and Google / GitHub sign-in. Documentation: **https://playwjj.github.io/flarehound/** · Changelog: [CHANGELOG.md](CHANGELOG.md)
 >
 > **Direction:** FlareHound is growing a built-in web console — live movers (who is up, who is down), new-face tracking, history against the long-term baseline, the WAF audit, and in-console blocking with per-account audit — landing in v1.3–v1.5. Notifications become the alerting layer that brings you to the console. See the [web console revision note](docs/web-console-revision.md).
 >

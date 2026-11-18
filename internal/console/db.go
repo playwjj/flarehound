@@ -69,6 +69,13 @@ CREATE TABLE IF NOT EXISTS invites (
 	used_at    INTEGER NOT NULL DEFAULT 0,
 	used_by    INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS password_resets (
+	token_hash TEXT    PRIMARY KEY,
+	user_id    INTEGER NOT NULL REFERENCES users(id),
+	created_at INTEGER NOT NULL,
+	expires_at INTEGER NOT NULL,
+	used_at    INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS oauth_states (
 	state_hash TEXT    PRIMARY KEY,
 	provider   TEXT    NOT NULL,
@@ -959,6 +966,79 @@ func (d *DB) Prune() (PruneStats, error) {
 	if err := exec(&ps.Effects, `DELETE FROM effects WHERE computed < ?`, now.Add(-effectKeep).Unix()); err != nil {
 		return ps, err
 	}
+	_, _ = d.db.Exec(`DELETE FROM password_resets WHERE expires_at <= ?`, now.Add(-7*24*time.Hour).Unix())
 	err := exec(&ps.OAuth, `DELETE FROM oauth_states WHERE expires_at <= ?`, now.Unix())
 	return ps, err
+}
+
+// --- password reset by e-mail (v1.7.2) ---
+
+// LastResetAt returns when the account's newest reset link was issued.
+func (d *DB) LastResetAt(userID int64) (time.Time, error) {
+	var v sql.NullInt64
+	err := d.db.QueryRow(`SELECT MAX(created_at) FROM password_resets WHERE user_id = ?`, userID).Scan(&v)
+	if err != nil || !v.Valid {
+		return time.Time{}, err
+	}
+	return time.Unix(v.Int64, 0), nil
+}
+
+// CreateReset issues a single-use reset token for an account.
+func (d *DB) CreateReset(userID int64, ttl time.Duration) (string, error) {
+	t := randToken(32)
+	now := d.now()
+	_, err := d.db.Exec(`INSERT INTO password_resets (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)`,
+		hashToken(t), userID, now.Unix(), now.Add(ttl).Unix())
+	return t, err
+}
+
+// ResetUser returns the account of a usable (unused, unexpired) reset token.
+func (d *DB) ResetUser(t string) (User, bool, error) {
+	var uid, exp, used int64
+	err := d.db.QueryRow(`SELECT user_id, expires_at, used_at FROM password_resets WHERE token_hash = ?`, hashToken(t)).Scan(&uid, &exp, &used)
+	if errors.Is(err, sql.ErrNoRows) {
+		return User{}, false, nil
+	}
+	if err != nil {
+		return User{}, false, err
+	}
+	if used > 0 || d.now().Unix() >= exp {
+		return User{}, false, nil
+	}
+	u, err := d.UserByID(uid)
+	if err != nil || u.Disabled {
+		return User{}, false, err
+	}
+	return u, true, nil
+}
+
+var ErrResetInvalid = errors.New("this reset link is invalid, used or expired")
+
+// UseReset consumes a token and sets the new password: every session of
+// the account ends, a lockout is lifted, and its other reset links die.
+// Two-factor sign-in is untouched.
+func (d *DB) UseReset(t, password string) (User, error) {
+	if err := CheckPasswordPolicy(password); err != nil {
+		return User{}, err
+	}
+	u, ok, err := d.ResetUser(t)
+	if err != nil {
+		return User{}, err
+	}
+	if !ok {
+		return User{}, ErrResetInvalid
+	}
+	now := d.now().Unix()
+	res, err := d.db.Exec(`UPDATE password_resets SET used_at = ? WHERE token_hash = ? AND used_at = 0`, now, hashToken(t))
+	if err != nil {
+		return User{}, err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return User{}, ErrResetInvalid
+	}
+	if err := d.SetPassword(u.ID, password, false, ""); err != nil {
+		return User{}, err
+	}
+	_, _ = d.db.Exec(`UPDATE password_resets SET used_at = ? WHERE user_id = ? AND used_at = 0`, now, u.ID)
+	return u, nil
 }

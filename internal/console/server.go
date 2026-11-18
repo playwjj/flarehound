@@ -65,6 +65,10 @@ type Server struct {
 	OAuth      map[string]*Provider
 	HTTPClient *http.Client
 
+	// Mail sends password-reset links (nil: reset by e-mail is off).
+	Mail    MailSender
+	resetWG sync.WaitGroup // background reset mails (tests wait on it)
+
 	// Live queries with the read token: the last hour on the overview
 	// (Measure) and the movers' drill-down (Analytics). Unset: archive only.
 	Measure   LiveMetrics
@@ -231,6 +235,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /login/totp", s.totpPage)
 	mux.HandleFunc("POST /login/totp", s.totpPost)
 	mux.HandleFunc("POST /logout", s.logout)
+	mux.HandleFunc("GET /login/forgot", s.forgotPage)
+	mux.HandleFunc("POST /login/forgot", s.forgotPost)
+	mux.HandleFunc("GET /reset/{token}", s.resetPage)
+	mux.HandleFunc("POST /reset/{token}", s.resetPost)
 	mux.HandleFunc("POST /oauth/{provider}/start", s.oauthStart)
 	mux.HandleFunc("GET /oauth/{provider}/callback", s.oauthCallback)
 

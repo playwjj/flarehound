@@ -168,7 +168,7 @@ The web console (v1.3, read-only) — see [Web console](console.md).
 | `console.enabled` | bool | `false` | `flarehound console` refuses to start unless this is true. |
 | `console.listen` | string | `127.0.0.1:8640` | Listen address. Keep it on loopback and reach it through Tailscale, a TLS reverse proxy or Cloudflare Tunnel: FlareHound does no TLS. |
 | `console.db_file` | string | `<data dir>/console.db` | Accounts and sessions (file mode 0600). The watch never opens it. |
-| `console.base_url` | string | — | How people reach the console, e.g. `https://hound.example.ts.net`. When set, notifications carry a deep link to the matching view, and invitation links use it. |
+| `console.base_url` | string | — | How people reach the console, e.g. `https://hound.example.ts.net`. When set, notifications carry a deep link to the matching view, and invitation, password-reset and sign-in callback links use it. Together with `notify.email`, it turns on password reset by e-mail. |
 | `console.refresh_seconds` | int | `300` | Auto-refresh of the live views. Minimum 30. |
 | `console.session_hours` | int | `12` | Idle lifetime of a sign-in session (1–720). |
 | `console.require_totp` | bool | `false` | Every account must set up two-factor sign-in before using the console. |

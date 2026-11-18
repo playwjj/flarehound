@@ -80,6 +80,7 @@
   <label>{{t "password"}}<input name="password" type="password" autocomplete="current-password" required></label>
   <button>{{t "sign_in"}}</button>
 </form>
+{{if .ResetOn}}<p class="note"><a href="/login/forgot">{{t "forgot_link"}}</a></p>{{end}}
 {{if .Providers}}<div class="oauth">{{$rq := .Req}}{{$next := .Next}}
   <p class="or muted">{{t "or"}}</p>
   {{range .Providers}}<form method="post" action="/oauth/{{.Name}}/start"><input type="hidden" name="csrf" value="{{$rq.CSRF}}"><input type="hidden" name="intent" value="login"><input type="hidden" name="next" value="{{$next}}"><button class="alt">{{tf "sign_in_with" .Label}}</button></form>{{end}}
@@ -128,6 +129,33 @@
   <label>{{t "password"}} <small>{{t "password_rule"}}</small><input name="password" type="password" minlength="10" autocomplete="new-password" required></label>
   <label>{{t "password_again"}}<input name="password2" type="password" minlength="10" autocomplete="new-password" required></label>
   <button>{{t "create"}}</button>
+</form>
+</section>
+{{template "foot" .}}{{end}}
+
+{{define "forgot"}}{{template "head" .}}
+<section class="card narrow">
+<h1>{{t "forgot_title"}}</h1>
+<p class="muted">{{t "forgot_desc"}}</p>
+{{if not .Flash}}<form method="post" action="/login/forgot" class="stack">
+  <input type="hidden" name="csrf" value="{{.Req.CSRF}}">
+  <label>{{t "forgot_identity"}}<input name="identity" autocomplete="username" autocapitalize="none" required autofocus></label>
+  <button>{{t "forgot_send"}}</button>
+</form>{{end}}
+<p><a href="/login">← {{t "login_title"}}</a></p>
+</section>
+{{template "foot" .}}{{end}}
+
+{{define "reset"}}{{template "head" .}}
+<section class="card narrow">
+<h1>{{t "reset_title"}}</h1>
+<p class="muted">{{tf "reset_for" .Role}}</p>
+<form method="post" action="/reset/{{.Token}}" class="stack">
+  <input type="hidden" name="csrf" value="{{.Req.CSRF}}">
+  <input type="text" name="username" value="{{.Role}}" autocomplete="username" hidden>
+  <label>{{t "password_new"}} <small>{{t "password_rule"}}</small><input name="password" type="password" minlength="10" autocomplete="new-password" required autofocus></label>
+  <label>{{t "password_again"}}<input name="password2" type="password" minlength="10" autocomplete="new-password" required></label>
+  <button>{{t "save"}}</button>
 </form>
 </section>
 {{template "foot" .}}{{end}}

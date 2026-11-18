@@ -2,6 +2,11 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.7.2 — 2026-11-18
+
+- **TOTP set-up by QR code.** The account page shows the authenticator key as a QR code (inline SVG, always dark on light) next to the key for manual entry. Generated with `rsc.io/qr` (pure Go, BSD); verified by decoding it in a browser.
+- **Password reset by e-mail.** With `notify.email` (SMTP) and `console.base_url` configured, the sign-in page offers "Forgot your password?": a single-use link valid for 30 minutes is mailed to the address on the account. The page answers the same whether or not the account exists, and the mail is sent in the background; at most one mail per account every 10 minutes and ten requests a minute per IP. A reset ends every session of the account, lifts a lockout and voids its other links; two-factor sign-in still applies. Requests, mails and resets are audited. `doctor` says whether it is available.
+
 ## v1.7.1 — 2026-11-18
 
 - **Faster on slow links.** The drill-down runs its queries four at a time (about 20 s → 3.5 s on the test zone over a slow connection; cached afterwards). The WAF rules and WAF audit pages are kept warm in the background (rules re-read every 10 minutes, the audit when 30 minutes old) and open immediately; any rule change made in the console refreshes both. The rules page shows when it was read, with a refresh link.

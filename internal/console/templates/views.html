@@ -173,6 +173,7 @@
 </form>
 {{else if .TOTPSecret}}
 <p>{{t "totp_enroll"}}</p>
+{{if .TOTPQR}}<div class="qrbox">{{.TOTPQR}}<p class="note">{{t "totp_scan"}}</p></div>{{end}}
 <p>{{t "totp_key"}}: <code class="secret">{{.TOTPSecret}}</code></p>
 <details><summary>{{t "totp_uri"}}</summary><code class="wrap">{{.TOTPURI}}</code></details>
 <form method="post" action="/account/totp/confirm" class="stack">
