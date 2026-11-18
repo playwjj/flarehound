@@ -484,7 +484,12 @@ func (s *Server) stepUp(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rq := reqOf(r)
 		if rq.User.TOTPEnabled && rq.Session != nil && s.Now().Sub(rq.Session.StepUpAt) > stepUpTTL {
-			next := r.Header.Get("Referer")
+			// The console sends no Referer (Referrer-Policy: no-referrer), so
+			// forms that know where they live say so in "next".
+			next := r.PostFormValue("next")
+			if next == "" {
+				next = r.Header.Get("Referer")
+			}
 			if next == "" {
 				next = "/users"
 			}

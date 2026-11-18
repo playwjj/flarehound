@@ -2,6 +2,11 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.12.1 — 2026-11-18
+
+- Console: after the two-factor step-up, you are taken back to the page the action started from (e.g. "Mark known" on new faces) instead of the users page. The console sends no Referer, so the step-up now follows the form's own return address.
+- Console: the logo in the header and a favicon.
+
 ## v1.12.0 — 2026-11-18
 
 - **E-mail over HTTPS.** `notify.email.provider` = `resend` sends through [Resend](https://resend.com)'s API (port 443) for hosts that block outbound SMTP; the key comes from `api_key_env`. Same text, HTML and inline charts; console password-reset mails follow. Also settable in the console (`email_provider`, `email_api_key_env`). `smtp` stays the default.

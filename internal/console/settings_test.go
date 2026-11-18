@@ -276,3 +276,19 @@ func TestASNNames(t *testing.T) {
 		t.Fatalf("long name not refused: %s", h.Get("Location"))
 	}
 }
+
+// Step-up must send the user back to the page the button was on, not /users:
+// the console sends no Referer, so the form's "next" is what counts.
+func TestKnownMarkStepUpReturnsToPage(t *testing.T) {
+	e := settingsEnv(t)
+	u, _, _ := e.db.UserByName("admin")
+	secret, _ := NewTOTPSecret()
+	_ = e.db.SetTOTP(u.ID, secret, true, 0)
+	c := e.admin
+	_, body, _ := c.do("GET", "/faces?days=1", nil, nil)
+	code, _, h := c.do("POST", "/settings/known/mark", url.Values{"csrf": {csrfOf(t, body)}, "op": {"known_add"}, "dim": {"ua"},
+		"name": {"Crawler/1.0"}, "next": {"/faces?days=1"}}, nil)
+	if want := "/stepup?next=" + url.QueryEscape("/faces?days=1"); code != http.StatusSeeOther || h.Get("Location") != want {
+		t.Fatalf("step-up redirect: %d %q, want %q", code, h.Get("Location"), want)
+	}
+}
