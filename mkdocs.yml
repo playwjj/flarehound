@@ -49,4 +49,6 @@ nav:
       - Limitations: limitations.md
       - Troubleshooting: troubleshooting.md
       - Changelog: changelog.md
+  - Project direction:
+      - Web console revision: web-console-revision.md
   - 中文简介: zh.md
