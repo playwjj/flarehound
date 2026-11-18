@@ -42,6 +42,11 @@ type Snapshot struct {
 	DynamicPaths []cfapi.Face `json:"dynamic_paths,omitempty"`
 	Firewall     []cfapi.Face `json:"firewall,omitempty"`
 	FirewallNA   bool         `json:"firewall_na,omitempty"`
+	// The hour's top client IPs (with their ASN where the plan has it) and
+	// top IPs stopped at the edge — the console's IP board. nil before
+	// v1.14 and on rounds where the query failed.
+	TopIPs     []cfapi.Face `json:"top_ips,omitempty"`
+	BlockedIPs []cfapi.Face `json:"blocked_ips,omitempty"`
 }
 
 type Store struct{ db *sql.DB }
@@ -627,6 +632,37 @@ func (s *Store) SameHourSnapshots(zone string, from, to time.Time, days int) ([]
 			return nil, err
 		}
 		out = append(out, snap)
+	}
+	return out, rows.Err()
+}
+
+// HourSnapshot is one archived hour with its breakdowns.
+type HourSnapshot struct {
+	From, To time.Time
+	Snapshot
+}
+
+// HourSnapshots returns the archived hourly snapshots with windows
+// starting in [from, to), oldest first.
+func (s *Store) HourSnapshots(zone string, from, to time.Time) ([]HourSnapshot, error) {
+	rows, err := s.db.Query(`SELECT from_ts, to_ts, data FROM snapshots
+		WHERE zone = ? AND kind = 'hour' AND from_ts >= ? AND from_ts < ? ORDER BY from_ts`, zone, from.Unix(), to.Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []HourSnapshot
+	for rows.Next() {
+		var f, t int64
+		var raw string
+		if err := rows.Scan(&f, &t, &raw); err != nil {
+			return nil, err
+		}
+		h := HourSnapshot{From: time.Unix(f, 0).UTC(), To: time.Unix(t, 0).UTC()}
+		if err := json.Unmarshal([]byte(raw), &h.Snapshot); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
 	}
 	return out, rows.Err()
 }

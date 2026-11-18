@@ -28,7 +28,6 @@ const (
 	blockedTTL    = 10 * time.Minute
 	blockedErrTTL = time.Minute // a failure is retried after this, not on every refresh
 	blockedLimit  = 8
-	edgeBlocked   = 403
 )
 
 // ShareRow is one face with its share of a total: a knocking source
@@ -66,17 +65,11 @@ func shareRows(faces []cfapi.Face, total int64) []ShareRow {
 	return out
 }
 
-// blockedFilter selects requests stopped at the edge: 403 and never
-// sent to the origin (originResponseStatus 0).
-func blockedFilter() cfapi.Filter {
-	return cfapi.Filter{EdgeStatus: edgeBlocked, OriginStatusTo: 1}
-}
-
 // buildBlocked queries the window's blocked sources. hasASN=false
 // skips the ASN list on plans whose analytics have no ASN dimension.
 func buildBlocked(ctx context.Context, an Analytics, zone config.Zone, w store.Window, hasASN bool) *Blocked {
 	b := &Blocked{Window: w}
-	f := blockedFilter()
+	f := cfapi.EdgeBlocked()
 	var (
 		wg        sync.WaitGroup
 		asns, uas []cfapi.Face

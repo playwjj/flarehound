@@ -36,6 +36,20 @@ func ClaimedBot(ua string) (name string, asns []int, ok bool) {
 	return "", nil, false
 }
 
+// CrawlerNetwork returns the crawler that crawls from an ASN, if any.
+// A crawler network also carries other traffic (AS8075 is Bingbot and
+// Azure), so this labels a network; it never clears one.
+func CrawlerNetwork(asn int) (string, bool) {
+	for _, c := range crawlers {
+		for _, a := range c.ASNs {
+			if a == asn {
+				return c.Name, true
+			}
+		}
+	}
+	return "", false
+}
+
 // VerifiedShare is the minimum share of a claimed crawler's requests
 // that must come from its own ASNs for the claim to be accepted.
 const VerifiedShare = 0.9

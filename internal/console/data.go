@@ -24,6 +24,7 @@ type Archive interface {
 	HourAt(zone string, from time.Time) (store.Window, bool, error)
 	SameHourSnapshots(zone string, from, to time.Time, days int) ([]store.Snapshot, error)
 	HourSeries(zone string, from, to time.Time) ([]store.HourPoint, error)
+	HourSnapshots(zone string, from, to time.Time) ([]store.HourSnapshot, error)
 	FacesSince(zone, dim string, since time.Time, limit int) ([]store.FaceRecord, error)
 	OldestFace(zone, dim string) (time.Time, error)
 	AlertsDetailed(zone string, from, to time.Time, limit int) ([]store.AlertRecord, error)
@@ -173,6 +174,7 @@ const (
 	DimUA   = "ua"
 	DimASN  = "asn"
 	DimPath = "path"
+	DimIP   = "ip" // IP board and drill-down only (not a movers list)
 )
 
 // Mover is one entry of a gainers / losers list. The archive keeps only

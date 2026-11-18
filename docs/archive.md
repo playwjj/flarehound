@@ -11,14 +11,14 @@ Cloudflare keeps about 31 days of adaptive analytics (firewall events likewise, 
 
 | Table | Holds | Kept |
 |---|---|---|
-| `snapshots` | One row per zone per window (`hour`, and `day` from the daily report): totals plus the full query set as JSON — cache-status split, top dynamic paths, firewall events per rule | Hourly: `archive.hourly_retention_days` (default 400, min 30); daily: forever |
+| `snapshots` | One row per zone per window (`hour`, and `day` from the daily report): totals plus the full query set as JSON — cache-status split, top dynamic paths, firewall events per rule, and (from v1.14) the top 50 client IPs with their ASN and the top 50 IPs stopped at the edge | Hourly: `archive.hourly_retention_days` (default 400, min 30); daily: forever |
 | `faces` | First and last time each UA / ASN appeared in any Top list, and its peak count | Forever |
 | `alerts` | Every message-producing decision: window, decision, fingerprint, findings | Forever |
 | `block_events` | Audit log of [blocking](blocking.md): block, unblock, expire | Forever |
 | `rule_backups`, `rule_changes` | Snapshots and audit log of the [rule-change module](rules.md) | Forever |
 | `calibration_days` | Per-day [calibration](#calibration) measurements | Forever |
 
-Each intraday round writes the current window (with three extra queries for the breakdowns) and the baseline window — the baseline only if it is not archived yet, so a fuller copy is never overwritten. Old hourly snapshots are pruned each round. Archive read/write errors are logged and never stop the watch.
+Each intraday round writes the current window (with five extra queries for the breakdowns: cache status, dynamic paths, firewall events, client IPs, IPs stopped at the edge) and the baseline window — the baseline only if it is not archived yet, so a fuller copy is never overwritten. Old hourly snapshots are pruned each round. Archive read/write errors are logged and never stop the watch.
 
 ## What it is used for
 

@@ -893,6 +893,10 @@ func (r *Runner) faceHistory(zone config.Zone, fs []analyze.Finding) (map[string
 // window is stored only if absent (it was yesterday's current window, and
 // a poorer copy must not overwrite a richer one). Archive failures are
 // logged, never fatal: the watch matters more than the history.
+// archiveIPs is how many client IPs each archived hour keeps (all
+// requests, and stopped at the edge).
+const archiveIPs = 50
+
 func (r *Runner) archiveRound(ctx context.Context, zone config.Zone, w, bw schedule.Window, cur, base analyze.Metrics) *store.Snapshot {
 	if r.Store == nil {
 		return nil
@@ -909,6 +913,16 @@ func (r *Runner) archiveRound(ctx context.Context, zone config.Zone, w, bw sched
 	logErr("cache status", err)
 	snap.DynamicPaths, err = r.API.Top(ctx, z, w.From, w.To, cfapi.DimPath, 10, cfapi.Filter{CacheStatus: "dynamic"})
 	logErr("dynamic paths", err)
+	// Client IPs for the console's IP board: who keeps hitting, hour by
+	// hour. A failure leaves the hour without IPs (shown as a gap).
+	ipDim := cfapi.DimClientIP
+	if r.Caps(ctx, zone).HasDim(cfapi.DimASN) {
+		ipDim = cfapi.DimClientIPASN
+	}
+	snap.TopIPs, err = r.API.Top(ctx, z, w.From, w.To, ipDim, archiveIPs, cfapi.Filter{})
+	logErr("top IPs", err)
+	snap.BlockedIPs, err = r.API.Top(ctx, z, w.From, w.To, cfapi.DimClientIP, archiveIPs, cfapi.EdgeBlocked())
+	logErr("blocked IPs", err)
 	if r.Caps(ctx, zone).FirewallEnabled {
 		snap.Firewall, err = r.API.FirewallByRule(ctx, z, w.From, w.To, 25)
 		snap.FirewallNA = err != nil

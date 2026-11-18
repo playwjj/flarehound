@@ -23,7 +23,7 @@ func (k *knockAnalytics) Count(_ context.Context, _ string, _, _ time.Time, fl c
 	if k.err != nil {
 		return 0, k.err
 	}
-	if fl != blockedFilter() {
+	if fl != cfapi.EdgeBlocked() {
 		return 0, errors.New("blocked board must filter on edge 403 without origin response")
 	}
 	return 1000, nil
@@ -33,7 +33,7 @@ func (k *knockAnalytics) Top(_ context.Context, _ string, _, _ time.Time, dim st
 	if k.err != nil {
 		return nil, k.err
 	}
-	if fl != blockedFilter() {
+	if fl != cfapi.EdgeBlocked() {
 		return nil, errors.New("blocked board must filter on edge 403 without origin response")
 	}
 	switch dim {

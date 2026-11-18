@@ -9,6 +9,7 @@ package console
 import (
 	"context"
 	"net/http"
+	"net/netip"
 	"sort"
 	"strconv"
 	"strings"
@@ -80,6 +81,9 @@ func drillFilter(dim, name string) (cfapi.Filter, bool) {
 	case DimASN:
 		n, err := strconv.Atoi(strings.TrimPrefix(strings.ToUpper(name), "AS"))
 		return cfapi.Filter{ASN: n}, err == nil && n > 0
+	case DimIP:
+		a, err := netip.ParseAddr(name)
+		return cfapi.Filter{ClientIP: name}, err == nil && a.Zone() == "" && !a.Is4In6() && a.String() == name
 	case DimPath:
 		// Movers' paths are uncached requests (the expensive part).
 		ok := strings.HasPrefix(name, "/") && !strings.ContainsAny(name, "%")
@@ -98,8 +102,10 @@ func breakdownsFor(dim string) []breakdown {
 	cache := breakdown{"drill_cache", cfapi.DimCacheStatus, "", ""}
 	uas := breakdown{"drill_uas", cfapi.DimUserAgent, DimUA, ""}
 	asns := breakdown{"drill_asns", cfapi.DimASN, DimASN, ""}
-	ips := breakdown{"drill_ips", cfapi.DimClientIP, "", "ip"}
+	ips := breakdown{"drill_ips", cfapi.DimClientIP, DimIP, "ip"}
 	switch dim {
+	case DimIP: // one address: what it asks for and how it presents itself
+		return []breakdown{paths, status, cache, uas}
 	case DimUA:
 		return []breakdown{paths, status, cache, asns, ips}
 	case DimASN:
@@ -231,6 +237,9 @@ func (s *Server) drillPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := page{Title: s.L(r).t("drill_title"), Zone: z, Nav: "movers", Dim: dim}
+	if dim == DimIP {
+		p.Nav = "ips"
+	}
 	if s.Analytics == nil {
 		p.Err = s.L(r).t("drill_off")
 		s.render(w, r, http.StatusOK, "drill", p)

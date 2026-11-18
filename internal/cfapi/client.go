@@ -256,13 +256,32 @@ const (
 	DimPath        = "clientRequestPath"
 	DimCacheStatus = "cacheStatus"
 	DimClientIP    = "clientIP"
+	// DimClientIPASN groups by address and network together: one row per
+	// address (an address belongs to one network), Name the address and
+	// ASN its network. Plans without the ASN dimension reject it.
+	DimClientIPASN = "clientIP clientAsn"
 )
+
+// EdgeBlocked selects requests stopped at the edge: 403 and never sent
+// to the origin (originResponseStatus 0), so a 403 the origin itself
+// returned is not counted.
+func EdgeBlocked() Filter { return Filter{EdgeStatus: 403, OriginStatusTo: 1} }
 
 // Top returns the Top-N groups of one dimension, ordered by count.
 func (c *Client) Top(ctx context.Context, zoneID string, from, to time.Time, dim string, limit int, f Filter) ([]Face, error) {
 	rows, err := c.zoneRows(ctx, zoneID, "httpRequestsAdaptiveGroups", "count dimensions{"+dim+"}", limit, true, f.render(from, to))
 	if err != nil {
 		return nil, err
+	}
+	if dim == DimClientIPASN {
+		out := make([]Face, 0, len(rows))
+		for _, r := range rows {
+			f := Face{Name: fmt.Sprint(r.Dimensions[DimClientIP]), Count: r.Count}
+			f.ASN, _ = asnOf(r.Dimensions[DimASN])
+			out = append(out, f)
+		}
+		sort.SliceStable(out, func(i, j int) bool { return out[i].Count > out[j].Count })
+		return out, nil
 	}
 	return faces(rows, dim), nil
 }

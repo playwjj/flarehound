@@ -128,6 +128,8 @@ type Server struct {
 	drillCache   map[string]*drillEntry
 	blockedMu    sync.Mutex
 	blockedCache map[string]*blockedEntry
+	ipMu         sync.Mutex
+	ipCache      map[string]*ipEntry
 	attemptsWG   sync.WaitGroup // background attempt queries (tests wait on it)
 }
 
@@ -144,7 +146,7 @@ func New(cfg *config.Config, db *DB, arch Archive, auditor Auditor, version stri
 		trusted: cfg.TrustedProxies(), defLang: lang(cfg.Report.Language), limiter: newLimiter(10, time.Minute), totpAcct: newLimiter(20, time.Hour), totpSess: newLimiter(5, preMFATTL),
 		auditCache: map[string]auditEntry{}, attemptsCache: map[string]attemptsEntry{}, attemptsBusy: map[string]bool{},
 		liveCache: map[string]*liveEntry{}, drillCache: map[string]*drillEntry{}, rulesCache: map[string]rulesEntry{},
-		blockedCache: map[string]*blockedEntry{}}
+		blockedCache: map[string]*blockedEntry{}, ipCache: map[string]*ipEntry{}}
 	s.OAuth = builtinProviders(cfg.Console)
 	s.reviewKey = make([]byte, 32)
 	if _, err := rand.Read(s.reviewKey); err != nil {
@@ -293,6 +295,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /movers", user(s.viewPage(viewMovers)))
 	mux.Handle("GET /faces", user(s.facesPage))
 	mux.Handle("GET /movers/drill", user(s.drillPage))
+	mux.Handle("GET /ips", user(s.ipsPage))
 	mux.Handle("GET /history", user(s.viewPage(viewHistory)))
 	mux.Handle("GET /audit", user(s.auditPage))
 	mux.Handle("POST /audit/run", user(s.auditRun))

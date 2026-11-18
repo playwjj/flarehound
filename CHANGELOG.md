@@ -2,6 +2,15 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.14.0 — 2026-11-19
+
+- **IP board** (new console tab *IPs*): which client addresses keep hitting the zone, at a glance.
+  - **Last 60 minutes** live, or **24 h** from the archive — the watch now keeps each hour's top 50 client IPs (with their ASN) and top 50 IPs stopped at the edge (two extra queries per round). The 24 h view fills in from the first hour after upgrading; until then it says so and points at the live hour.
+  - Per address: requests, share of the zone, **hours present** out of 24 with an hour strip, the share stopped at the edge, the network, and *block…* into the usual IP block flow (*blocked by FlareHound* when an active IP block already covers it). Ranked by persistence by default, or by requests.
+  - IPv6 is summed per /64 (clients rotate inside one); a /64 links straight to a CIDR block.
+  - Big crawlers do not crowd it: ranking single addresses already plays them down (they spread over thousands of addresses); addresses in networks you marked known are folded at the bottom with their total; crawler networks (Googlebot, Bingbot, …) are labelled but never folded, since the same network carries other traffic (AS8075 is Bingbot and Azure alike).
+- **Drill-down by IP**: any single address (from the IP board, or the client-IP list of another drill-down) breaks down into its paths, status codes, cache status and user agents.
+
 ## v1.13.1 — 2026-11-18
 
 - **Client IPs in the drill-down.** Every drill-down (user agent, ASN, uncached path) gains a client-IP breakdown — top 10, share of the entry, same hour yesterday — with a *block…* link per address into the usual confirmed IP block flow (guard rails unchanged). One line reads it: an address carrying ≥ 30 % of the entry says blocking that IP stops most of it; none reaching 1 % says the sources are dispersed and per-IP blocking will not help — the alerts' own rule. Until now client IPs reached only the alert notifications.

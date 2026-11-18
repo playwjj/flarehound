@@ -94,7 +94,12 @@ func (f *fakeAPI) Top(_ context.Context, _ string, from, _ time.Time, dim string
 	case cfapi.DimCacheStatus:
 		return []cfapi.Face{{Name: "dynamic", Count: w.dynamic}, {Name: "hit", Count: w.total - w.dynamic}}, nil
 	case cfapi.DimClientIP:
+		if flt == cfapi.EdgeBlocked() {
+			return []cfapi.Face{{Name: "45.13.7.7", Count: 120}}, nil
+		}
 		return []cfapi.Face{{Name: "45.13.7.7", Count: 300}, {Name: "45.13.7.9", Count: 200}}, nil
+	case cfapi.DimClientIPASN:
+		return []cfapi.Face{{Name: "45.13.7.7", ASN: 207990, Count: 300}, {Name: "45.13.7.9", ASN: 207990, Count: 200}}, nil
 	case cfapi.DimPath:
 		return []cfapi.Face{{Name: "/rank", Count: w.dynamic / 2}}, nil
 	}
@@ -387,9 +392,15 @@ func TestLongBaselineSuppressesOddYesterday(t *testing.T) {
 	if len(out.msgs) != 0 {
 		t.Fatalf("long baseline did not suppress the odd-yesterday alarm:\n%s", out.msgs[0])
 	}
-	// The round itself was archived, baseline window included.
-	if _, ok, _ := st.Snapshot(zone.ZoneID, store.Hour, from); !ok {
+	// The round itself was archived, baseline window included, with the
+	// hour's client IPs (and their network) for the console's IP board.
+	snap, ok, _ := st.Snapshot(zone.ZoneID, store.Hour, from)
+	if !ok {
 		t.Fatal("current window not archived")
+	}
+	if len(snap.TopIPs) != 2 || snap.TopIPs[0].Name != "45.13.7.7" || snap.TopIPs[0].ASN != 207990 ||
+		len(snap.BlockedIPs) != 1 || snap.BlockedIPs[0].Count != 120 {
+		t.Fatalf("archived IPs: top %+v blocked %+v", snap.TopIPs, snap.BlockedIPs)
 	}
 	if _, ok, _ := st.Snapshot(zone.ZoneID, store.Hour, from.Add(-24*time.Hour)); !ok {
 		t.Fatal("baseline window not archived")

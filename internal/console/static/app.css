@@ -87,6 +87,11 @@ table.list th { text-align: left; font-weight: 600; color: var(--muted); font-si
 table.list th.r { text-align: right; }
 table.list td { border-bottom: 1px solid var(--line); padding: .45rem .4rem; vertical-align: top; }
 td.name { word-break: break-all; min-width: 10rem; }
+.strip { display: inline-flex; gap: 1px; vertical-align: middle; }
+.strip i { width: 4px; height: 12px; border-radius: 1px; background: var(--line); }
+.strip i.on { background: var(--accent); }
+details.known-ips { margin-top: .8rem; }
+details.known-ips summary { cursor: pointer; color: var(--muted); font-size: .88rem; }
 table.faces td.name { word-break: normal; overflow-wrap: anywhere; }
 table.faces td.share { position: relative; width: 5.5rem; white-space: nowrap; }
 table.faces td.share .bar { position: absolute; right: .4rem; bottom: .2rem; height: 3px; max-width: calc(100% - .8rem); border-radius: 2px; background: var(--accent); opacity: .45; }

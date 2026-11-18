@@ -59,6 +59,7 @@ type page struct {
 	Chart       template.HTML
 	Movers      *Movers
 	Blocked     *Blocked
+	IPs         *IPBoard
 	Trend       template.HTML
 	Dim         string
 	Faces       *NewFaces

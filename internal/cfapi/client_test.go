@@ -83,6 +83,23 @@ func TestTopQuotesUntrustedStrings(t *testing.T) {
 	}
 }
 
+func TestTopIPWithASN(t *testing.T) {
+	var q string
+	c := server(t, `{"data":{"viewer":{"zones":[{"httpRequestsAdaptiveGroups":[
+		{"count":5,"dimensions":{"clientIP":"2001:db8::1","clientAsn":"15169"}},
+		{"count":9,"dimensions":{"clientIP":"203.0.113.7","clientAsn":"45102"}}]}]}}}`, &q)
+	got, err := c.Top(context.Background(), "zone", from, to, DimClientIPASN, 50, EdgeBlocked())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(q, "dimensions{clientIP clientAsn}") || !strings.Contains(q, "edgeResponseStatus:403") {
+		t.Errorf("query: %s", q)
+	}
+	if len(got) != 2 || got[0] != (Face{Name: "203.0.113.7", ASN: 45102, Count: 9}) || got[1].Name != "2001:db8::1" || got[1].ASN != 15169 {
+		t.Fatalf("faces = %+v", got)
+	}
+}
+
 func TestWorkerStats(t *testing.T) {
 	c := server(t, `{"data":{"viewer":{"accounts":[{"workersInvocationsAdaptive":[
 		{"sum":{"requests":1000},"quantiles":{"cpuTimeP50":4000}}]}]}}}`, nil)

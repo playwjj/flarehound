@@ -329,8 +329,50 @@
 {{end}}
 <p class="note">{{t "drill_note"}}</p>
 {{else}}<section class="card"><p>{{.Err}}</p></section>{{end}}
-<p><a href="/movers?z={{zq .Zone}}&amp;dim={{.Dim}}">← {{t "nav_movers"}}</a></p>
+<p>{{if eq .Dim "ip"}}<a href="/ips?z={{zq .Zone}}">← {{t "nav_ips"}}</a>{{else}}<a href="/movers?z={{zq .Zone}}&amp;dim={{.Dim}}">← {{t "nav_movers"}}</a>{{end}}</p>
 {{template "foot" .}}{{end}}
+
+{{define "ips"}}{{template "head" .}}
+{{$z := .Zone}}{{$zq := zq .Zone}}{{$can := .CanWrite}}
+{{with .IPs}}{{$day := eq .Span "24h"}}
+<nav class="seg">
+  <a href="/ips?z={{$zq}}&amp;span=1h"{{if not $day}} class="on"{{end}}>{{t "ips_hour"}}</a>
+  <a href="/ips?z={{$zq}}"{{if $day}} class="on"{{end}}>24 h</a>
+</nav>
+{{if .Err}}<div class="banner err">{{t "liveq_err"}} <small>{{short .Err 200}}</small></div>
+{{else if and $day (not .Hours)}}<section class="card"><p>{{t "ips_none_yet"}}</p></section>
+{{else}}
+<section class="card">
+<h2>{{t "nav_ips"}} <span class="muted">{{if $day}}{{when .From}} – {{when .To}}{{else}}{{hm .From}}–{{hm .To}}{{end}}</span>{{if not $day}} <span class="tag">{{t "unsettled"}}</span>{{end}}</h2>
+<p class="note">{{if $day}}{{tf "ips_day_note" .Hours}}{{if lt .Hours 24}} {{tf "ips_since" (when .Since)}}{{end}}{{else}}{{t "ips_hour_note"}}{{end}}</p>
+{{if $day}}<nav class="seg">
+  <a href="/ips?z={{$zq}}"{{if .SortHours}} class="on"{{end}}>{{t "ips_sort_hours"}}</a>
+  <a href="/ips?z={{$zq}}&amp;sort=count"{{if not .SortHours}} class="on"{{end}}>{{t "ips_sort_count"}}</a>
+</nav>{{end}}
+{{if not .Rows}}<p class="muted">{{t "none"}}</p>{{else}}
+{{template "iprows" (list $ . .Rows $day)}}
+{{end}}
+{{if .Known}}<details class="known-ips"><summary>{{tf "ips_known" (len .Known) (num .KnownSum)}}</summary>
+{{template "iprows" (list $ . .Known $day)}}
+</details>{{end}}
+<p class="legend">{{t "ips_legend"}}</p>
+</section>
+{{end}}
+{{end}}
+{{template "foot" .}}{{end}}
+
+{{define "iprows"}}{{$p := index . 0}}{{$b := index . 1}}{{$day := index . 3}}{{$z := $p.Zone}}
+<table class="list rsp ips">
+<thead><tr><th>{{t "ip"}}</th><th class="r">{{t "requests"}}</th><th class="r">{{t "share"}}</th>{{if $day}}<th>{{t "ips_hours"}}</th>{{end}}<th class="r">{{t "ips_blocked"}}</th></tr></thead>
+<tbody>{{range index . 2}}<tr>
+  <td class="name" data-label="{{t "ip"}}">{{if .Drill}}<a class="mono" href="/movers/drill?z={{$z.Name}}&amp;dim=ip&amp;name={{.Name}}">{{.Name}}</a>{{else}}<span class="mono">{{.Name}}</span>{{end}}{{if .Members}} <span class="muted">{{tf "ips_members" .Members}}</span>{{end}}
+  {{if .ASN}}<br><small><span class="mono">AS{{.ASN}}</span>{{template "asninfo" (list (printf "AS%d" .ASN) false "")}}</small>{{end}}
+  {{if .Crawler}} <span class="tag" title="{{t "ips_crawler_hint"}}">{{tf "ips_crawler" .Crawler}}</span>{{end}}{{if .Listed}} <span class="tag cover">{{t "ips_listed"}}</span>{{else}}{{template "blocklink" (list "ip" .Name $z.Name "IP board" $p.CanWrite)}}{{end}}{{if and .ASN (not .Known)}}{{template "knownbtn" (list "asn" (printf "AS%d" .ASN) $p.Req.CSRF $p.CanSettings $p.Here)}}{{end}}</td>
+  <td class="r" data-label="{{t "requests"}}">{{num .Count}}</td>
+  <td class="r" data-label="{{t "share"}}">{{printf "%.1f%%" .Share}}</td>
+  {{if $day}}<td data-label="{{t "ips_hours"}}"><span class="strip" title="{{tf "ips_hours_of" .Hours $b.Hours}}">{{range .Strip}}<i{{if .}} class="on"{{end}}></i>{{end}}</span> <small>{{.Hours}}/{{$b.Hours}}</small></td>{{end}}
+  <td class="r" data-label="{{t "ips_blocked"}}">{{if .Blocked}}{{printf "%.0f%%" .BlockPct}}{{else}}<span class="muted">—</span>{{end}}</td>
+</tr>{{end}}</tbody></table>{{end}}
 
 {{define "attention"}}{{template "head" .}}
 <section class="card"><h1>{{t "attention_title"}}</h1><p class="note">{{t "attention_note"}}</p></section>
