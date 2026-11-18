@@ -330,7 +330,7 @@ func doctorConsole(d *doctorOut, cfg *config.Config, now time.Time) {
 		}
 	}
 	if cfg.Notify.Email != nil && cs.BaseURL != "" && !cs.ProxyAuth.DisableLogin {
-		d.ok("password reset by e-mail available (through notify.email's SMTP server)")
+		d.ok("password reset by e-mail available (through notify.email)")
 	} else {
 		d.warn("password reset by e-mail off (needs notify.email and console.base_url): admins reset passwords, or `flarehound console reset-password`")
 	}

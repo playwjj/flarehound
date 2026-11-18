@@ -8,7 +8,7 @@
 
 Cloudflare gives you data. FlareHound gives you the conclusion.
 
-> Status: **v1.11** — per-zone WAF audit coverage; cross-zone home, block verdicts in the daily report, rule-covered faces marked, audit/rule snapshots; settings in the console (notifications with test sends, alert lines with a replay preview, known faces, network names); console in English or Chinese; WAF basics, rule recipes and plain-words rules; live hour and movers drill-down; web console with in-console blocking, undo, before/after, read-only snapshots and Google / GitHub sign-in. Documentation: **https://playwjj.github.io/flarehound/** · Changelog: [CHANGELOG.md](CHANGELOG.md)
+> Status: **v1.12** — e-mail over HTTPS (Resend) where SMTP is blocked; per-zone WAF audit coverage; cross-zone home, block verdicts in the daily report, rule-covered faces marked, audit/rule snapshots; settings in the console (notifications with test sends, alert lines with a replay preview, known faces, network names); console in English or Chinese; WAF basics, rule recipes and plain-words rules; live hour and movers drill-down; web console with in-console blocking, undo, before/after, read-only snapshots and Google / GitHub sign-in. Documentation: **https://playwjj.github.io/flarehound/** · Changelog: [CHANGELOG.md](CHANGELOG.md)
 >
 > **Direction:** FlareHound is growing a built-in web console — live movers (who is up, who is down), new-face tracking, history against the long-term baseline, the WAF audit, and in-console blocking with per-account audit — landing in v1.3–v1.5. Notifications become the alerting layer that brings you to the console. See the [web console revision note](docs/web-console-revision.md).
 >
@@ -47,7 +47,7 @@ export CF_API_TOKEN=...
 ```
 
 4. Point `notify.webhook_url_env` at an environment variable holding any endpoint that accepts a JSON POST (Telegram/Slack/Discord bridges included), or configure the Telegram bot.
-   Native channels (v0.8): **Slack**, **Discord**, **WeCom** (企业微信), **Feishu/Lark** (飞书, optional signing secret) and **email** (SMTP with STARTTLS or TLS) — set `notify.slack_webhook_url_env`, `discord_webhook_url_env`, `wecom_webhook_url_env`, `feishu_webhook_url_env` (+ `feishu_secret_env`), or a `notify.email` block; every URL and password comes from an environment variable. Long reports are split to each service's size limit, and bot errors returned inside an HTTP 200 count as failures (retried, then queued).
+   Native channels (v0.8): **Slack**, **Discord**, **WeCom** (企业微信), **Feishu/Lark** (飞书, optional signing secret) and **email** (SMTP with STARTTLS or TLS, or Resend's HTTPS API where SMTP ports are blocked) — set `notify.slack_webhook_url_env`, `discord_webhook_url_env`, `wecom_webhook_url_env`, `feishu_webhook_url_env` (+ `feishu_secret_env`), or a `notify.email` block; every URL and password comes from an environment variable. Long reports are split to each service's size limit, and bot errors returned inside an HTTP 200 count as failures (retried, then queued).
    To feed alerts into your own tooling instead, set `notify.jsonl_file` (e.g. `data/alerts.jsonl`): every message is appended as one JSON line with `kind`, `zone`, `decision`, the window, the fired `rules` and the `text`.
 5. Pick the report language: `"report": {"language": "en"}` or `"zh"` (Chinese).
 

@@ -163,8 +163,13 @@ type Notify struct {
 	HeartbeatURLEnv string `json:"heartbeat_url_env"`
 }
 
-// EmailConfig is the SMTP channel. The password comes from PasswordEnv.
+// EmailConfig is the e-mail channel. Provider "smtp" (default) sends
+// through Host; "resend" posts to Resend's HTTPS API (for hosts whose
+// outbound SMTP ports are blocked), its key from APIKeyEnv. The SMTP
+// password comes from PasswordEnv.
 type EmailConfig struct {
+	Provider    string   `json:"provider,omitempty"` // smtp (default) | resend
+	APIKeyEnv   string   `json:"api_key_env,omitempty"`
 	Host        string   `json:"smtp_host"`
 	Port        int      `json:"smtp_port"`
 	TLS         string   `json:"tls"` // starttls (default) | tls | none
@@ -174,7 +179,8 @@ type EmailConfig struct {
 	To          []string `json:"to"`
 }
 
-// Channels holds the resolved channel secrets.
+// Channels holds the resolved channel secrets. EmailPassword is the SMTP
+// password, or the API key for an HTTP provider.
 type Channels struct {
 	Slack, Discord, WeCom, Feishu, FeishuSecret, EmailPassword string
 }
@@ -431,19 +437,32 @@ func (c *Config) resolve() error {
 		}
 	}
 	if e := n.Email; e != nil {
-		if e.Host == "" || e.From == "" || len(e.To) == 0 {
-			return fmt.Errorf("config: notify.email needs smtp_host, from and at least one to")
-		}
-		switch e.TLS {
-		case "", "starttls", "tls", "none":
-		default:
-			return fmt.Errorf("config: notify.email.tls must be starttls, tls or none")
-		}
-		if e.Username != "" {
-			c.Chan.EmailPassword = env(e.PasswordEnv)
-			if c.Chan.EmailPassword == "" && !c.notifyOptional {
-				return fmt.Errorf("config: notify.email.password_env must name a non-empty environment variable when username is set")
+		switch e.Provider {
+		case "", "smtp":
+			if e.Host == "" || e.From == "" || len(e.To) == 0 {
+				return fmt.Errorf("config: notify.email needs smtp_host, from and at least one to")
 			}
+			switch e.TLS {
+			case "", "starttls", "tls", "none":
+			default:
+				return fmt.Errorf("config: notify.email.tls must be starttls, tls or none")
+			}
+			if e.Username != "" {
+				c.Chan.EmailPassword = env(e.PasswordEnv)
+				if c.Chan.EmailPassword == "" && !c.notifyOptional {
+					return fmt.Errorf("config: notify.email.password_env must name a non-empty environment variable when username is set")
+				}
+			}
+		case "resend":
+			if e.From == "" || len(e.To) == 0 {
+				return fmt.Errorf("config: notify.email needs from and at least one to")
+			}
+			c.Chan.EmailPassword = env(e.APIKeyEnv)
+			if c.Chan.EmailPassword == "" && !c.notifyOptional {
+				return fmt.Errorf("config: notify.email.api_key_env must name a non-empty environment variable for provider resend")
+			}
+		default:
+			return fmt.Errorf("config: notify.email.provider must be smtp or resend")
 		}
 	}
 

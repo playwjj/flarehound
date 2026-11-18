@@ -264,9 +264,13 @@ func (f Feishu) Send(ctx context.Context, m Message) error {
 	return nil
 }
 
-// ---- Email (SMTP) ----
+// ---- Email (SMTP or Resend's HTTP API) ----
 
 type Email struct {
+	// Provider: "smtp" (default) or "resend". With resend, Password is
+	// the API key and Host/Port/TLS/Username are unused.
+	Provider string
+	APIURL   string // resend endpoint override (tests); default ResendURL
 	Host     string
 	Port     int
 	Username string
@@ -342,6 +346,9 @@ func (e Email) BuildMail(m Message, now time.Time) []byte {
 }
 
 func (e Email) Send(ctx context.Context, m Message) error {
+	if strings.EqualFold(e.Provider, "resend") {
+		return e.sendResend(ctx, m)
+	}
 	if len(e.To) == 0 || e.From == "" || e.Host == "" {
 		return errors.New("email: host, from and to are required")
 	}
@@ -411,4 +418,82 @@ func (e Email) Send(ctx context.Context, m Message) error {
 		return fmt.Errorf("email: %w", err)
 	}
 	return c.Quit()
+}
+
+// ResendURL is Resend's send endpoint.
+const ResendURL = "https://api.resend.com/emails"
+
+// sendResend posts the message to Resend's HTTPS API: plain text, the HTML
+// rendering when there is one, and the charts as inline attachments
+// referenced by cid: as in BuildMail. Errors never contain the key.
+func (e Email) sendResend(ctx context.Context, m Message) error {
+	if len(e.To) == 0 || e.From == "" {
+		return errors.New("email: from and to are required")
+	}
+	if e.Password == "" {
+		return errors.New("email: resend needs an API key")
+	}
+	type attachment struct {
+		Content     string `json:"content"`
+		Filename    string `json:"filename"`
+		ContentType string `json:"content_type,omitempty"`
+		ContentID   string `json:"content_id,omitempty"`
+	}
+	payload := struct {
+		From        string            `json:"from"`
+		To          []string          `json:"to"`
+		Subject     string            `json:"subject"`
+		Text        string            `json:"text"`
+		HTML        string            `json:"html,omitempty"`
+		Headers     map[string]string `json:"headers,omitempty"`
+		Attachments []attachment      `json:"attachments,omitempty"`
+	}{From: e.From, To: e.To, Subject: subject(m), Text: m.body(), HTML: m.HTML}
+	if m.Kind != "" {
+		payload.Headers = map[string]string{"X-FlareHound-Kind": m.Kind}
+	}
+	if m.HTML != "" {
+		for _, img := range m.Images {
+			payload.Attachments = append(payload.Attachments, attachment{Content: base64.StdEncoding.EncodeToString(img.PNG),
+				Filename: img.Name + ".png", ContentType: "image/png", ContentID: img.Name})
+		}
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	endpoint := e.APIURL
+	if endpoint == "" {
+		endpoint = ResendURL
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(raw))
+	if err != nil {
+		return errors.New("email: invalid endpoint URL")
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+e.Password)
+	resp, err := client.Do(req)
+	if err != nil {
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			return fmt.Errorf("email: resend: request failed: %v", ue.Err)
+		}
+		return errors.New("email: resend: request failed")
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if resp.StatusCode/100 != 2 {
+		var r struct {
+			Name    string `json:"name"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(body, &r) == nil && r.Message != "" {
+			msg := r.Message
+			if len(msg) > 200 {
+				msg = msg[:200] + "…"
+			}
+			return fmt.Errorf("email: resend: HTTP %d: %s", resp.StatusCode, msg)
+		}
+		return fmt.Errorf("email: resend: HTTP %d", resp.StatusCode)
+	}
+	return nil
 }

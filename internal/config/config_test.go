@@ -100,6 +100,25 @@ func TestChannelSecrets(t *testing.T) {
 	if _, err := Load(write(t, `{"cloudflare":{"zones":[`+zone+`]},"notify":{"email":{"smtp_host":"h","from":"a@b","to":["c@d"],"username":"u"}}}`)); err == nil {
 		t.Fatal("email username without password accepted")
 	}
+	// Resend: no SMTP host needed, the API key is required and redacted.
+	if _, err := Load(write(t, `{"cloudflare":{"zones":[`+zone+`]},"notify":{"email":{"provider":"resend","from":"a@b","to":["c@d"]}}}`)); err == nil {
+		t.Fatal("resend without api_key_env accepted")
+	}
+	if _, err := Load(write(t, `{"cloudflare":{"zones":[`+zone+`]},"notify":{"email":{"provider":"sendgrid","smtp_host":"h","from":"a@b","to":["c@d"]}}}`)); err == nil {
+		t.Fatal("unknown provider accepted")
+	}
+	t.Setenv("RESEND_API_KEY", "re_test_key")
+	c, err = Load(write(t, `{"cloudflare":{"zones":[`+zone+`]},"notify":{"email":{"provider":"resend","api_key_env":"RESEND_API_KEY","from":"a@b","to":["c@d"]}}}`))
+	if err != nil || c.Chan.EmailPassword != "re_test_key" {
+		t.Fatalf("resend: %v %q", err, c.Chan.EmailPassword)
+	}
+	found = false
+	for _, s := range c.Secrets() {
+		found = found || s == "re_test_key"
+	}
+	if !found {
+		t.Fatal("resend API key must be redacted from logs")
+	}
 }
 
 func TestZoneAudit(t *testing.T) {

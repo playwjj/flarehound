@@ -132,7 +132,7 @@ Every change shows the exact difference and, for alert lines, a **replay of the 
 - **Sessions** are server-side and revocable: users see and end their own; admins can sign anyone out or disable an account (which ends its sessions).
 - **Audit log**: sign-ins, failures, password and 2FA changes, account administration and audit re-runs, with account and IP — on the Users page.
 
-**Forgot your password?** With `notify.email` (the SMTP settings used for notifications) and `console.base_url` configured, the sign-in page offers a reset by e-mail: a single-use link valid for 30 minutes goes to the address on the account. The page answers the same whether or not the account exists; at most one mail per account every 10 minutes. A reset ends every session of the account and does not bypass two-factor sign-in. Without SMTP, an admin resets the password (Users page), or use the local commands below.
+**Forgot your password?** With `notify.email` (the e-mail settings used for notifications, SMTP or Resend) and `console.base_url` configured, the sign-in page offers a reset by e-mail: a single-use link valid for 30 minutes goes to the address on the account. The page answers the same whether or not the account exists; at most one mail per account every 10 minutes. A reset ends every session of the account and does not bypass two-factor sign-in. Without e-mail, an admin resets the password (Users page), or use the local commands below.
 
 Local recovery (on the machine, no web sign-in needed):
 

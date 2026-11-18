@@ -17,6 +17,7 @@ FlareHound logs to stderr; in Docker use `docker compose logs -f flarehound`. Se
 | `notify.slack_webhook_url_env names X, but that environment variable is empty` | Set the variable (inside the container) or remove the key. Same for Discord, WeCom, Feishu. |
 | `notify.email needs smtp_host, from and at least one to` | Complete the `email` block. |
 | `notify.email.password_env must name a non-empty environment variable when username is set` | Set the password variable. |
+| `notify.email.api_key_env must name a non-empty environment variable for provider resend` | Set the Resend API key variable. |
 | `blocking.write_token_env must differ from cloudflare.api_token_env` | Keep the two tokens in different variables. |
 | `archive.hourly_retention_days must be >= 30` | The long baseline needs 28 days. |
 | `warning: no notification channel configured` | Not an error: findings only go to the log. Configure a [channel](channels.md). |
@@ -34,7 +35,7 @@ FlareHound logs to stderr; in Docker use `docker compose logs -f flarehound`. Se
 - **`window … already evaluated, skipping`** — each window is evaluated once; a restart or an earlier `-once` run already did it. `-dry-run` runs do not count: they print instead of sending and leave no trace (no state file write, no alert history), so the real run that follows still evaluates the window.
 - **Delivery failures** — failed messages are queued in `data/outbox.json` and re-sent next round with `[delayed]`; messages older than 48 hours are dropped with a log line. Check the logged error (`HTTP 4xx`, `wecom errcode …`, `feishu code …`, `email: …`).
 - **Telegram** sends only when both the token variable and `telegram_chat_id` are set; a webhook or Telegram variable that is empty silently leaves that channel off.
-- **Email** — `server does not offer STARTTLS`: use `"tls": "tls"` (port 465) or, for a local relay only, `"none"`. Credentials are never sent over `none`.
+- **Email** — `server does not offer STARTTLS`: use `"tls": "tls"` (port 465) or, for a local relay only, `"none"`. Credentials are never sent over `none`. `connect: … i/o timeout` usually means the host blocks outbound SMTP — switch to `"provider": "resend"` (HTTPS).
 
 ## Numbers look wrong
 

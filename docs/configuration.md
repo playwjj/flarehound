@@ -115,7 +115,7 @@ All channels are optional and can be combined; with none configured, findings ap
 | `notify.wecom_webhook_url_env` | string | `""` | Variable holding a WeCom (企业微信) group-bot URL. |
 | `notify.feishu_webhook_url_env` | string | `""` | Variable holding a Feishu / Lark custom-bot URL. |
 | `notify.feishu_secret_env` | string | `""` | Variable holding the Feishu signing secret (optional). |
-| `notify.email` | object | absent | SMTP channel; see below. |
+| `notify.email` | object | absent | E-mail channel (SMTP or Resend's HTTP API); see below. |
 
 For Slack, Discord, WeCom and Feishu, naming a variable that is empty is a startup error.
 
@@ -123,7 +123,9 @@ For Slack, Discord, WeCom and Feishu, naming a variable that is empty is a start
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `smtp_host` | string | — | **Required.** |
+| `provider` | string | `"smtp"` | `smtp`, or `resend` to send over HTTPS through [Resend](https://resend.com) (for hosts whose outbound SMTP ports are blocked). |
+| `api_key_env` | string | `""` | `resend` only, **required** there: variable holding the Resend API key. |
+| `smtp_host` | string | — | **Required** for `smtp`; unused by `resend` (as are `smtp_port`, `tls`, `username`, `password_env`). |
 | `smtp_port` | int | by `tls`: 587 / 465 / 25 | SMTP port. |
 | `tls` | string | `"starttls"` | `starttls`, `tls` (implicit TLS) or `none` (local relays only). |
 | `username` | string | `""` | SMTP user; when set, `password_env` must name a non-empty variable. |
@@ -212,4 +214,4 @@ Notifications (channel switches, non-secret parameters, variable names), `thresh
 |---|---|---|
 | `CF_API_TOKEN` | `cloudflare.api_token_env` | Watchdog and all commands |
 | `CF_WRITE_TOKEN` | `blocking.write_token_env` | `block`, `unblock`, `blocks`, `enforce`, `rules`, `ratelimit`, `cache` |
-| *(your names)* | `notify.*_env`, `notify.email.password_env` | Notification channels; `notify.heartbeat_url_env` for the heartbeat ping |
+| *(your names)* | `notify.*_env`, `notify.email.password_env` / `api_key_env` | Notification channels; `notify.heartbeat_url_env` for the heartbeat ping |

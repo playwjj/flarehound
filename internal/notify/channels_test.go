@@ -202,3 +202,56 @@ func TestEmail(t *testing.T) {
 		t.Fatalf("plaintext auth: %v", err)
 	}
 }
+
+func TestEmailResend(t *testing.T) {
+	type req struct {
+		auth string
+		body map[string]any
+	}
+	got := make(chan req, 1)
+	status := http.StatusOK
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var m map[string]any
+		_ = json.Unmarshal(raw, &m)
+		got <- req{r.Header.Get("Authorization"), m}
+		w.WriteHeader(status)
+		if status != http.StatusOK {
+			_, _ = w.Write([]byte(`{"statusCode":403,"name":"validation_error","message":"The example.com domain is not verified."}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"x"}`))
+	}))
+	t.Cleanup(srv.Close)
+	e := Email{Provider: "resend", APIURL: srv.URL, Password: "re_key", From: "FlareHound <fh@example.com>", To: []string{"ops@example.com"}}
+	m := Message{Kind: "daily", Text: "FlareHound · example.com — 日报\nline 2", HTML: `<img src="cid:traffic">`,
+		Images: []Image{{Name: "traffic", PNG: []byte("png")}}}
+	if err := e.Send(context.Background(), m); err != nil {
+		t.Fatal(err)
+	}
+	r := <-got
+	if r.auth != "Bearer re_key" || r.body["subject"] != "FlareHound · example.com — 日报" || r.body["text"] != m.Text || r.body["html"] != m.HTML {
+		t.Fatalf("request %+v", r)
+	}
+	if h, _ := r.body["headers"].(map[string]any); h["X-FlareHound-Kind"] != "daily" {
+		t.Fatalf("headers %v", r.body["headers"])
+	}
+	att, _ := r.body["attachments"].([]any)
+	if len(att) != 1 {
+		t.Fatalf("attachments %v", r.body["attachments"])
+	}
+	a := att[0].(map[string]any)
+	if a["content_id"] != "traffic" || a["content"] != base64.StdEncoding.EncodeToString([]byte("png")) || a["filename"] != "traffic.png" {
+		t.Fatalf("attachment %v", a)
+	}
+	// errors carry the API's message, never the key
+	status = http.StatusForbidden
+	err := e.Send(context.Background(), Message{Text: "x"})
+	<-got
+	if err == nil || !strings.Contains(err.Error(), "not verified") || strings.Contains(err.Error(), "re_key") {
+		t.Fatalf("error: %v", err)
+	}
+	if err := (Email{Provider: "resend", From: "a@b", To: []string{"c@d"}}).Send(context.Background(), Message{Text: "x"}); err == nil {
+		t.Fatal("resend without a key")
+	}
+}

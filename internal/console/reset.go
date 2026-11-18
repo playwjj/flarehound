@@ -2,7 +2,7 @@ package console
 
 // Password reset by e-mail (docs/web-console-revision.md §5.2): a single-
 // use link, valid 30 minutes, sent to the address on the account through
-// the SMTP settings already used for notifications. The request page
+// the e-mail settings already used for notifications. The request page
 // answers the same whether or not the account exists (no enumeration),
 // and the mail is sent in the background so timing does not tell either.
 // A reset ends every session of the account; it does not touch two-factor
@@ -27,8 +27,8 @@ const (
 // MailSender sends one plain-text message to one address.
 type MailSender func(ctx context.Context, to, subject, body string) error
 
-// SMTPSender sends through notify.email's SMTP settings.
-func SMTPSender(e notify.Email) MailSender {
+// EmailSender sends through notify.email's settings (SMTP or Resend).
+func EmailSender(e notify.Email) MailSender {
 	return func(ctx context.Context, to, subject, body string) error {
 		e.To = []string{to}
 		return e.Send(ctx, notify.Message{Kind: "password_reset", Text: subject + "\n\n" + body})

@@ -392,7 +392,7 @@
 - `daily`：日报固定检查点 `paths[]` 与记账假象 `artifacts[]`（第 7.4 节）；
 - `known_faces`：已知模式库 `asns[]` / `user_agents[]`（第 7.3、17 节）；
 - `report.language`：`en` / `zh`；
-- `notify`：渠道与端点（敏感值只写环境变量名，不写明文）：`webhook_url_env`、`telegram_bot_token_env` + `telegram_chat_id`、`jsonl_file`、`slack_webhook_url_env`、`discord_webhook_url_env`、`wecom_webhook_url_env`、`feishu_webhook_url_env` + `feishu_secret_env`、`email`（`smtp_host`、`smtp_port`、`tls`、`username`、`password_env`、`from`、`to[]`）；Slack / Discord / 企业微信 / 飞书配置了环境变量名但变量为空时启动即报错（通用 Webhook 与 Telegram 为空时只是不启用该渠道，以免示例配置里的变量名未设置就无法启动）；邮件配置了 `username` 时 `password_env` 必须非空；
+- `notify`：渠道与端点（敏感值只写环境变量名，不写明文）：`webhook_url_env`、`telegram_bot_token_env` + `telegram_chat_id`、`jsonl_file`、`slack_webhook_url_env`、`discord_webhook_url_env`、`wecom_webhook_url_env`、`feishu_webhook_url_env` + `feishu_secret_env`、`email`（`provider` = `smtp`（默认）| `resend`；SMTP：`smtp_host`、`smtp_port`、`tls`、`username`、`password_env`；Resend HTTPS API：`api_key_env`（必填）；共用 `from`、`to[]`）；Slack / Discord / 企业微信 / 飞书配置了环境变量名但变量为空时启动即报错（通用 Webhook 与 Telegram 为空时只是不启用该渠道，以免示例配置里的变量名未设置就无法启动）；邮件配置了 `username` 时 `password_env` 必须非空；
 - `schedule.max_parallel_zones`：同时巡检的 zone 数（默认 4，1–16）；
 - `rule_names`：防火墙规则 ID → 名称映射（第 11 节；有 WAF Read 时自动取规则描述，此项只做覆盖）；
 - `waf_audit`：`disabled`、`hosts`（探测用主机名，默认 zone 名）、`sensitive_paths`（追加的敏感路径模式）；

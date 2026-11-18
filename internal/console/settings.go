@@ -140,7 +140,7 @@ var channelFields = map[string][]string{
 	config.ChanFeishu:   {"feishu_webhook_url_env", "feishu_secret_env"},
 	config.ChanWebhook:  {"webhook_url_env"},
 	config.ChanJSONL:    {"jsonl_file"},
-	config.ChanEmail:    {"email_smtp_host", "email_smtp_port", "email_tls", "email_username", "email_password_env", "email_from", "email_to"},
+	config.ChanEmail:    {"email_provider", "email_api_key_env", "email_smtp_host", "email_smtp_port", "email_tls", "email_username", "email_password_env", "email_from", "email_to"},
 }
 
 func emailField(e *config.EmailConfig, k string) string {
@@ -148,6 +148,10 @@ func emailField(e *config.EmailConfig, k string) string {
 		return ""
 	}
 	switch k {
+	case "email_provider":
+		return e.Provider
+	case "email_api_key_env":
+		return e.APIKeyEnv
 	case "email_smtp_host":
 		return e.Host
 	case "email_smtp_port":
@@ -388,8 +392,8 @@ func (s *Server) candidate(c settingsChange, cur *config.Overlay, base *config.C
 		}
 		// E-mail: the whole block, when it differs from the file's.
 		var e *config.EmailConfig
-		if f["email_smtp_host"] != "" || f["email_from"] != "" || f["email_to"] != "" {
-			e = &config.EmailConfig{Host: f["email_smtp_host"], TLS: f["email_tls"], Username: f["email_username"],
+		if f["email_smtp_host"] != "" || f["email_api_key_env"] != "" || f["email_from"] != "" || f["email_to"] != "" {
+			e = &config.EmailConfig{Provider: strings.ToLower(strings.TrimSpace(f["email_provider"])), APIKeyEnv: f["email_api_key_env"], Host: f["email_smtp_host"], TLS: f["email_tls"], Username: f["email_username"],
 				PasswordEnv: f["email_password_env"], From: f["email_from"]}
 			if p := f["email_smtp_port"]; p != "" {
 				n, err := strconv.Atoi(p)
@@ -400,6 +404,18 @@ func (s *Server) candidate(c settingsChange, cur *config.Overlay, base *config.C
 			}
 			if !envName(e.PasswordEnv) {
 				return nil, errors.New("email_password_env: not an environment variable name")
+			}
+			if !envName(e.APIKeyEnv) {
+				return nil, errors.New("email_api_key_env: not an environment variable name")
+			}
+			switch e.Provider {
+			case "", "smtp":
+			case "resend":
+				if e.APIKeyEnv == "" {
+					return nil, errors.New("email_api_key_env: required for provider resend")
+				}
+			default:
+				return nil, errors.New("email_provider: must be smtp or resend")
 			}
 			for _, to := range strings.Split(f["email_to"], ",") {
 				if to = strings.TrimSpace(to); to != "" {

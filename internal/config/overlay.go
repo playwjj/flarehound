@@ -368,7 +368,9 @@ func (c *Config) Channels() []ChannelInfo {
 	out = append(out, info(ChanFeishu, []string{n.FeishuWebhookURLEnv, n.FeishuSecretEnv}, n.FeishuWebhookURLEnv != "", ""))
 	if e := n.Email; e != nil {
 		pw := ""
-		if e.Username != "" {
+		if e.Provider == "resend" {
+			pw = e.APIKeyEnv
+		} else if e.Username != "" {
 			pw = e.PasswordEnv
 		}
 		out = append(out, info(ChanEmail, []string{pw}, true, ""))

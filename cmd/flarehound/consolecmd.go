@@ -255,9 +255,9 @@ func serveConsole(ctx context.Context, cfg *config.Config, cfgPath string, db *c
 	if err := srv.RefreshSettings(); err != nil {
 		log.Printf("console: settings: %v", err)
 	}
-	// Password reset by e-mail through notify.email's SMTP settings.
+	// Password reset by e-mail through notify.email (SMTP or Resend).
 	if e := cfg.Notify.Email; e != nil && cs.BaseURL != "" {
-		srv.Mail = console.SMTPSender(notify.Email{Host: e.Host, Port: e.Port, TLS: e.TLS, Username: e.Username,
+		srv.Mail = console.EmailSender(notify.Email{Provider: e.Provider, Host: e.Host, Port: e.Port, TLS: e.TLS, Username: e.Username,
 			Password: cfg.Chan.EmailPassword, From: e.From})
 	}
 	// WAF rules: listed with the read token (Zone → WAF: Read), changed

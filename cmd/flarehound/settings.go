@@ -50,7 +50,7 @@ func buildChannels(cfg *config.Config) []notify.Notifier {
 		chans = append(chans, notify.Feishu{URL: u, Secret: cfg.Chan.FeishuSecret})
 	}
 	if e := cfg.Notify.Email; e != nil {
-		chans = append(chans, notify.Email{Host: e.Host, Port: e.Port, TLS: e.TLS, Username: e.Username,
+		chans = append(chans, notify.Email{Provider: e.Provider, Host: e.Host, Port: e.Port, TLS: e.TLS, Username: e.Username,
 			Password: cfg.Chan.EmailPassword, From: e.From, To: e.To})
 	}
 	return chans

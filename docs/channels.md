@@ -174,13 +174,30 @@ Sends `msg_type: "text"`, split at 4,000 characters. With a secret, each request
 | `from` | Required. |
 | `to` | Required, at least one address. |
 
-TLS modes:
+TLS modes (SMTP):
 
 - **`starttls`** — plain connection upgraded with STARTTLS. If the server does not offer STARTTLS, sending fails (it never silently falls back to plain text).
 - **`tls`** — implicit TLS from the first byte (typically port 465).
 - **`none`** — no encryption, for a local relay only. FlareHound refuses to send a username and password over it.
 
 The mail is plain text, UTF-8, base64-encoded; the subject is the message's first line (up to 120 characters), and an `X-FlareHound-Kind` header carries the `kind`. Authentication uses SMTP PLAIN.
+
+### Email over HTTPS (Resend)
+
+Many cloud hosts block outbound SMTP (ports 25, 465 and 587). With `"provider": "resend"` the same mail goes to [Resend](https://resend.com)'s HTTPS API (`https://api.resend.com/emails`, port 443) instead:
+
+```json
+"notify": {
+  "email": {
+    "provider": "resend",
+    "api_key_env": "RESEND_API_KEY",
+    "from": "FlareHound <alerts@example.com>",
+    "to": ["ops@example.com"]
+  }
+}
+```
+
+The `from` domain must be verified in Resend (or use `onboarding@resend.dev` for a first test, which only delivers to your own Resend account's address). Text, HTML and inline charts are the same as over SMTP; Resend accepts at most 50 recipients per message. An error from Resend is logged with its message (e.g. `email: resend: HTTP 403: The example.com domain is not verified…`), never with the key. Password-reset mails from the console use the same provider.
 
 ## Secrets in Docker
 
