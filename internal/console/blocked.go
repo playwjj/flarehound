@@ -31,19 +31,20 @@ const (
 	edgeBlocked   = 403
 )
 
-// BlockedRow is one knocking source.
-type BlockedRow struct {
+// ShareRow is one face with its share of a total: a knocking source
+// on the blocked board, a loud face in the live hour.
+type ShareRow struct {
 	Name  string
 	Count int64
-	Share float64 // percent of all blocked requests in the window
+	Share float64 // percent of the list's total (all blocked requests, all requests)
 }
 
 // Blocked is the board for one window.
 type Blocked struct {
 	Window store.Window
 	Total  int64 // all edge-403 requests in the window
-	ASNs   []BlockedRow
-	UAs    []BlockedRow
+	ASNs   []ShareRow
+	UAs    []ShareRow
 	Err    string
 	At     time.Time
 }
@@ -53,10 +54,10 @@ type blockedEntry struct {
 	b  *Blocked
 }
 
-func blockedRows(faces []cfapi.Face, total int64) []BlockedRow {
-	out := make([]BlockedRow, 0, len(faces))
+func shareRows(faces []cfapi.Face, total int64) []ShareRow {
+	out := make([]ShareRow, 0, len(faces))
 	for _, f := range faces {
-		r := BlockedRow{Name: f.Name, Count: f.Count}
+		r := ShareRow{Name: f.Name, Count: f.Count}
 		if total > 0 {
 			r.Share = float64(f.Count) / float64(total) * 100
 		}
@@ -112,8 +113,8 @@ func buildBlocked(ctx context.Context, an Analytics, zone config.Zone, w store.W
 			return b
 		}
 	}
-	b.ASNs = blockedRows(asns, b.Total)
-	b.UAs = blockedRows(uas, b.Total)
+	b.ASNs = shareRows(asns, b.Total)
+	b.UAs = shareRows(uas, b.Total)
 	return b
 }
 

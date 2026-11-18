@@ -36,6 +36,9 @@ a.brand { position: relative; padding-left: 58px; }
 .brand img { position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: 48px; height: 48px; }
 .split { display: flex; gap: 0 1.2rem; flex-wrap: wrap; margin-bottom: 1.2rem; }
 .split > div { flex: 1 1 280px; min-width: 0; }
+.card .split { margin-bottom: 0; }
+.card .split h3 { margin-top: .4rem; }
+.card .banner { margin: 0 0 .6rem; }
 .login-logo { display: block; width: 72px; height: 72px; margin: 0 auto .4rem; }
 nav.user { display: flex; align-items: center; gap: .8rem; font-size: .9rem; }
 nav.user form { margin: 0; }
@@ -84,6 +87,9 @@ table.list th { text-align: left; font-weight: 600; color: var(--muted); font-si
 table.list th.r { text-align: right; }
 table.list td { border-bottom: 1px solid var(--line); padding: .45rem .4rem; vertical-align: top; }
 td.name { word-break: break-all; min-width: 10rem; }
+table.faces td.name { word-break: normal; overflow-wrap: anywhere; }
+table.faces td.share { position: relative; width: 5.5rem; white-space: nowrap; }
+table.faces td.share .bar { position: absolute; right: .4rem; bottom: .2rem; height: 3px; max-width: calc(100% - .8rem); border-radius: 2px; background: var(--accent); opacity: .45; }
 .tag { display: inline-block; font-size: .7rem; border: 1px solid var(--line); border-radius: 4px; padding: 0 .3rem; color: var(--muted); }
 h2.up { color: var(--alert); } h2.down { color: var(--ok); }
 .ev { display: inline-block; font-size: .72rem; border-radius: 4px; padding: 0 .35rem; background: var(--info-bg); }

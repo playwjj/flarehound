@@ -30,14 +30,14 @@ func TestDrillIsConcurrent(t *testing.T) {
 	start := time.Now()
 	d := buildDrill(context.Background(), an, config.Zone{ZoneID: zoneID}, DimUA, "Crawler/1.0", time.Now().Add(-2*time.Hour), time.Now().Add(-time.Hour))
 	took := time.Since(start)
-	if d.Err != "" || len(d.Sections) != 4 || d.Cur != 14000 {
+	if d.Err != "" || len(d.Sections) != 5 || d.Cur != 14000 {
 		t.Fatalf("drill: %+v", d)
 	}
-	// 10 queries × 60 ms = 600 ms in sequence; 4 at a time ≈ 180 ms.
+	// 12 queries × 60 ms = 720 ms in sequence; 4 at a time ≈ 180 ms.
 	if took > 400*time.Millisecond {
 		t.Fatalf("drill-down queries ran in sequence: %s", took)
 	}
-	if an.n.Load() != 10 {
+	if an.n.Load() != 12 {
 		t.Fatalf("queries: %d", an.n.Load())
 	}
 }

@@ -2,6 +2,11 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.13.1 — 2026-11-18
+
+- **Client IPs in the drill-down.** Every drill-down (user agent, ASN, uncached path) gains a client-IP breakdown — top 10, share of the entry, same hour yesterday — with a *block…* link per address into the usual confirmed IP block flow (guard rails unchanged). One line reads it: an address carrying ≥ 30 % of the entry says blocking that IP stops most of it; none reaching 1 % says the sources are dispersed and per-IP blocking will not help — the alerts' own rule. Until now client IPs reached only the alert notifications.
+- **Live faces, tidied.** The overview's loudest user agents and ASNs sit in their own card with column headers, a share of the window's requests (with a small bar) and drill-down links; an empty user agent reads "(no user agent)" instead of a blank row.
+
 ## v1.13.0 — 2026-11-18
 
 - **"What is rising right now" answerable in the console.** Three views for the everyday question the yesterday-anchored tiles could not answer:

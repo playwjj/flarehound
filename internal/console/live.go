@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/playwjj/flarehound/internal/analyze"
-	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/config"
 )
 
@@ -33,9 +32,9 @@ const (
 type LiveView struct {
 	From, To   time.Time
 	Rows       []MetricRow
-	Total      int64        // zone requests in the window (the trend strip's "now" point)
-	TopUA      []cfapi.Face // the hour's loudest faces, from the same measurement
-	TopASN     []cfapi.Face
+	Total      int64      // zone requests in the window (the trend strip's "now" point)
+	TopUA      []ShareRow // the hour's loudest faces, from the same measurement
+	TopASN     []ShareRow
 	Samples    int
 	BaselineOK bool
 	At         time.Time
@@ -150,8 +149,8 @@ func (s *Server) liveView(ctx context.Context, z config.Zone) *LiveView {
 	v.Samples, v.BaselineOK = n, n >= analyze.LongBaselineMinSamples
 	v.Rows = metricRows(s.eff(), z, cur, base, has)
 	v.Total = cur.Total
-	v.TopUA = cur.TopUA[:min(len(cur.TopUA), liveFaces)]
-	v.TopASN = cur.TopASN[:min(len(cur.TopASN), liveFaces)]
+	v.TopUA = shareRows(cur.TopUA[:min(len(cur.TopUA), liveFaces)], cur.Total)
+	v.TopASN = shareRows(cur.TopASN[:min(len(cur.TopASN), liveFaces)], cur.Total)
 	e.view = v
 	return v
 }

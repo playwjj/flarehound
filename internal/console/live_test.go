@@ -82,6 +82,8 @@ func (f *fakeAnalytics) Top(_ context.Context, _ string, from, _ time.Time, dim 
 		return []cfapi.Face{{Name: "AS207990", ASN: 207990, Count: 13000}}, nil
 	case cfapi.DimUserAgent:
 		return []cfapi.Face{{Name: "Crawler/1.0", Count: 13000}}, nil
+	case cfapi.DimClientIP:
+		return []cfapi.Face{{Name: "203.0.113.7", Count: 9800}, {Name: "198.51.100.2", Count: 300}}, nil
 	}
 	return []cfapi.Face{{Name: "200", Count: 9000}, {Name: "403", Count: 5000}}, nil
 }
@@ -99,10 +101,14 @@ func TestDrill(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("drill: %d", code)
 	}
-	for _, want := range []string{"/search", "12,000", "85.7%", "403", "dim=asn&amp;name=AS207990", "14,000"} {
+	for _, want := range []string{"/search", "12,000", "85.7%", "403", "dim=asn&amp;name=AS207990", "14,000",
+		"Client IPs", "203.0.113.7", "70.0%", "One address carries 70%"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("drill page lacks %q:\n%s", want, body)
 		}
+	}
+	if strings.Contains(body, "type=ip") {
+		t.Fatal("drill offers IP blocks without a write token")
 	}
 	n := fa.n.Load()
 	c.do("GET", "/movers/drill?dim=ua&name=Crawler%2F1.0", nil, nil)

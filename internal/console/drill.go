@@ -1,8 +1,8 @@
 package console
 
 // Drill-down (docs/web-console-revision.md §4.2): what one mover consists
-// of — its paths, status codes, cache status, and the other dimension
-// (ASNs of a user agent, user agents of an ASN) — in the movers' window
+// of — its paths, status codes, cache status, the other dimension
+// (ASNs of a user agent, user agents of an ASN) and its client IPs — in the movers' window
 // against the same hour yesterday. The archive keeps only Top lists, so
 // these are live queries (Cloudflare keeps ~31 days), cached for a while.
 
@@ -30,6 +30,12 @@ const (
 	drillLimit    = 10
 	drillParallel = 4 // concurrent queries per drill-down
 	dimStatus     = "edgeResponseStatus"
+
+	// Reading of the client-IP breakdown, by the top address's share of
+	// the entry: one address this large is worth a /32; below the
+	// spread line per-IP blocking cannot help (the alerts' own rule).
+	ipDominantPct = 30.0
+	ipSpreadPct   = 1.0
 )
 
 // DrillRow is one part of the entry: now, yesterday, change.
@@ -43,10 +49,12 @@ type DrillRow struct {
 
 // DrillSection is one breakdown.
 type DrillSection struct {
-	Key  string // i18n key of the heading
-	Dim  string // movers dim of the rows ("ua", "asn", "path") when they can be drilled further, else ""
-	Rows []DrillRow
-	Err  string
+	Key   string // i18n key of the heading
+	Dim   string // movers dim of the rows ("ua", "asn", "path") when they can be drilled further, else ""
+	Block string // block target type of the rows ("ip") when each can be blocked, else ""
+	Rows  []DrillRow
+	Hint  string // i18n key of a one-line reading of the rows, else ""
+	Err   string
 }
 
 // Drill is one mover broken down.
@@ -81,22 +89,23 @@ func drillFilter(dim, name string) (cfapi.Filter, bool) {
 }
 
 type breakdown struct {
-	key, cfDim, dim string
+	key, cfDim, dim, block string
 }
 
 func breakdownsFor(dim string) []breakdown {
-	paths := breakdown{"drill_paths", cfapi.DimPath, DimPath}
-	status := breakdown{"drill_status", dimStatus, ""}
-	cache := breakdown{"drill_cache", cfapi.DimCacheStatus, ""}
-	uas := breakdown{"drill_uas", cfapi.DimUserAgent, DimUA}
-	asns := breakdown{"drill_asns", cfapi.DimASN, DimASN}
+	paths := breakdown{"drill_paths", cfapi.DimPath, DimPath, ""}
+	status := breakdown{"drill_status", dimStatus, "", ""}
+	cache := breakdown{"drill_cache", cfapi.DimCacheStatus, "", ""}
+	uas := breakdown{"drill_uas", cfapi.DimUserAgent, DimUA, ""}
+	asns := breakdown{"drill_asns", cfapi.DimASN, DimASN, ""}
+	ips := breakdown{"drill_ips", cfapi.DimClientIP, "", "ip"}
 	switch dim {
 	case DimUA:
-		return []breakdown{paths, status, cache, asns}
+		return []breakdown{paths, status, cache, asns, ips}
 	case DimASN:
-		return []breakdown{paths, status, cache, uas}
+		return []breakdown{paths, status, cache, uas, ips}
 	}
-	return []breakdown{status, uas, asns} // path: already uncached
+	return []breakdown{status, uas, asns, ips} // path: already uncached
 }
 
 // buildDrill queries the breakdowns of one entry for [from, to) and the
@@ -141,7 +150,7 @@ func buildDrill(ctx context.Context, an Analytics, zone config.Zone, dim, name s
 		return d
 	}
 	for i, b := range bds {
-		sec := DrillSection{Key: b.key, Dim: b.dim}
+		sec := DrillSection{Key: b.key, Dim: b.dim, Block: b.block}
 		if errs[i] != nil {
 			sec.Err = errs[i].Error()
 			d.Sections = append(d.Sections, sec)
@@ -160,9 +169,27 @@ func buildDrill(ctx context.Context, an Analytics, zone config.Zone, dim, name s
 			sec.Rows = append(sec.Rows, r)
 		}
 		sort.SliceStable(sec.Rows, func(i, j int) bool { return sec.Rows[i].Cur > sec.Rows[j].Cur })
+		if b.cfDim == cfapi.DimClientIP {
+			sec.Hint = ipHint(sec.Rows)
+		}
 		d.Sections = append(d.Sections, sec)
 	}
 	return d
+}
+
+// ipHint reads the client-IP rows (sorted, largest first): one address
+// dominating the entry, or none carrying even the spread line.
+func ipHint(rows []DrillRow) string {
+	if len(rows) == 0 {
+		return ""
+	}
+	switch top := rows[0].Share; {
+	case top >= ipDominantPct:
+		return "drill_ip_dominant"
+	case top < ipSpreadPct:
+		return "drill_ip_spread"
+	}
+	return ""
 }
 
 // drill returns a cached breakdown (concurrent viewers share one query).
