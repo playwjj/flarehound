@@ -107,6 +107,18 @@ Overview, movers and history have a **Snapshot** button. It freezes the view int
 
 The **Snapshots** page lists them (admins see all, others their own): download the HTML file, or revoke the link at any time. Creating and revoking are recorded in the account audit log. Shared pages are served with `noindex` and a strict Content-Security-Policy.
 
+## Settings
+
+Admins find **Settings** in the header: notifications, alert lines, known faces, network names and the history of changes. They are stored in `settings.json` next to the state file, on top of `config.json`, which is never changed (it can stay mounted read-only). No secret is stored — channels keep their secrets in environment variables, and the console only sets the *names* of those variables and non-secret parameters (chat id, SMTP host, recipients …).
+
+Every change shows the exact difference and, for alert lines, a **replay of the last 7 days** with the new lines (hours over a line and episodes, now vs after, and which hours change), then needs a fresh two-factor code and is recorded under your account. Every saved version is kept; **History** restores any of them, including "config.json alone".
+
+**The watch picks changes up before its next round — no restart — and reports back** on every settings page: the version it runs, a newer one accepted, or one **rejected with the reason** (for instance an environment variable that is empty in the watch's process). A rejected change never stops alerting: the previous settings stay in force. For every channel the page shows which referenced variables are set in the watch's process.
+
+**Send a test notification** asks the watch to send it, with the watch's own environment — the same path alerts take — and shows, per channel, "delivered" or the exact error within seconds.
+
+**Known faces** can be added in one click: *mark as known* next to a user agent or ASN on the new-faces, movers and drill-down pages. **Network names**: every ASN shows its registered name and network type (recorded hourly by the watch, on plans whose analytics include ASN names); *name it* gives it your own short name, used in the console and in notifications.
+
 ## Accounts
 
 - **Roles**: `admin` (manages accounts; blocks when the console holds the write token) and `viewer` (reads, creates snapshots).

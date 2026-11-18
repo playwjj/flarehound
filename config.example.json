@@ -46,6 +46,7 @@
   },
   "report": { "language": "en", "visuals": true },
   "rule_names": {},
+  "asn_names": {},
   "waf_audit": {
     "disabled": false,
     "hosts": [],

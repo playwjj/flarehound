@@ -142,7 +142,7 @@ func (s *Server) liveView(ctx context.Context, z config.Zone) *LiveView {
 		return v
 	}
 	v.Samples, v.BaselineOK = n, n >= analyze.LongBaselineMinSamples
-	v.Rows = metricRows(s.Cfg, z, cur, base, has)
+	v.Rows = metricRows(s.eff(), z, cur, base, has)
 	e.view = v
 	return v
 }

@@ -39,7 +39,7 @@ func TestI18nKeys(t *testing.T) {
 	// Keys built at run time: (print "prefix_" value), evName, roleName.
 	for _, k := range []string{"dim_ua", "dim_asn", "dim_path", "st_ok", "st_watch", "st_alert", "st_na",
 		"tt_ip", "tt_asn", "tt_country", "tt_ua", "role_admin", "role_viewer",
-		"ev_alert", "ev_recovered", "ev_block", "ev_unblock", "ev_expire", "ev_renew", "ev_rule"} {
+		"ev_alert", "ev_recovered", "ev_block", "ev_unblock", "ev_expire", "ev_renew", "ev_rule", "net_hosting", "net_eyeball", "net_unknown"} {
 		add(k, "dynamic")
 	}
 	// Keys passed through page fields / helpers.

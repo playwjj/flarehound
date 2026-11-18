@@ -66,6 +66,14 @@ type Server struct {
 	OAuth      map[string]*Provider
 	HTTPClient *http.Client
 
+	// CfgPath is the config file (settings in the console need it; empty:
+	// the settings pages are off).
+	CfgPath    string
+	effMu      sync.RWMutex
+	effCfg     *config.Config // with the current settings overlay
+	effMod     time.Time
+	settingsMu sync.Mutex // one settings change at a time
+
 	// Mail sends password-reset links (nil: reset by e-mail is off).
 	Mail    MailSender
 	resetWG sync.WaitGroup // background reset mails (tests wait on it)
@@ -105,6 +113,10 @@ type Server struct {
 
 	rulesMu    sync.Mutex
 	rulesCache map[string]rulesEntry
+
+	asnMu    sync.Mutex
+	asnNames map[int]string // registered names from the archive
+	asnAt    time.Time
 
 	liveMu     sync.Mutex
 	liveCache  map[string]*liveEntry
@@ -288,6 +300,18 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /stepup", user(s.stepUpPage))
 	mux.Handle("POST /stepup", user(s.stepUpPost))
 	mux.Handle("GET /users", admin(s.usersPage))
+	mux.Handle("GET /settings", admin(s.requireSettings(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/settings/notify", http.StatusSeeOther)
+	})))
+	mux.Handle("GET /settings/asn/name", admin(s.requireSettings(s.asnNamePage)))
+	mux.Handle("POST /settings/asn/name", admin(s.requireSettings(s.stepUp(s.asnNamePost))))
+	for _, tab := range []string{"notify", "thresholds", "known", "asn", "history"} {
+		mux.Handle("GET /settings/"+tab, admin(s.requireSettings(s.settingsPage(tab))))
+	}
+	mux.Handle("POST /settings/review", admin(s.requireSettings(s.settingsReview)))
+	mux.Handle("POST /settings/apply", admin(s.requireSettings(s.settingsApply)))
+	mux.Handle("POST /settings/notify/test", admin(s.requireSettings(s.notifyTest)))
+	mux.Handle("POST /settings/known/mark", admin(s.requireSettings(s.stepUp(s.knownMark))))
 	mux.Handle("POST /users/create", admin(s.stepUp(s.userCreate)))
 	mux.Handle("POST /users/{id}/{op}", admin(s.stepUp(s.userOp)))
 	mux.Handle("POST /invites/create", admin(s.stepUp(s.inviteCreate)))

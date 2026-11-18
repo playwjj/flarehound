@@ -179,6 +179,20 @@ The web console (v1.3, read-only) — see [Web console](console.md).
 | `console.oauth.google` | object | — | Google sign-in: `{"client_id": "…", "client_secret_env": "GOOGLE_OAUTH_SECRET"}`. Needs `base_url`. See [third-party sign-in](console.md#sign-in-with-google-or-github). |
 | `console.oauth.github` | object | — | GitHub sign-in: `{"client_id": "…", "client_secret_env": "GITHUB_OAUTH_SECRET"}`. Needs `base_url`. |
 
+## asn_names
+
+Short names for networks, used in notifications and the console instead of the registered name (the network type is still judged from the registered name):
+
+```json
+"asn_names": { "45102": "aliyun", "4837": "联通骨干", "207990": "HostRoyale" }
+```
+
+Names can also be set in the console (Settings → Network names, or *name it* next to any ASN).
+
+## Settings changed in the console
+
+Notifications (channel switches, non-secret parameters, variable names), `thresholds`, `known_faces` additions and `asn_names` can be changed in the console. Those changes live in `settings.json` in the data directory and are applied on top of this file at every load; the watch re-reads them before each round. This file is never modified. See [Web console → Settings](console.md#settings).
+
 ## Environment variables at a glance
 
 | Variable (default name) | Set by key | Used by |

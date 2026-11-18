@@ -30,6 +30,7 @@ type Archive interface {
 	BlockEventsBetween(zone string, from, to time.Time, limit int) ([]store.BlockEvent, error)
 	ActiveBlocks(zone string) ([]store.BlockEvent, error)
 	RuleChanges(zone string, limit int) ([]store.RuleChange, error)
+	ASNNames() (map[int]string, error)
 }
 
 // Status of one metric against its alert line.

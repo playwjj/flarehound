@@ -61,7 +61,9 @@ func runConsole(ctx context.Context, cfgPath string, args []string, redactor *lo
 		fmt.Print(consoleUsage)
 		return 0
 	}
-	cfg, err := config.Load(cfgPath)
+	// The console sends no alerts: notification variables it lacks are not
+	// errors here (the watch checks them, and reports them to the console).
+	cfg, err := config.LoadWith(cfgPath, config.LoadOptions{NotifySecretsOptional: true})
 	if err != nil {
 		log.Printf("config: %v", err)
 		return 1
@@ -81,7 +83,7 @@ func runConsole(ctx context.Context, cfgPath string, args []string, redactor *lo
 	switch verb {
 	case "serve":
 		redactorAdd = func(s string) { redactor.Add(s) }
-		return serveConsole(ctx, cfg, db)
+		return serveConsole(ctx, cfg, cfgPath, db)
 	case "init-admin":
 		if *user == "" {
 			fmt.Fprint(os.Stderr, "init-admin needs --user NAME\n")
@@ -206,7 +208,7 @@ func listenIsLocal(addr string) bool {
 	return err == nil && ip.IsLoopback()
 }
 
-func serveConsole(ctx context.Context, cfg *config.Config, db *console.DB) int {
+func serveConsole(ctx context.Context, cfg *config.Config, cfgPath string, db *console.DB) int {
 	cs := cfg.Console
 	if !cs.Enabled {
 		log.Print(`the console is off: set "console": {"enabled": true} in the config to serve it`)
@@ -247,6 +249,12 @@ func serveConsole(ctx context.Context, cfg *config.Config, db *console.DB) int {
 	// Live views (read token): the last hour with the watch's own
 	// queries, and the movers' drill-down.
 	srv.Measure, srv.Analytics, srv.Caps = runner.Measure, cfapi.New(cfg.APIToken), runner.Caps
+	// Settings managed in the console (notifications, alert lines, known
+	// faces): an overlay next to the state file, picked up by the watch.
+	srv.CfgPath = cfgPath
+	if err := srv.RefreshSettings(); err != nil {
+		log.Printf("console: settings: %v", err)
+	}
 	// Password reset by e-mail through notify.email's SMTP settings.
 	if e := cfg.Notify.Email; e != nil && cs.BaseURL != "" {
 		srv.Mail = console.SMTPSender(notify.Email{Host: e.Host, Port: e.Port, TLS: e.TLS, Username: e.Username,

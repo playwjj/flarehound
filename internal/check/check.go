@@ -415,6 +415,8 @@ func (r *Runner) attribute(ctx context.Context, zone config.Zone, w, bw schedule
 
 	if caps.HasDim("clientASNDescription") {
 		a.ASNNames, err = r.API.ASNNames(ctx, z, w.From, w.To, currentTop)
+		r.saveASNNames(z, a.ASNNames)
+		a.ASNLabels = r.Cfg.ASNLabels()
 		logErr("ASN names", err)
 	}
 	// First round after a start: the ruleset (and its rule names) has not
@@ -572,7 +574,7 @@ func (r *Runner) Intraday(ctx context.Context, zone config.Zone) error {
 		var sugs []suggest.Suggestion
 		if decision != state.DecRecovered {
 			sugs = suggest.Suggest(suggest.Input{Cur: cur, Base: base, Findings: findings, Attr: attr,
-				Hypotheses: hyps, Block: advice, ASNNames: attr.ASNNames, Protected: r.guard().ASNProtected,
+				Hypotheses: hyps, Block: advice, ASNNames: attr.ASNNames, ASNLabels: attr.ASNLabels, Protected: r.guard().ASNProtected,
 				Sensitive: sensitive(cfg), MinCount: th.MinCount})
 		}
 		sev = analyze.Assess(cur, base, findings)
@@ -695,11 +697,13 @@ func (r *Runner) Daily(ctx context.Context, zone config.Zone) error {
 	attr := analyze.Attribution{CacheCur: cacheCur, CacheBase: cacheBase, DynamicPaths: d.DynamicPaths}
 	if len(d.Findings) > 0 && caps.HasDim("clientASNDescription") {
 		attr.ASNNames, err = r.API.ASNNames(ctx, z, w.From, w.To, currentTop)
-		d.ASNNames = attr.ASNNames
+		r.saveASNNames(z, attr.ASNNames)
+		attr.ASNLabels = r.Cfg.ASNLabels()
+		d.ASNNames, d.ASNLabels = attr.ASNNames, attr.ASNLabels
 		logErr("ASN names", err)
 	}
 	d.Suggestions = suggest.Suggest(suggest.Input{Cur: cur, Base: base, Findings: d.Findings, Attr: attr,
-		Hypotheses: analyze.Hypothesize(cur, base, d.Findings, attr), ASNNames: attr.ASNNames,
+		Hypotheses: analyze.Hypothesize(cur, base, d.Findings, attr), ASNNames: attr.ASNNames, ASNLabels: attr.ASNLabels,
 		Sensitive: sensitive(cfg), MinCount: th.MinCount})
 
 	for _, p := range cfg.Daily.Paths {
@@ -914,6 +918,13 @@ func (r *Runner) archiveRound(ctx context.Context, zone config.Zone, w, bw sched
 	logErr("faces", r.Store.TouchFaces(z, store.DimUA, base.TopUA, bw.From))
 	logErr("faces", r.Store.TouchFaces(z, store.DimASN, base.TopASN, bw.From))
 	logErr("faces", r.Store.TouchFaces(z, store.DimPath, snap.DynamicPaths, w.From))
+	// Registered names of this hour's top networks, so the console can show
+	// "AS207990 · HostRoyale · hosting" without a lookup (one query).
+	if len(cur.TopASN) > 0 && r.Caps(ctx, zone).HasDim("clientASNDescription") {
+		names, err := r.API.ASNNames(ctx, z, w.From, w.To, currentTop)
+		logErr("asn names", err)
+		r.saveASNNames(z, names)
+	}
 
 	cutoff := r.now().Add(-time.Duration(r.Cfg.Archive.HourlyRetentionDays) * 24 * time.Hour)
 	if n, err := r.Store.Prune(cutoff); err != nil {
@@ -972,4 +983,14 @@ func (r *Runner) Backfill(ctx context.Context, zone config.Zone, days int, pace 
 	}
 	log.Printf("zone %s: backfill finished: %d windows fetched, %d already archived", zone.Name, done, skipped)
 	return nil
+}
+
+// saveASNNames keeps registered ASN names in the archive (best effort).
+func (r *Runner) saveASNNames(zone string, names map[int]string) {
+	if r.Store == nil || len(names) == 0 {
+		return
+	}
+	if err := r.Store.PutASNNames(names, r.now()); err != nil {
+		log.Printf("archive asn names: %v", err)
+	}
 }

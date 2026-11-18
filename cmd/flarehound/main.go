@@ -70,10 +70,20 @@ func main() {
 	log.Printf("flarehound %s starting", version)
 
 	cfg, err := config.Load(*cfgPath)
+	var rejected error
 	if err != nil {
-		log.Fatalf("config: %v", err)
+		// Settings changed in the console that do not load (e.g. a variable
+		// this process lacks) must not stop the watch: run on config.json
+		// alone and report why.
+		base, berr := config.LoadWith(*cfgPath, config.LoadOptions{NoOverlay: true})
+		if berr != nil {
+			log.Fatalf("config: %v", err)
+		}
+		log.Printf("settings: console settings rejected, running on %s alone: %v", *cfgPath, err)
+		cfg, rejected = base, err
 	}
 	redactor.Add(cfg.Secrets()...)
+	sw := &settingsWatch{cfgPath: *cfgPath, dataDir: cfg.DataDir(), redactor: redactor}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -134,8 +144,8 @@ func main() {
 	// Dead-man switch: every watch round says it is alive — anomaly or not —
 	// in data/heartbeat, the JSONL file and the optional ping URL. Never on
 	// chat channels: a heartbeat there would be noise.
-	interval, offset := cfg.IntradayInterval(), cfg.IntradayOffset()
 	intraday := func() {
+		interval, offset := cfg.IntradayInterval(), cfg.IntradayOffset()
 		failed := forEachZone("intraday", runner.Intraday)
 		if *dryRun {
 			return
@@ -176,11 +186,29 @@ func main() {
 		return
 	}
 
+	// Settings changed in the console apply before the next round; test
+	// notifications are answered right away.
+	overlayPath := cfg.OverlayPath
+	sw.started(cfg, rejected)
+	if !*dryRun {
+		go sw.serve(ctx, overlayPath)
+	}
+	applySettings := func() {
+		nc := sw.reload(overlayPath)
+		if nc == nil {
+			return
+		}
+		cfg = nc
+		disp = buildDispatcher(nc, *dryRun)
+		runner.Cfg, runner.Sender = nc, disp
+	}
+
 	// Catch up on the newest settled window right away; the state file's
 	// last-window marker keeps a restart from double-counting it.
 	intraday()
 
 	for {
+		interval, offset := cfg.IntradayInterval(), cfg.IntradayOffset()
 		now := time.Now()
 		next := schedule.NextIntraday(now, interval, offset)
 		kind := "intraday"
@@ -191,12 +219,14 @@ func main() {
 			}
 		}
 		log.Printf("next %s run at %s", kind, next.In(cfg.Location).Format(time.RFC3339))
+		sw.setNext(next)
 		select {
 		case <-ctx.Done():
 			log.Printf("shutting down")
 			return
 		case <-time.After(time.Until(next)):
 		}
+		applySettings()
 		// When both fall on the same minute, run both: intraday first.
 		if kind == "daily" && schedule.NextIntraday(now, interval, offset).Equal(next) {
 			intraday()
@@ -214,32 +244,7 @@ func buildDispatcher(cfg *config.Config, dryRun bool) *notify.Dispatcher {
 	if dryRun {
 		return notify.NewDispatcher("", notify.Stdout{})
 	}
-	var chans []notify.Notifier
-	if cfg.WebhookURL != "" {
-		chans = append(chans, notify.Webhook{URL: cfg.WebhookURL})
-	}
-	if cfg.TelegramBotToken != "" && cfg.Notify.TelegramChatID != "" {
-		chans = append(chans, notify.Telegram{BotToken: cfg.TelegramBotToken, ChatID: cfg.Notify.TelegramChatID})
-	}
-	if cfg.Notify.JSONLFile != "" {
-		chans = append(chans, notify.File{Path: cfg.Notify.JSONLFile})
-	}
-	if u := cfg.Chan.Slack; u != "" {
-		chans = append(chans, notify.Slack{URL: u})
-	}
-	if u := cfg.Chan.Discord; u != "" {
-		chans = append(chans, notify.Discord{URL: u})
-	}
-	if u := cfg.Chan.WeCom; u != "" {
-		chans = append(chans, notify.WeCom{URL: u})
-	}
-	if u := cfg.Chan.Feishu; u != "" {
-		chans = append(chans, notify.Feishu{URL: u, Secret: cfg.Chan.FeishuSecret})
-	}
-	if e := cfg.Notify.Email; e != nil {
-		chans = append(chans, notify.Email{Host: e.Host, Port: e.Port, TLS: e.TLS, Username: e.Username,
-			Password: cfg.Chan.EmailPassword, From: e.From, To: e.To})
-	}
+	chans := buildChannels(cfg)
 	if len(chans) == 0 {
 		log.Printf("warning: no notification channel configured — findings will only appear in this log")
 	}

@@ -25,6 +25,7 @@
     <a href="/account">{{.Req.User.Username}}</a>
     <a href="/snapshots">{{t "nav_snapshots"}}</a>
     {{if .Req.User.Admin}}<a href="/users">{{t "nav_users"}}</a>{{end}}
+    {{if .CanSettings}}<a href="/settings">{{t "nav_settings"}}</a>{{end}}
     {{if .Req.Session}}<form method="post" action="/logout"><input type="hidden" name="csrf" value="{{.Req.CSRF}}"><button class="link">{{t "logout"}}</button></form>{{end}}
   {{end}}
   </nav>

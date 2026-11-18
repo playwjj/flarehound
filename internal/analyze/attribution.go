@@ -27,6 +27,10 @@ type Attribution struct {
 	// claims are only meaningful once it covers FaceHistoryMinDays.
 	ArchiveDays int            `json:"archive_days,omitempty"`
 	ASNNames    map[int]string `json:"asn_names,omitempty"` // registered ASN names, best-effort
+	// ASNLabels are the operator's own short names (config asn_names /
+	// console): shown instead of the registered name; the network type is
+	// still judged from the registered one.
+	ASNLabels map[int]string `json:"asn_labels,omitempty"`
 	// FaceHistory is the archive's memory of each new face (finding
 	// Subject): when it was first and last seen in any Top list. A face
 	// absent from the map has never been seen before.

@@ -180,3 +180,20 @@ svg.qr { width: 220px; max-width: 100%; height: auto; display: block; border-rad
 
 form.langsw { margin: 0; }
 form.langsw button { font-weight: 600; }
+
+/* settings */
+fieldset.chan { border: 1px solid var(--line); border-radius: 8px; padding: .6rem .8rem; margin: 0; display: grid; gap: .5rem; }
+fieldset.chan legend { padding: 0 .3rem; }
+label.inline { display: inline-flex; align-items: center; gap: .35rem; color: var(--fg); }
+label.inline input[type=checkbox] { width: auto; }
+.tag.ok { color: var(--ok); border-color: var(--ok); }
+.tag.bad { color: var(--alert); border-color: var(--alert); }
+p.envs { font-size: .82rem; margin: 0; }
+ul.results, ul.diff, ul.known { padding-left: 1.1rem; }
+ul.known li { margin-bottom: .3rem; }
+.row { display: flex; flex-wrap: wrap; gap: .3rem; }
+
+.asnname { font-size: .82rem; color: var(--muted); }
+.net { border-radius: 4px; padding: 0 .3rem; }
+.net-hosting { background: var(--alert-bg); color: var(--fg); }
+.net-eyeball { background: var(--ok-bg); color: var(--fg); }

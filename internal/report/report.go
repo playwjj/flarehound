@@ -160,17 +160,21 @@ func (l lang) short(f analyze.Finding) string {
 // findingLine is a finding for the "lines crossed" list: the finding,
 // what a new ASN is (name and network type, so nobody looks it up by
 // hand), and — once calibrated — what its count means in dashboard terms.
-func (l lang) findingLine(f analyze.Finding, ratio float64, names map[int]string) string {
+func (l lang) findingLine(f analyze.Finding, ratio float64, names, labels map[int]string) string {
 	s := l.finding(f)
 	if f.Rule == analyze.RuleNewFaceASN && f.ASN > 0 {
 		name := names[f.ASN]
+		shown := name
+		if lb := labels[f.ASN]; lb != "" {
+			shown = lb
+		}
 		kind := map[suggest.Network]string{
 			suggest.Hosting: l.t("hosting/cloud network", "机房/云网络"),
 			suggest.Eyeball: l.t("residential/mobile network", "宽带/移动网络"),
 			suggest.Unknown: l.t("network type unknown", "网络类型未知"),
 		}[suggest.Classify(f.ASN, name)]
-		if name != "" {
-			kind = clip(name, 40) + l.t(", ", "，") + kind
+		if shown != "" {
+			kind = clip(shown, 40) + l.t(", ", "，") + kind
 		}
 		s += fmt.Sprintf(l.t(" [%s]", "【%s】"), kind)
 	}
@@ -338,7 +342,7 @@ func Intraday(language string, d IntradayData) string {
 
 	b.WriteString(l.t("Lines crossed:\n", "越线：\n"))
 	for _, f := range d.Findings {
-		fmt.Fprintf(&b, "- %s\n", l.findingLine(f, d.DashRatio, d.Attr.ASNNames))
+		fmt.Fprintf(&b, "- %s\n", l.findingLine(f, d.DashRatio, d.Attr.ASNNames, d.Attr.ASNLabels))
 	}
 	b.WriteString("\n")
 	l.twoWindows(&b, d.Cur, d.Base, l.t("vs same hour yesterday", "对比昨日同时段"))
@@ -515,6 +519,7 @@ type DailyData struct {
 	Audit             *AuditData
 	Calibration       *calibrate.Summary
 	ASNNames          map[int]string
+	ASNLabels         map[int]string // operator's short names
 	Blocks            []BlockStatus
 	ActiveSince       time.Time
 	ActiveFingerprint string
@@ -555,7 +560,7 @@ func Daily(language string, d DailyData) string {
 			ratio = d.Calibration.Requests
 		}
 		for _, f := range d.Findings {
-			fmt.Fprintf(&b, "- %s\n", l.findingLine(f, ratio, d.ASNNames))
+			fmt.Fprintf(&b, "- %s\n", l.findingLine(f, ratio, d.ASNNames, d.ASNLabels))
 		}
 	}
 

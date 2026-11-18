@@ -1,0 +1,204 @@
+{{define "settabs"}}
+<nav class="tabs">
+  <a href="/settings/notify"{{if eq .Settings.Tab "notify"}} class="on"{{end}}>{{t "set_notify"}}</a>
+  <a href="/settings/thresholds"{{if eq .Settings.Tab "thresholds"}} class="on"{{end}}>{{t "set_thresholds"}}</a>
+  <a href="/settings/known"{{if eq .Settings.Tab "known"}} class="on"{{end}}>{{t "set_known"}}</a>
+  <a href="/settings/asn"{{if eq .Settings.Tab "asn"}} class="on"{{end}}>{{t "set_asn"}}</a>
+  <a href="/settings/history"{{if eq .Settings.Tab "history"}} class="on"{{end}}>{{t "set_history"}}</a>
+</nav>
+{{end}}
+
+{{define "watchstatus"}}{{with .Settings}}
+<section class="card">
+<h2>{{t "watch_status"}}</h2>
+{{if not .HasStatus}}<div class="banner warn">{{t "watch_none"}}</div>
+{{else}}
+  {{if .WatchOld}}<div class="banner warn">{{tf "watch_old" (ago .Status.At)}}</div>{{end}}
+  <p class="meta">{{tf "watch_applied" .Status.Applied .Overlay.Version}}{{if not .Status.NextRound.IsZero}} · {{t "next_round"}} {{when .Status.NextRound}}{{end}} · {{t "reported"}} {{ago .Status.At}}</p>
+  {{if .Status.Pending}}<div class="banner info">{{tf "watch_pending" .Status.Pending}}</div>{{end}}
+  {{if .Status.RejectedReason}}<div class="banner err">{{t "watch_rejected"}} <code class="wrap">{{.Status.RejectedReason}}</code></div>{{end}}
+{{end}}
+<p class="note">{{t "settings_where"}}</p>
+</section>
+{{end}}{{end}}
+
+{{define "settings_notify"}}{{template "head" .}}
+{{template "settabs" .}}
+{{$rq := .Req}}
+{{with .Settings}}
+{{with .Test}}<section class="card"><h2>{{t "test_result"}}</h2>
+  {{if .SettingsError}}<div class="banner warn">{{t "test_settings_err"}} <code class="wrap">{{.SettingsError}}</code></div>{{end}}
+  {{if not .Results}}<p class="muted">{{t "test_none"}}</p>{{end}}
+  <ul class="results">{{range .Results}}<li>{{if .OK}}<span class="good">✓</span> <b>{{.Channel}}</b> {{t "test_ok"}}{{else}}<span class="bad">✗</span> <b>{{.Channel}}</b> <code class="wrap">{{.Error}}</code>{{end}}</li>{{end}}</ul>
+  <p class="meta">{{t "test_by_watch"}} · {{when .At}}</p>
+</section>{{end}}
+{{if .TestWait}}<div class="banner info">{{t "test_waiting"}}</div>{{else if and .TestID (not .Test)}}<div class="banner warn">{{t "test_lost"}}</div>{{end}}
+{{template "watchstatus" $}}
+<section class="card">
+<h1>{{t "set_notify"}}</h1>
+<p class="note">{{t "notify_note"}}</p>
+<form method="post" action="/settings/review" class="stack">
+  <input type="hidden" name="csrf" value="{{$rq.CSRF}}"><input type="hidden" name="kind" value="notify"><input type="hidden" name="base" value="{{.Overlay.Version}}">
+  {{range .Channels}}
+  <fieldset class="chan">
+    <legend><label class="inline"><input type="checkbox" name="enabled_{{.Name}}" value="1"{{if .Enabled}} checked{{end}}> <b>{{.Name}}</b></label>
+      {{with .Watch}}{{if .Configured}}<span class="tag ok">{{t "chan_active"}}</span>{{else if .Disabled}}<span class="tag">{{t "chan_off"}}</span>{{else if .Missing}}<span class="tag bad">{{t "chan_missing"}}</span>{{else}}<span class="tag">{{t "chan_unconfigured"}}</span>{{end}}{{end}}
+      {{if not .FromFile}}<span class="tag">{{t "from_console"}}</span>{{end}}</legend>
+    {{range .Fields}}
+    <label>{{.Key}}{{if .Env}} <small class="muted">{{t "env_name"}}</small>{{end}}
+      <input name="{{.Key}}" value="{{.Value}}" autocomplete="off" autocapitalize="none" spellcheck="false">
+      {{if .Overridden}}<small class="muted">{{t "file_value"}}: {{if .FileValue}}<code>{{.FileValue}}</code>{{else}}—{{end}}</small>{{end}}
+    </label>{{end}}
+    {{with .Watch}}{{if .Envs}}<p class="envs">{{t "in_watch"}}: {{range .Envs}}{{$e := .}}<code>{{$e}}</code> {{if contains $.Settings.MissingSet $e}}<span class="bad">{{t "env_empty"}}</span>{{else}}<span class="good">{{t "env_set"}}</span>{{end}} {{end}}</p>{{end}}{{end}}
+  </fieldset>
+  {{end}}
+  <button>{{t "review_btn"}}</button>
+</form>
+</section>
+<section class="card"><h2>{{t "test_title"}}</h2>
+<p class="note">{{t "test_note"}}</p>
+<div class="row">
+<form method="post" action="/settings/notify/test" class="op"><input type="hidden" name="csrf" value="{{$rq.CSRF}}"><input type="hidden" name="channel" value="all"><button class="small">{{t "test_all"}}</button></form>
+{{range .Channels}}<form method="post" action="/settings/notify/test" class="op"><input type="hidden" name="csrf" value="{{$rq.CSRF}}"><input type="hidden" name="channel" value="{{.Name}}"><button class="small">{{.Name}}</button></form>{{end}}
+</div>
+</section>
+{{end}}
+{{template "foot" .}}{{end}}
+
+{{define "settings_thresholds"}}{{template "head" .}}
+{{template "settabs" .}}
+{{$rq := .Req}}
+{{with .Settings}}
+{{template "watchstatus" $}}
+<section class="card">
+<h1>{{t "set_thresholds"}}</h1>
+<p class="note">{{t "thresholds_note"}}</p>
+<form method="post" action="/settings/review" class="stack">
+  <input type="hidden" name="csrf" value="{{$rq.CSRF}}"><input type="hidden" name="kind" value="thresholds"><input type="hidden" name="base" value="{{.Overlay.Version}}">
+  {{$base := .Base.Thresholds}}{{$eff := .Eff.Thresholds}}
+  {{range thresholdRows $eff $base}}
+  <label>{{t (print "th_" .Key)}} <small class="muted mono">{{.Key}}</small>
+    <input name="{{.Key}}" value="{{.Value}}" inputmode="decimal">
+    <small class="muted">{{t (print "thh_" .Key)}}{{if .Changed}} · {{t "file_value"}}: {{.File}}{{end}}</small>
+  </label>{{end}}
+  <button>{{t "review_preview_btn"}}</button>
+</form>
+</section>
+{{end}}
+{{template "foot" .}}{{end}}
+
+{{define "settings_known"}}{{template "head" .}}
+{{template "settabs" .}}
+{{$rq := .Req}}
+{{with .Settings}}
+{{template "watchstatus" $}}
+<section class="card">
+<h1>{{t "set_known"}}</h1>
+<p class="note">{{t "known_note"}}</p>
+<h2>ASN</h2>
+<ul class="known">
+{{range .Base.KnownFaces.ASNs}}<li><span class="mono">AS{{.}}</span> <span class="tag">{{t "from_file"}}</span></li>{{end}}
+{{range .Overlay.KnownASNs}}<li><span class="mono">AS{{.}}</span> <span class="tag">{{t "from_console"}}</span>
+  <form method="post" action="/settings/known/mark" class="op"><input type="hidden" name="csrf" value="{{$rq.CSRF}}"><input type="hidden" name="op" value="known_remove"><input type="hidden" name="dim" value="asn"><input type="hidden" name="name" value="{{.}}"><input type="hidden" name="next" value="/settings/known"><button class="small">{{t "remove"}}</button></form></li>{{end}}
+</ul>
+<h2>{{t "dim_ua"}}</h2>
+<ul class="known">
+{{range .Base.KnownFaces.UserAgents}}<li><span class="mono">{{.}}</span> <span class="tag">{{t "from_file"}}</span></li>{{end}}
+{{range .Overlay.KnownUAs}}<li><span class="mono">{{.}}</span> <span class="tag">{{t "from_console"}}</span>
+  <form method="post" action="/settings/known/mark" class="op"><input type="hidden" name="csrf" value="{{$rq.CSRF}}"><input type="hidden" name="op" value="known_remove"><input type="hidden" name="dim" value="ua"><input type="hidden" name="name" value="{{.}}"><input type="hidden" name="next" value="/settings/known"><button class="small">{{t "remove"}}</button></form></li>{{end}}
+</ul>
+<h2>{{t "known_add"}}</h2>
+<form method="post" action="/settings/known/mark" class="stack">
+  <input type="hidden" name="csrf" value="{{$rq.CSRF}}"><input type="hidden" name="op" value="known_add"><input type="hidden" name="next" value="/settings/known">
+  <label>{{t "type"}}<select name="dim"><option value="ua">{{t "dim_ua"}}</option><option value="asn">ASN</option></select></label>
+  <label>{{t "value"}}<input name="name" required autocapitalize="none" placeholder="AS13335 / UptimeRobot"><small class="muted">{{t "known_ua_hint"}}</small></label>
+  <button>{{t "known_add"}}</button>
+</form>
+</section>
+{{end}}
+{{template "foot" .}}{{end}}
+
+{{define "settings_history"}}{{template "head" .}}
+{{template "settabs" .}}
+{{$rq := .Req}}
+{{with .Settings}}
+{{template "watchstatus" $}}
+<section class="card">
+<h1>{{t "set_history"}}</h1>
+<p class="meta">{{tf "settings_current" .Overlay.Version}}{{if .Overlay.UpdatedBy}} · {{.Overlay.UpdatedBy}} · {{when .Overlay.UpdatedAt}}{{end}}</p>
+<p class="note">{{t "history_note"}}</p>
+{{if not .History}}<p class="muted">{{t "none"}}</p>{{else}}{{$cur := .Overlay.Version}}
+<ul class="known">{{range .History}}<li>v{{.}}
+  <form method="post" action="/settings/review" class="op"><input type="hidden" name="csrf" value="{{$rq.CSRF}}"><input type="hidden" name="kind" value="restore"><input type="hidden" name="base" value="{{$cur}}"><input type="hidden" name="version" value="{{.}}"><button class="small">{{t "rule_restore"}}</button></form></li>{{end}}</ul>{{end}}
+</section>
+{{end}}
+{{template "foot" .}}{{end}}
+
+{{define "settings_review"}}{{template "head" .}}
+<section class="card">
+<h1>{{t "settings_review"}}</h1>
+{{if .Diff}}<ul class="diff">{{range .Diff}}<li><code class="wrap">{{.}}</code></li>{{end}}</ul>{{end}}
+{{range .Replays}}
+<h2>{{t "replay_title"}} · {{.Zone}}</h2>
+{{if not .Hours}}<p class="muted">{{t "replay_nodata"}}</p>{{else}}
+<table class="list"><thead><tr><th></th><th class="r">{{t "replay_before"}}</th><th class="r">{{t "replay_after"}}</th></tr></thead>
+<tbody>
+<tr><td>{{t "replay_hours"}}</td><td class="r">{{.BeforeHours}}</td><td class="r"><b>{{.AfterHours}}</b></td></tr>
+<tr><td>{{t "replay_episodes"}}</td><td class="r">{{.BeforeEp}}</td><td class="r"><b>{{.AfterEp}}</b></td></tr>
+</tbody></table>
+<p class="note">{{tf "replay_note" .Days .Hours}}</p>
+{{if .Changed}}<table class="list rsp"><thead><tr><th>{{t "time"}}</th><th>{{t "replay_before"}}</th><th>{{t "replay_after"}}</th></tr></thead>
+<tbody>{{range .Changed}}<tr><td class="nowrap" data-label="{{t "time"}}">{{when .From}}</td><td class="mono" data-label="{{t "replay_before"}}">{{if .Before}}{{join .Before}}{{else}}—{{end}}</td><td class="mono" data-label="{{t "replay_after"}}">{{if .After}}{{join .After}}{{else}}—{{end}}</td></tr>{{end}}</tbody></table>
+{{if .ChangedMore}}<p class="meta">{{tf "replay_more" .ChangedMore}}</p>{{end}}{{end}}
+{{end}}
+{{end}}
+{{if .Token}}{{with .SChange}}
+<form method="post" action="/settings/apply" class="stack confirm">
+  <input type="hidden" name="csrf" value="{{$.Req.CSRF}}"><input type="hidden" name="review" value="{{$.Token}}">
+  <input type="hidden" name="kind" value="{{.Kind}}"><input type="hidden" name="base" value="{{.Base}}">
+  {{range $k, $v := .Fields}}<input type="hidden" name="{{$k}}" value="{{$v}}">{{end}}
+  {{if $.Req.User.TOTPEnabled}}<label>{{t "totp_code"}}<input name="code" inputmode="numeric" autocomplete="one-time-code" required></label>{{end}}
+  <button class="danger">{{t "settings_apply"}}</button>
+</form>
+<p class="note">{{t "settings_apply_note"}}</p>
+{{end}}{{end}}
+<p><a href="/settings">← {{t "nav_settings"}}</a></p>
+</section>
+{{template "foot" .}}{{end}}
+
+{{define "knownbtn"}}{{if index . 3}}{{$dim := index . 0}}{{if or (eq $dim "ua") (eq $dim "asn")}}<form method="post" action="/settings/known/mark" class="op"><input type="hidden" name="csrf" value="{{index . 2}}"><input type="hidden" name="op" value="known_add"><input type="hidden" name="dim" value="{{$dim}}"><input type="hidden" name="name" value="{{index . 1}}"><input type="hidden" name="next" value="{{index . 4}}"><button class="small" title="{{t "known_mark_title"}}">{{t "known_mark"}}</button></form>{{end}}{{end}}{{end}}
+
+{{define "asninfo"}}{{$in := asnInfo (index . 0)}}{{if $in.ASN}}<span class="asnname">{{if $in.Label}} · {{$in.Label}}{{end}} · <span class="net net-{{$in.Type}}">{{t (print "net_" $in.Type)}}</span>{{if index . 1}} <a class="act" href="/settings/asn/name?asn={{$in.ASN}}&amp;next={{index . 2}}">{{if $in.Custom}}{{t "asn_rename"}}{{else}}{{t "asn_name_it"}}{{end}}</a>{{end}}</span>{{end}}{{end}}
+
+{{define "asn_name"}}{{template "head" .}}
+<section class="card narrow">
+{{with .ASN}}
+<h1>{{t "asn_name_title"}} · AS{{.ASN}}</h1>
+<p class="muted">{{t "asn_registered"}}: {{if .Registered}}<b>{{.Registered}}</b>{{else}}{{t "asn_unknown_name"}}{{end}} · {{t (print "net_" .Type)}}</p>
+<form method="post" action="/settings/asn/name" class="stack">
+  <input type="hidden" name="csrf" value="{{$.Req.CSRF}}"><input type="hidden" name="asn" value="{{.ASN}}"><input type="hidden" name="next" value="{{$.Next}}">
+  <label>{{t "asn_short_name"}}<input name="name" value="{{if .Custom}}{{.Label}}{{end}}" maxlength="40" placeholder="{{.Registered}}" autofocus><small class="muted">{{t "asn_name_help"}}</small></label>
+  <button>{{t "save"}}</button>
+</form>
+{{end}}
+</section>
+{{template "foot" .}}{{end}}
+
+{{define "settings_asn"}}{{template "head" .}}
+{{template "settabs" .}}
+{{$rq := .Req}}
+{{with .Settings}}
+{{template "watchstatus" $}}
+<section class="card">
+<h1>{{t "set_asn"}}</h1>
+<p class="note">{{t "asn_names_note"}}</p>
+<ul class="known">
+{{range $k, $v := .Base.ASNNames}}<li><span class="mono">AS{{$k}}</span> · <b>{{$v}}</b> <span class="tag">{{t "from_file"}}</span></li>{{end}}
+{{range $k, $v := .Overlay.ASNNames}}<li><span class="mono">AS{{$k}}</span> · <b>{{$v}}</b> <span class="tag">{{t "from_console"}}</span>
+  <a class="act" href="/settings/asn/name?asn={{$k}}&amp;next=/settings/asn">{{t "asn_rename"}}</a>
+  <form method="post" action="/settings/asn/name" class="op"><input type="hidden" name="csrf" value="{{$rq.CSRF}}"><input type="hidden" name="asn" value="{{$k}}"><input type="hidden" name="name" value=""><input type="hidden" name="next" value="/settings/asn"><button class="small">{{t "remove"}}</button></form></li>{{end}}
+</ul>
+<form method="get" action="/settings/asn/name" class="inline"><input name="asn" placeholder="AS45102" required><input type="hidden" name="next" value="/settings/asn"><button class="small">{{t "asn_name_it"}}</button></form>
+</section>
+{{end}}
+{{template "foot" .}}{{end}}

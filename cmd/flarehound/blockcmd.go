@@ -149,7 +149,8 @@ func runSubcommand(ctx context.Context, cfgPath, verb string, args []string, red
 		return 2
 	}
 
-	cfg, err := config.Load(cfgPath)
+	// doctor reports empty notification variables instead of failing on them.
+	cfg, err := config.LoadWith(cfgPath, config.LoadOptions{NotifySecretsOptional: verb == "doctor"})
 	if err != nil {
 		log.Printf("config: %v", err)
 		return 1

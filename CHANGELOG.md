@@ -2,6 +2,16 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.9.0 — 2026-11-18
+
+- **Settings in the console** (admins; review → TOTP → audit first): notification channels (on/off, non-secret parameters, the *names* of the environment variables holding their secrets), alert lines, known faces and network names. Kept in `settings.json` next to the state file, on top of `config.json` (unchanged, may stay read-only); every change keeps the previous version and can be restored, back to "config.json alone". No secret is ever stored.
+- **The watch applies changes without a restart** (before its next round) and reports back: the settings version it runs, a newer one accepted or **rejected with the reason** (e.g. a variable that is empty in its process) — a rejected change never stops alerts, the previous settings stay in force. It also reports, per channel, which referenced variables are set in its process (never values).
+- **Test notifications are sent by the watch**, with its own environment: per channel, "delivered" or the exact error ("SLACK_HOOK_TYPO is empty in the watch process") within seconds.
+- **Alert lines with a preview**: before saving, the last 7 days of the archive are replayed with the new lines the way the watch evaluates (vs the day before, cross-checked with the 28-day median) — hours over a line and episodes, now vs after, and which hours change.
+- **Mark as known** in one click next to user agents and ASNs on the new-faces, movers and drill-down pages.
+- **Network names.** The watch records the registered names of each hour's top networks; the console shows every ASN as "AS207990 · HostRoyale · hosting" (network type from the registered name). Operators can give short names (`asn_names` in config.json, or "name it" next to any ASN in the console): used in the console *and* in notifications, falling back to the registered name.
+- The console and `doctor` no longer fail when a notification variable is missing in their own environment (the console sends no alerts; `doctor` now reports it per channel). `console --listen`, `doctor` settings section.
+
 ## v1.8.0 — 2026-11-18
 
 - **Console language switch (English / 中文).** A button in the header (on the sign-in page too) switches the console's language for this browser; signed-in accounts keep the choice and get it on any device. Order: this browser's choice, then the account's, then `report.language`. Rule explanations, audit fixes and recipe texts follow the viewer's language (cached rule lists are shared and explained per viewer); snapshots are rendered in their creator's language, password-reset mails in the account's. Notifications keep following `report.language`. Existing account databases gain a `lang` column automatically.

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	_ "time/tzdata" // the alpine image ships no zoneinfo
@@ -205,7 +206,10 @@ type Config struct {
 	// RuleNames labels firewall rule IDs in reports ("<ruleId>": "name")
 	// until the WAF audit (v0.6) reads names from the rulesets itself.
 	RuleNames map[string]string `json:"rule_names"`
-	Report    struct {
+	// ASNNames are short names for networks ("45102": "aliyun"), used in
+	// notifications and the console instead of the registered name.
+	ASNNames map[string]string `json:"asn_names"`
+	Report   struct {
 		Language string `json:"language"` // "en" | "zh"
 		// Visuals attaches charts (Telegram, Discord, WeCom, email, JSONL)
 		// and sends email as HTML. Default true.
@@ -235,6 +239,13 @@ type Config struct {
 
 	Console Console `json:"console"`
 
+	// Overlay is the console-managed layer applied at load (nil: none).
+	Overlay     *Overlay `json:"-"`
+	OverlayPath string   `json:"-"`
+
+	getenv         func(string) string
+	notifyOptional bool
+
 	// Secrets resolved from the environment at load time; never persisted.
 	APIToken         string   `json:"-"`
 	TelegramBotToken string   `json:"-"`
@@ -260,9 +271,27 @@ func (c *Config) Secrets() []string {
 var hhmm = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
 var tag = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
-// Load reads and validates the config file at path, then resolves secrets
-// from the environment. Fields absent from the file keep their defaults.
-func Load(path string) (*Config, error) {
+// Load reads and validates the config file at path, applies the console
+// settings overlay, then resolves secrets from the environment. Fields
+// absent from the file keep their defaults.
+func Load(path string) (*Config, error) { return LoadWith(path, LoadOptions{}) }
+
+// LoadOptions tunes a load.
+type LoadOptions struct {
+	// Overlay replaces the overlay file (to validate a change before
+	// saving it); NoOverlay ignores the overlay altogether.
+	Overlay   *Overlay
+	NoOverlay bool
+	// Getenv replaces os.Getenv (validation in a process that does not
+	// hold the watch's environment).
+	Getenv func(string) string
+	// NotifySecretsOptional: an empty notification variable is not an
+	// error (the console does not send alerts; the watch checks them).
+	NotifySecretsOptional bool
+}
+
+// LoadWith is Load with options.
+func LoadWith(path string, opt LoadOptions) (*Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -279,6 +308,30 @@ func Load(path string) (*Config, error) {
 	if err := json.Unmarshal(raw, &c); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
+	c.getenv, c.notifyOptional = opt.Getenv, opt.NotifySecretsOptional
+	if c.getenv == nil {
+		c.getenv = os.Getenv
+	}
+	if c.StateFile == "" {
+		c.StateFile = "data/state.json"
+	}
+	c.OverlayPath = filepath.Join(c.DataDir(), OverlayFile)
+	if !opt.NoOverlay {
+		o := opt.Overlay
+		if o == nil {
+			if o, err = ReadOverlay(c.OverlayPath); err != nil {
+				return nil, fmt.Errorf("settings: %w", err)
+			}
+		}
+		if o.Thresholds != nil {
+			if err := CheckThresholds(*o.Thresholds); err != nil {
+				return nil, fmt.Errorf("settings: %w", err)
+			}
+		}
+		if err := c.apply(o); err != nil {
+			return nil, err
+		}
+	}
 	if err := c.resolve(); err != nil {
 		return nil, err
 	}
@@ -286,37 +339,40 @@ func Load(path string) (*Config, error) {
 }
 
 func (c *Config) resolve() error {
+	if c.getenv == nil {
+		c.getenv = os.Getenv
+	}
 	if c.Cloudflare.APITokenEnv == "" {
 		c.Cloudflare.APITokenEnv = "CF_API_TOKEN"
 	}
-	c.APIToken = os.Getenv(c.Cloudflare.APITokenEnv)
+	c.APIToken = c.getenv(c.Cloudflare.APITokenEnv)
 	if c.APIToken == "" {
 		return fmt.Errorf("environment variable %s is empty: a read-only Cloudflare API token is required", c.Cloudflare.APITokenEnv)
 	}
 	if c.Notify.TelegramBotTokenEnv != "" {
-		c.TelegramBotToken = os.Getenv(c.Notify.TelegramBotTokenEnv)
+		c.TelegramBotToken = c.getenv(c.Notify.TelegramBotTokenEnv)
 	}
 	c.WebhookURL = c.Notify.WebhookURL
 	if c.Notify.WebhookURLEnv != "" {
-		c.WebhookURL = os.Getenv(c.Notify.WebhookURLEnv)
+		c.WebhookURL = c.getenv(c.Notify.WebhookURLEnv)
 	}
 	env := func(name string) string {
 		if name == "" {
 			return ""
 		}
-		return os.Getenv(name)
+		return c.getenv(name)
 	}
 	n := c.Notify
 	c.Chan = Channels{Slack: env(n.SlackWebhookURLEnv), Discord: env(n.DiscordWebhookURLEnv), WeCom: env(n.WeComWebhookURLEnv),
 		Feishu: env(n.FeishuWebhookURLEnv), FeishuSecret: env(n.FeishuSecretEnv)}
 	for name, v := range map[string]string{"slack_webhook_url_env": n.SlackWebhookURLEnv, "discord_webhook_url_env": n.DiscordWebhookURLEnv,
 		"wecom_webhook_url_env": n.WeComWebhookURLEnv, "feishu_webhook_url_env": n.FeishuWebhookURLEnv} {
-		if v != "" && os.Getenv(v) == "" {
+		if v != "" && c.getenv(v) == "" && !c.notifyOptional {
 			return fmt.Errorf("config: notify.%s names %s, but that environment variable is empty", name, v)
 		}
 	}
 	if n.HeartbeatURLEnv != "" {
-		if c.HeartbeatURL = os.Getenv(n.HeartbeatURLEnv); c.HeartbeatURL == "" {
+		if c.HeartbeatURL = c.getenv(n.HeartbeatURLEnv); c.HeartbeatURL == "" && !c.notifyOptional {
 			return fmt.Errorf("config: notify.heartbeat_url_env names %s, but that environment variable is empty", n.HeartbeatURLEnv)
 		}
 	}
@@ -331,7 +387,7 @@ func (c *Config) resolve() error {
 		}
 		if e.Username != "" {
 			c.Chan.EmailPassword = env(e.PasswordEnv)
-			if c.Chan.EmailPassword == "" {
+			if c.Chan.EmailPassword == "" && !c.notifyOptional {
 				return fmt.Errorf("config: notify.email.password_env must name a non-empty environment variable when username is set")
 			}
 		}
@@ -422,6 +478,11 @@ func (c *Config) resolve() error {
 			if _, err := netip.ParseAddr(s); err != nil {
 				return fmt.Errorf("config: blocking.never_block[%d] %q is not an IP or CIDR", i, s)
 			}
+		}
+	}
+	for k, v := range c.ASNNames {
+		if err := checkASNName(k, v); err != nil {
+			return fmt.Errorf("config: asn_names: %w", err)
 		}
 	}
 	if c.Archive.File == "" {
@@ -537,7 +598,7 @@ func (c *Config) resolveConsole() error {
 		if oc.ClientID == "" || oc.ClientSecretEnv == "" {
 			return fmt.Errorf("config: console.oauth.%s needs client_id and client_secret_env", name)
 		}
-		if oc.ClientSecret = os.Getenv(oc.ClientSecretEnv); oc.ClientSecret == "" {
+		if oc.ClientSecret = c.getenv(oc.ClientSecretEnv); oc.ClientSecret == "" {
 			return fmt.Errorf("config: console.oauth.%s.client_secret_env names %s, but that environment variable is empty", name, oc.ClientSecretEnv)
 		}
 		if cs.BaseURL == "" {
@@ -555,6 +616,29 @@ func (c *Config) TrustedProxies() []netip.Prefix {
 			out = append(out, p.Masked())
 		} else if a, err := netip.ParseAddr(s); err == nil {
 			out = append(out, netip.PrefixFrom(a, a.BitLen()))
+		}
+	}
+	return out
+}
+
+// checkASNName validates one asn_names entry.
+func checkASNName(k, v string) error {
+	n, err := strconv.Atoi(strings.TrimPrefix(strings.ToUpper(k), "AS"))
+	if err != nil || n <= 0 {
+		return fmt.Errorf("%q is not an ASN", k)
+	}
+	if r := []rune(strings.TrimSpace(v)); len(r) == 0 || len(r) > 40 {
+		return fmt.Errorf("name for %s must have 1–40 characters", k)
+	}
+	return nil
+}
+
+// ASNLabels returns the operator's short ASN names, by number.
+func (c *Config) ASNLabels() map[int]string {
+	out := map[int]string{}
+	for k, v := range c.ASNNames {
+		if n, err := strconv.Atoi(strings.TrimPrefix(strings.ToUpper(k), "AS")); err == nil && n > 0 {
+			out[n] = strings.TrimSpace(v)
 		}
 	}
 	return out

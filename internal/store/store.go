@@ -93,6 +93,11 @@ CREATE TABLE IF NOT EXISTS block_events (
 	actor      TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS block_events_target ON block_events (zone, type, value, id);
+CREATE TABLE IF NOT EXISTS asn_names (
+	asn     INTEGER PRIMARY KEY,
+	name    TEXT    NOT NULL,
+	seen_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS calibration_days (
 	zone TEXT    NOT NULL,
 	date INTEGER NOT NULL, -- UTC midnight
@@ -763,4 +768,47 @@ func (s *Store) blockEventBefore(zone, typ, value string, id int64) (BlockEvent,
 		return BlockEvent{}, false, err
 	}
 	return evs[0], true, nil
+}
+
+// PutASNNames records registered ASN names (clientASNDescription).
+func (s *Store) PutASNNames(names map[int]string, at time.Time) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.Prepare(`INSERT INTO asn_names (asn, name, seen_at) VALUES (?, ?, ?)
+		ON CONFLICT (asn) DO UPDATE SET name = excluded.name, seen_at = excluded.seen_at`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for asn, name := range names {
+		if asn <= 0 || strings.TrimSpace(name) == "" {
+			continue
+		}
+		if _, err := stmt.Exec(asn, strings.TrimSpace(name), at.Unix()); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// ASNNames returns every recorded registered ASN name.
+func (s *Store) ASNNames() (map[int]string, error) {
+	rows, err := s.db.Query(`SELECT asn, name FROM asn_names`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int]string{}
+	for rows.Next() {
+		var a int
+		var n string
+		if err := rows.Scan(&a, &n); err != nil {
+			return nil, err
+		}
+		out[a] = n
+	}
+	return out, rows.Err()
 }

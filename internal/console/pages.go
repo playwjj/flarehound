@@ -42,20 +42,27 @@ type page struct {
 	Role    string
 
 	// views
-	NoASN    bool // the plan's analytics have no ASN dimension
-	Overview *Overview
-	Live     *LiveView
-	Drill    *Drill
-	Chart    template.HTML
-	Movers   *Movers
-	Dim      string
-	Faces    *NewFaces
-	Days     int
-	History  *History
-	Range    string
-	Audit    *auditView
-	Active   []store.BlockEvent
-	Log      []store.BlockEvent
+	NoASN       bool // the plan's analytics have no ASN dimension
+	Settings    *settingsView
+	ASN         *ASNInfo
+	CanSettings bool // admin of a console that manages settings
+	SChange     *settingsChange
+	Diff        []string
+	Replays     []Replay
+	IsKnown     func(dim, name string) bool
+	Overview    *Overview
+	Live        *LiveView
+	Drill       *Drill
+	Chart       template.HTML
+	Movers      *Movers
+	Dim         string
+	Faces       *NewFaces
+	Days        int
+	History     *History
+	Range       string
+	Audit       *auditView
+	Active      []store.BlockEvent
+	Log         []store.BlockEvent
 
 	// writes (v1.4)
 	CanWrite  bool // this viewer may block (admin, console holds the write token)
@@ -133,9 +140,9 @@ func (s *Server) funcs(l lang) template.FuncMap {
 		"list": func(a ...any) []any { return a },
 		"rowsCtx": func(p page, rows []Mover) []any {
 			ctx := struct {
-				Dim, ZoneName, Reason string
-				Can, Snap             bool
-			}{p.Dim, p.Zone.Name, "movers: " + p.Dim, p.CanWrite && !p.Snapshot, p.Snapshot}
+				Dim, ZoneName, Reason, CSRF, Here string
+				Can, Snap, Known                  bool
+			}{p.Dim, p.Zone.Name, "movers: " + p.Dim, p.Req.CSRF, p.Here, p.CanWrite && !p.Snapshot, p.Snapshot, p.CanSettings && !p.Snapshot}
 			return []any{ctx, rows}
 		},
 		"blockValue": func(dim, name string) string {
@@ -153,10 +160,14 @@ func (s *Server) funcs(l lang) template.FuncMap {
 			}
 			return f[0]
 		},
-		"phaseShort":   func(p string) string { return ruleexec.PhaseName(p) },
-		"ruleSentence": func(r map[string]any) string { return wafkit.RuleSentence(r, string(l)) },
-		"drillable":    func(dim, name string) bool { _, ok := drillFilter(dim, name); return ok },
-		"choicesFor":   func(p wafkit.Param, plan string) []string { return p.ChoicesFor(plan) },
+		"phaseShort":    func(p string) string { return ruleexec.PhaseName(p) },
+		"ruleSentence":  func(r map[string]any) string { return wafkit.RuleSentence(r, string(l)) },
+		"thresholdRows": thresholdRows,
+		"contains":      contains,
+		"join":          func(s []string) string { return strings.Join(s, ", ") },
+		"asnInfo":       func(name string) ASNInfo { return s.asnInfo(name) },
+		"drillable":     func(dim, name string) bool { _, ok := drillFilter(dim, name); return ok },
+		"choicesFor":    func(p wafkit.Param, plan string) []string { return p.ChoicesFor(plan) },
 		"full": func(q map[string]rulesView, phase string) bool {
 			v, ok := q[phase]
 			return ok && v.Limit > 0 && v.Used >= v.Limit
@@ -274,6 +285,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, name
 	p.WriteOn = s.CanWrite()
 	p.CanWrite = p.WriteOn && p.Req.User != nil && p.Req.User.Admin()
 	p.Lang = string(s.L(r))
+	p.CanSettings = s.settingsOn() && p.Req.User != nil && p.Req.User.Admin()
 	p.Here = "/"
 	if r.Method == http.MethodGet {
 		p.Here = r.URL.RequestURI()
@@ -351,7 +363,7 @@ func (s *Server) buildView(ctx context.Context, view string, q url.Values) (stri
 	z := s.zoneOf(q)
 	switch view {
 	case viewOverview:
-		ov, err := BuildOverview(s.Archive, s.Cfg, z, s.Now())
+		ov, err := BuildOverview(s.Archive, s.eff(), z, s.Now())
 		if err != nil {
 			return "", page{}, err
 		}
@@ -376,7 +388,7 @@ func (s *Server) buildView(ctx context.Context, view string, q url.Values) (stri
 		default:
 			dim = DimUA
 		}
-		mv, err := BuildMovers(s.Archive, s.Cfg, z, dim, 10)
+		mv, err := BuildMovers(s.Archive, s.eff(), z, dim, 10)
 		if err != nil {
 			return "", page{}, err
 		}
@@ -435,7 +447,7 @@ func (s *Server) facesPage(w http.ResponseWriter, r *http.Request) {
 	case "30":
 		days = 30
 	}
-	nf, err := BuildNewFaces(s.Archive, s.Cfg, z, s.Now().Add(-time.Duration(days)*24*time.Hour), 50)
+	nf, err := BuildNewFaces(s.Archive, s.eff(), z, s.Now().Add(-time.Duration(days)*24*time.Hour), 50)
 	if err != nil {
 		s.fail(w, r, err)
 		return

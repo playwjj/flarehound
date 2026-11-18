@@ -21,6 +21,7 @@ import (
 	"github.com/playwjj/flarehound/internal/check"
 	"github.com/playwjj/flarehound/internal/config"
 	"github.com/playwjj/flarehound/internal/console"
+	"github.com/playwjj/flarehound/internal/control"
 	"github.com/playwjj/flarehound/internal/health"
 	"github.com/playwjj/flarehound/internal/schedule"
 	"github.com/playwjj/flarehound/internal/state"
@@ -252,6 +253,7 @@ func runDoctor(ctx context.Context, cfg *config.Config, cfgPath string, out io.W
 			st.Close()
 		}
 	}
+	doctorSettings(d, cfg, now)
 	doctorConsole(d, cfg, now)
 
 	if raw, err := os.ReadFile(filepath.Join(cfg.DataDir(), "outbox.json")); err == nil && len(raw) > 2 {
@@ -379,4 +381,35 @@ func doctorConsole(d *doctorOut, cfg *config.Config, now time.Time) {
 		d.ok("%d account(s), %d admin(s), %d with two-factor sign-in%s", len(us), admins, twofa,
 			map[bool]string{true: " (required)", false: ""}[cs.RequireTOTP])
 	}
+}
+
+// doctorSettings reports the console-managed settings and the channels.
+func doctorSettings(d *doctorOut, cfg *config.Config, now time.Time) {
+	d.head("Settings and notification channels")
+	if o := cfg.Overlay; o != nil && !o.Empty() {
+		d.ok("console settings v%d in %s (last change by %s, %s)", o.Version, cfg.OverlayPath, o.UpdatedBy, o.UpdatedAt.Format("2006-01-02 15:04"))
+	} else {
+		d.ok("no console settings: config.json alone")
+	}
+	if st, ok, err := control.ReadStatus(cfg.DataDir()); err == nil && ok {
+		switch {
+		case st.RejectedReason != "":
+			d.bad("the watch rejected the latest settings and keeps the previous ones: %s", st.RejectedReason)
+		case st.Pending > 0:
+			d.ok("the watch accepted settings v%d; they apply before its next round", st.Pending)
+		default:
+			d.ok("the watch runs settings v%d (reported %s ago)", st.Applied, now.Sub(st.At).Round(time.Second))
+		}
+	}
+	for _, ci := range cfg.Channels() {
+		switch {
+		case ci.Disabled:
+			d.ok("%s: turned off in the console", ci.Name)
+		case len(ci.Missing) > 0:
+			d.bad("%s: environment variable(s) empty in this process: %s", ci.Name, strings.Join(ci.Missing, ", "))
+		case ci.Configured:
+			d.ok("%s: configured", ci.Name)
+		}
+	}
+	d.warn("channel variables are checked in the process running doctor; the console's notification settings show what the watch itself sees, and can send a test through it")
 }

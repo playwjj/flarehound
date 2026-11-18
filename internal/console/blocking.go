@@ -766,6 +766,7 @@ func (s *Server) Background(ctx context.Context) {
 			s.warmBlocks(ctx)
 		}
 		s.warmPages(ctx)
+		_ = s.refreshSettings(false)
 		select {
 		case <-ctx.Done():
 			return

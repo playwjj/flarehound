@@ -69,6 +69,9 @@ func (l lang) asnLabel(s suggest.Suggestion) string {
 		suggest.Eyeball: l.t("residential/mobile network", "宽带/移动网络"),
 		suggest.Unknown: l.t("network type unknown", "网络类型未知"),
 	}[s.Network]
+	if s.ASNLabel != "" {
+		return fmt.Sprintf("%s (%s, %s)", s.Target, clip(s.ASNLabel, 40), net)
+	}
 	if s.ASNName != "" {
 		return fmt.Sprintf("%s (%s, %s)", s.Target, clip(s.ASNName, 40), net)
 	}

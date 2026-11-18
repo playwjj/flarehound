@@ -34,6 +34,7 @@ type Suggestion struct {
 	Target     string  `json:"target"`               // "AS207990", "/login*", "/rank", worker name
 	ASN        int     `json:"asn,omitempty"`        // ASN kinds
 	ASNName    string  `json:"asn_name,omitempty"`   // registered name, if known
+	ASNLabel   string  `json:"asn_label,omitempty"`  // operator's short name, if set
 	Network    Network `json:"network,omitempty"`    // ASN kinds
 	Expression string  `json:"expression,omitempty"` // Cloudflare rules language
 	Count      int64   `json:"count"`                // target's volume in the current window
@@ -58,6 +59,7 @@ type Input struct {
 	Hypotheses []analyze.Hypothesis
 	Block      analyze.BlockAdvice
 	ASNNames   map[int]string
+	ASNLabels  map[int]string // operator's short names (display only)
 	// Sensitive maps path-rule names to their patterns ("/login*"); every
 	// pattern listed is a sensitive path (login, signup, ranking …).
 	Sensitive map[string]string
@@ -163,7 +165,7 @@ func asnSuggestions(in Input) []Suggestion {
 		name := in.ASNNames[f.ASN]
 		net := Classify(f.ASN, name)
 		s := Suggestion{
-			Kind: ChallengeASN, Target: f.Name, ASN: f.ASN, ASNName: name, Network: net,
+			Kind: ChallengeASN, Target: f.Name, ASN: f.ASN, ASNName: name, ASNLabel: in.ASNLabels[f.ASN], Network: net,
 			Expression: ASNExpression(f.ASN),
 			Count:      f.Count, Base: base[f.ASN], Share: min(share, 1),
 		}
