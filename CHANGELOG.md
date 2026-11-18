@@ -2,6 +2,10 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.10.1 — 2026-11-18
+
+- Console settings: space between the tab bar and the first card; a channel's checkbox, name and status tags sit on one line again.
+
 ## v1.10.0 — 2026-11-18
 
 - **Snapshots of the WAF audit and the WAF rules.** Freeze the audit (with "How to fix") or the rule list (with plain-words explanations) into a revocable link for a site team — from the cached data, without forms or actions.

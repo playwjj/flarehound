@@ -40,6 +40,7 @@ nav.zones, nav.tabs, nav.seg { display: flex; gap: .3rem; overflow-x: auto; padd
 nav.zones::-webkit-scrollbar, nav.tabs::-webkit-scrollbar { display: none; }
 nav.zones a, nav.tabs a, nav.seg a { flex: none; padding: .35rem .7rem; border-radius: 999px; color: var(--muted); font-size: .9rem; border: 1px solid transparent; }
 nav.tabs a.on { background: var(--fg); color: var(--bg); }
+nav.tabs { margin: 0 0 .9rem; }
 nav.zones a.on, nav.seg a.on { border-color: var(--line); background: var(--card); color: var(--fg); }
 nav.seg { padding: 0 0 .6rem; }
 
@@ -183,8 +184,8 @@ form.langsw button { font-weight: 600; }
 
 /* settings */
 fieldset.chan { border: 1px solid var(--line); border-radius: 8px; padding: .6rem .8rem; margin: 0; display: grid; gap: .5rem; }
-fieldset.chan legend { padding: 0 .3rem; }
-label.inline { display: inline-flex; align-items: center; gap: .35rem; color: var(--fg); }
+fieldset.chan legend { padding: 0 .3rem; display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+label.inline, form.stack label.inline { display: inline-flex; align-items: center; gap: .35rem; color: var(--fg); }
 label.inline input[type=checkbox] { width: auto; }
 .tag.ok { color: var(--ok); border-color: var(--ok); }
 .tag.bad { color: var(--alert); border-color: var(--alert); }
