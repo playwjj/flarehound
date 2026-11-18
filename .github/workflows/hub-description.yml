@@ -23,5 +23,5 @@ jobs:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
           repository: ${{ vars.DOCKERHUB_USERNAME }}/flarehound
-          short-description: "Self-hosted watchdog for Cloudflare sites: anomaly alerts, WAF audit, one-click blocking."
+          short-description: "Self-hosted traffic console and watchdog for Cloudflare sites: anomaly alerts, WAF audit, in-console blocking."
           readme-filepath: ./README.md

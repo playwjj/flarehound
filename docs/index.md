@@ -1,6 +1,6 @@
 # FlareHound
 
-**A self-hosted watchdog for websites behind Cloudflare.** FlareHound polls the Cloudflare Analytics API with a read-only token, compares each clock hour with the same hour yesterday, breaks every anomaly down by path, ASN, user agent and cache status, and sends a short, plain-language report — conclusion first, with evidence and a suggested action — only when something needs your attention.
+**A self-hosted traffic console and watchdog for websites behind Cloudflare.** FlareHound polls the Cloudflare Analytics API with a read-only token, compares each clock hour with the same hour yesterday, breaks every anomaly down by path, ASN, user agent and cache status, and sends a short, plain-language report — conclusion first, with evidence and a suggested action — only when something needs your attention.
 
 Cloudflare gives you data. FlareHound gives you the conclusion.
 
@@ -18,6 +18,7 @@ Cloudflare gives you data. FlareHound gives you the conclusion.
 | One-click blocking | IP / CIDR / ASN / country / user agent, with guard rails, expiry and an audit log (separate write token) | [Blocking](blocking.md) |
 | Rule changes | Add, edit, move, delete and restore custom, rate-limit and cache rules with backup and read-back (separate write token) | [Rule changes](rules.md) |
 | WAF rule audit | Coverage gaps on sensitive paths, shadowed rules, forgeable exemptions, zombie rules, quota | [WAF audit](audit.md) |
+| Web console | Live hour vs baseline, movers and drill-down, new faces, history, WAF audit and rules, settings, in-console blocking, snapshots, multi-zone home (admin / viewer accounts, TOTP, Google / GitHub sign-in) | [Console](console.md) |
 
 ## Design principles
 

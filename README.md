@@ -10,7 +10,7 @@ Cloudflare gives you data. FlareHound gives you the conclusion.
 
 > Status: **v1.12** — e-mail over HTTPS (Resend) where SMTP is blocked; per-zone WAF audit coverage; cross-zone home, block verdicts in the daily report, rule-covered faces marked, audit/rule snapshots; settings in the console (notifications with test sends, alert lines with a replay preview, known faces, network names); console in English or Chinese; WAF basics, rule recipes and plain-words rules; live hour and movers drill-down; web console with in-console blocking, undo, before/after, read-only snapshots and Google / GitHub sign-in. Documentation: **https://playwjj.github.io/flarehound/** · Changelog: [CHANGELOG.md](CHANGELOG.md)
 >
-> **Direction:** FlareHound is growing a built-in web console — live movers (who is up, who is down), new-face tracking, history against the long-term baseline, the WAF audit, and in-console blocking with per-account audit — landing in v1.3–v1.5. Notifications become the alerting layer that brings you to the console. See the [web console revision note](docs/web-console-revision.md).
+> **Direction:** the built-in web console (since v1.3) is the centre of the product — live movers, new faces, history against the long-term baseline, the WAF audit and rules, settings, and in-console blocking with per-account audit. Notifications are the alerting layer that brings you to the console. See the [web console revision note](docs/web-console-revision.md).
 >
 > The detection model, thresholds and alert discipline are ported from a real incident response (a residential-proxy crawler flood, 2026-11-17). See [SPEC.md](SPEC.md) (in Chinese) for the full design.
 
@@ -32,7 +32,7 @@ FlareHound watches the traffic itself:
 
 ## Quick start
 
-Releases are published to Docker Hub as multi-arch images (`linux/amd64`, `linux/arm64`) on every `v*` tag, e.g. `passport888/flarehound:0.1.0`. The `docker-compose.yml` in this repo pulls the published image (or builds it locally from source if you prefer).
+Releases are published to Docker Hub as multi-arch images (`linux/amd64`, `linux/arm64`) on every `v*` tag, e.g. `passport888/flarehound:1.12.0`. The `docker-compose.yml` in this repo pulls the published image (or builds it locally from source if you prefer).
 
 ```bash
 docker compose up -d
@@ -128,6 +128,8 @@ flarehound -config config.json console                         # http://127.0.0.
 A separate process from the watch, reading the same archive: the newest hour against the 28-day baseline, biggest risers and fallers by user agent / ASN / uncached path, new faces, history with alerts and blocks on a timeline, the WAF audit and the block list. Built for a phone first. Accounts (admin / viewer) with TOTP; it binds to loopback — reach it through Tailscale, a TLS reverse proxy or Cloudflare Tunnel.
 
 Give the write token to the console process (never the watch) and admins block from it: prefilled from the movers, the same guard rails and review as the CLI, a fresh two-factor code per change, audit under the account before anything is touched, read-back, one-click undo and an automatic before/after comparison. Any view can be frozen into a read-only snapshot with an expiring, revocable share link. People can also sign in with Google or GitHub once they have linked it to their account. See [docs/console.md](docs/console.md).
+
+With several zones, the home page lists them all, ranked by which needs attention first. Settings live in the console as well — notification channels with test sends (sent by the watch, with its own environment), alert lines previewed against the last 7 days before they apply, known faces and per-ASN network names — and the console speaks English or 中文. Forgotten passwords can be reset by e-mail when mail (SMTP or Resend) and a public base URL are configured.
 
 ## One-click blocking
 
@@ -235,6 +237,12 @@ The primary form factor is a single Go binary in a Docker container, running on 
 - ~~v1.3~~ — read-only web console (overview vs baseline, movers, new faces, history, WAF audit, blocks) with built-in accounts and two-factor sign-in ✅
 - ~~v1.4~~ — blocking from the console (write token only in the console process, guard-rail confirmation, before/after effect, undo, read-only snapshots) ✅
 - ~~v1.5~~ — Google / GitHub sign-in bound to local accounts ✅
+- ~~v1.7~~ — WAF basics and rule recipes, plain-words rule explanations; live hour and movers drill-down; TOTP setup by QR code and password reset by e-mail ✅
+- ~~v1.8~~ — console language switch (English / 中文) ✅
+- ~~v1.9~~ — settings in the console (notifications with test sends, alert lines with a replay preview, known faces) and network names ✅
+- ~~v1.10~~ — cross-zone home, block verdicts, rule-covered faces marked, snapshots of the WAF audit and the rules ✅
+- ~~v1.11~~ — WAF audit coverage per zone (each zone's own hosts and sensitive paths) ✅
+- ~~v1.12~~ — e-mail over HTTPS (Resend) where outbound SMTP is blocked ✅
 
 Full specification: [SPEC.md](SPEC.md) (Chinese).
 
