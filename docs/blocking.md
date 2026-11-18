@@ -15,6 +15,8 @@ flarehound enforce             # long-running: lifts blocks whose --for has pass
 
 With several zones configured, add `--zone NAME|ID`.
 
+The same actions are available in the [web console](console.md#blocking-from-the-console) when its process holds the write token — with the same guard rails, review, audit and read-back, plus undo and a before/after comparison.
+
 ## Targets and defaults
 
 | Target | Accepts | Default action | Cloudflare object |

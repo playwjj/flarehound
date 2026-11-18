@@ -93,13 +93,13 @@ type BlockOpts struct {
 	SkipOriginCheck bool
 }
 
-func (e *Env) protected(ctx context.Context, t block.Target, skipOrigin bool) (block.Protected, error) {
+func (e *Env) protected(ctx context.Context, t block.Target, skipOrigin bool) (block.Protected, string, error) {
 	p := block.Protected{Allow: e.Cfg.NeverBlock(), AllowASNs: map[int]bool{}}
 	for _, a := range e.Cfg.Blocking.NeverBlockASNs {
 		p.AllowASNs[a] = true
 	}
 	if t.Type != block.IP {
-		return p, nil
+		return p, "", nil
 	}
 	if r, err := e.Write.CloudflareRanges(ctx); err == nil && len(r) > 0 {
 		p.Cloudflare = r
@@ -107,33 +107,23 @@ func (e *Env) protected(ctx context.Context, t block.Target, skipOrigin bool) (b
 		p.Cloudflare = block.CloudflareFallback()
 	}
 	origins, err := e.Write.OriginIPs(ctx, e.Zone.ZoneID)
+	note := ""
 	if err != nil {
 		if !skipOrigin {
-			return p, fmt.Errorf("cannot read DNS records to protect your origin IPs (%v); grant the write token Zone → DNS: Read, or pass --skip-origin-check if you are sure", err)
+			return p, "", fmt.Errorf("cannot read DNS records to protect your origin IPs (%v); grant the write token Zone → DNS: Read, or pass --skip-origin-check if you are sure", err)
 		}
-		e.printf("warning: origin IPs not checked (%v)\n", err)
+		note = fmt.Sprintf("origin IPs not checked (%v)", err)
 	}
 	p.Origins = origins
-	return p, nil
+	return p, note, nil
 }
 
 // measure returns the target's share of the last settled hour's excess
 // over the same hour yesterday (or of total traffic when there is no
 // excess). known is false when the target cannot be measured.
 func (e *Env) measure(ctx context.Context, t block.Target) (count int64, share float64, desc string, known bool) {
-	f := cfapi.Filter{}
-	switch t.Type {
-	case block.ASN:
-		f.ASN = t.ASNumber()
-	case block.UA:
-		f.UserAgentLike = "%" + t.Value + "%"
-	case block.IP:
-		pf, _ := t.Prefix()
-		if !pf.IsSingleIP() {
-			return 0, 0, "", false
-		}
-		f.ClientIP = pf.Addr().String()
-	default:
+	f, ok := FilterFor(t)
+	if !ok {
 		return 0, 0, "", false
 	}
 	w := schedule.IntradayWindow(e.now(), e.Cfg.IntradayInterval(), e.Cfg.IntradayOffset())
@@ -151,74 +141,183 @@ func (e *Env) measure(ctx context.Context, t block.Target) (count int64, share f
 	return n, float64(n) / float64(cur), fmt.Sprintf("%d requests in %s = %.1f%% of all traffic (no excess over yesterday)", n, w, float64(n)/float64(cur)*100), true
 }
 
-// Block runs the full confirm-and-apply flow for one target.
-func (e *Env) Block(ctx context.Context, t block.Target, o BlockOpts) error {
+// Prepared is a block ready to confirm: everything the person must see
+// before saying yes (SPEC 13.1). The CLI prints it; the console renders
+// it. Prepare never changes anything.
+type Prepared struct {
+	Target     block.Target
+	Opts       BlockOpts
+	Label      string // target with ASN name and network type
+	Network    string // ASN network type: hosting | eyeball | unknown ("" for other types)
+	Plan       block.Plan
+	Measured   string // the measured share in words ("" when not measurable)
+	Share      float64
+	ShareKnown bool
+	Warnings   []string
+	Notes      []string // non-blocking remarks (e.g. origin IPs not checked)
+	Strong     bool     // the person must retype StrongWant
+	StrongWant string
+	ExpiresAt  time.Time // zero: permanent
+
+	state block.State
+}
+
+// AlreadyDone is true when the target is already blocked as asked.
+func (p *Prepared) AlreadyDone() bool { return p.Plan.Op == block.OpNone }
+
+// ConfirmOK checks a typed strong confirmation (case-insensitive, "AS" prefix allowed).
+func (p *Prepared) ConfirmOK(typed string) bool {
+	if !p.Strong {
+		return true
+	}
+	return strings.EqualFold(strings.TrimPrefix(strings.ToUpper(strings.TrimSpace(typed)), "AS"), p.StrongWant)
+}
+
+// Prepare runs the guard rails, plans the change and measures the target.
+// A guard-rail refusal is returned as an error: there is nothing to confirm.
+func (e *Env) Prepare(ctx context.Context, t block.Target, o BlockOpts) (*Prepared, error) {
 	if o.Action == "" {
 		o.Action = block.DefaultAction(t.Type)
 	}
-	prot, err := e.protected(ctx, t, o.SkipOriginCheck)
+	p := &Prepared{Target: t, Opts: o}
+	prot, note, err := e.protected(ctx, t, o.SkipOriginCheck)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	if note != "" {
+		p.Notes = append(p.Notes, note)
 	}
 	if err := prot.Check(t); err != nil {
-		return fmt.Errorf("refused: %w", err)
+		return nil, fmt.Errorf("refused: %w", err)
 	}
-
-	m := e.manager()
-	st, err := m.Load(ctx)
+	st, err := e.manager().Load(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	plan, err := st.PlanBlock(t, o.Action)
-	if err != nil {
-		return err
+	p.state = st
+	if p.Plan, err = st.PlanBlock(t, o.Action); err != nil {
+		return nil, err
 	}
-	if plan.Op == block.OpNone {
-		e.printf("%s\n", plan.Note)
-		return nil
+	if p.AlreadyDone() {
+		return p, nil
 	}
-
-	network := ""
-	label := t.String()
+	p.Label = t.String()
 	if t.Type == block.ASN {
 		w := schedule.IntradayWindow(e.now(), e.Cfg.IntradayInterval(), e.Cfg.IntradayOffset())
 		name, _ := e.Read.ASNName(ctx, e.Zone.ZoneID, w.From.Add(-23*time.Hour), w.To, t.ASNumber())
-		network = string(suggest.Classify(t.ASNumber(), name))
+		p.Network = string(suggest.Classify(t.ASNumber(), name))
 		if name != "" {
-			label += " (" + name + ")"
+			p.Label += " (" + name + ")"
 		}
-		label += " — " + network + " network"
+		p.Label += " — " + p.Network + " network"
 	}
-	_, share, measured, known := e.measure(ctx, t)
+	_, p.Share, p.Measured, p.ShareKnown = e.measure(ctx, t)
+	p.Warnings = block.Warnings(t, o.Action, p.Network, p.Share, p.ShareKnown)
+	p.Strong, p.StrongWant = block.NeedsStrongConfirm(t, o.Action, p.Network)
+	if o.TTL > 0 {
+		p.ExpiresAt = e.now().Add(o.TTL)
+	}
+	return p, nil
+}
 
-	e.printf("\nZone:       %s\n", e.Zone.Name)
-	e.printf("Target:     %s\n", label)
-	e.printf("Action:     %s\n", o.Action)
-	e.printf("Mechanism:  %s\n", plan.Note)
-	if plan.Expression != "" {
-		e.printf("Rule after: %s\n", plan.Expression)
+// Execute applies a prepared block (verified by read-back) and appends
+// the audit record. Confirmation is the caller's job.
+func (e *Env) Execute(ctx context.Context, p *Prepared) (block.Entry, error) {
+	comment := p.Opts.Reason
+	if comment == "" {
+		comment = "manual"
 	}
-	if known {
-		e.printf("Measured:   %s\n", measured)
+	entry, err := e.manager().Apply(ctx, p.state, p.Plan, comment)
+	if err != nil {
+		return entry, err
+	}
+	ev := store.BlockEvent{At: e.now(), Zone: e.Zone.ZoneID, Op: "block", Type: string(p.Target.Type), Value: p.Target.Value,
+		Action: string(p.Opts.Action), Mechanism: string(entry.Mechanism), RuleID: entry.RuleID, Reason: p.Opts.Reason,
+		ExpiresAt: p.ExpiresAt, Actor: e.Actor}
+	if e.Store != nil {
+		if err := e.Store.AddBlockEvent(ev); err != nil {
+			return entry, fmt.Errorf("%w: %v", ErrAuditFailed, err)
+		}
+	}
+	return entry, nil
+}
+
+// ErrAuditFailed: the change was made but its audit record was not written.
+var ErrAuditFailed = errors.New("applied, but the audit record failed")
+
+// FilterFor is the analytics filter selecting a target's requests. CIDRs
+// and countries cannot be selected in adaptive analytics (ok is false).
+func FilterFor(t block.Target) (cfapi.Filter, bool) {
+	f := cfapi.Filter{}
+	switch t.Type {
+	case block.ASN:
+		f.ASN = t.ASNumber()
+	case block.UA:
+		f.UserAgentLike = "%" + t.Value + "%"
+	case block.IP:
+		pf, _ := t.Prefix()
+		if !pf.IsSingleIP() {
+			return f, false
+		}
+		f.ClientIP = pf.Addr().String()
+	default:
+		return f, false
+	}
+	return f, true
+}
+
+// Live loads the zone's FlareHound blocks as Cloudflare holds them.
+func (e *Env) Live(ctx context.Context) (block.State, []block.Entry, error) {
+	st, err := e.manager().Load(ctx)
+	if err != nil {
+		return st, nil, err
+	}
+	es, err := st.Entries()
+	return st, block.Sorted(es), err
+}
+
+// Block runs the full confirm-and-apply flow for one target.
+func (e *Env) Block(ctx context.Context, t block.Target, o BlockOpts) error {
+	p, err := e.Prepare(ctx, t, o)
+	if err != nil {
+		return err
+	}
+	for _, n := range p.Notes {
+		e.printf("warning: %s\n", n)
+	}
+	if p.AlreadyDone() {
+		e.printf("%s\n", p.Plan.Note)
+		return nil
+	}
+	o = p.Opts
+	e.printf("\nZone:       %s\n", e.Zone.Name)
+	e.printf("Target:     %s\n", p.Label)
+	e.printf("Action:     %s\n", o.Action)
+	e.printf("Mechanism:  %s\n", p.Plan.Note)
+	if p.Plan.Expression != "" {
+		e.printf("Rule after: %s\n", p.Plan.Expression)
+	}
+	if p.ShareKnown {
+		e.printf("Measured:   %s\n", p.Measured)
 	} else {
 		e.printf("Measured:   not measurable for this target type\n")
 	}
 	if o.TTL > 0 {
-		e.printf("Expires:    %s (after %s; needs `flarehound enforce` running)\n", e.now().Add(o.TTL).In(e.loc()).Format("2006-01-02 15:04 MST"), o.TTL)
+		e.printf("Expires:    %s (after %s; needs `flarehound enforce` running)\n", p.ExpiresAt.In(e.loc()).Format("2006-01-02 15:04 MST"), o.TTL)
 	} else {
 		e.printf("Expires:    never (unblock with `flarehound unblock %s %s`)\n", t.Type, t.Value)
 	}
-	for _, w := range block.Warnings(t, o.Action, network, share, known) {
+	for _, w := range p.Warnings {
 		e.printf("WARNING:    %s\n", w)
 	}
 
-	if strong, want := block.NeedsStrongConfirm(t, o.Action, network); strong {
+	if p.Strong {
 		got := o.Confirm
 		if got == "" {
-			e.printf("\nThis can block real users. Type %q to confirm: ", want)
+			e.printf("\nThis can block real users. Type %q to confirm: ", p.StrongWant)
 			got = e.readLine()
 		}
-		if !strings.EqualFold(strings.TrimPrefix(strings.ToUpper(got), "AS"), want) {
+		if !p.ConfirmOK(got) {
 			return ErrAborted
 		}
 	} else if !o.Yes {
@@ -228,28 +327,25 @@ func (e *Env) Block(ctx context.Context, t block.Target, o BlockOpts) error {
 		}
 	}
 
-	comment := o.Reason
-	if comment == "" {
-		comment = "manual"
-	}
-	entry, err := m.Apply(ctx, st, plan, comment)
-	if err != nil {
+	entry, err := e.Execute(ctx, p)
+	if errors.Is(err, ErrAuditFailed) {
+		e.printf("warning: %v\n", err)
+	} else if err != nil {
 		return err
-	}
-	ev := store.BlockEvent{At: e.now(), Zone: e.Zone.ZoneID, Op: "block", Type: string(t.Type), Value: t.Value,
-		Action: string(o.Action), Mechanism: string(entry.Mechanism), RuleID: entry.RuleID, Reason: o.Reason, Actor: e.Actor}
-	if o.TTL > 0 {
-		ev.ExpiresAt = e.now().Add(o.TTL)
-	}
-	if e.Store != nil {
-		if err := e.Store.AddBlockEvent(ev); err != nil {
-			e.printf("warning: blocked, but the audit record failed: %v\n", err)
-		}
 	}
 	e.printf("Done — %s is now %s (%s, verified by read-back). Undo: %s\n",
 		t, map[block.Action]string{block.Block: "blocked", block.Challenge: "challenged"}[o.Action], entry.Mechanism,
 		strings.Replace(block.Command(t, block.DefaultAction(t.Type), "", ""), "flarehound block", "flarehound unblock", 1))
 	return nil
+}
+
+// Current returns how a target is blocked in Cloudflare right now.
+func (e *Env) Current(ctx context.Context, t block.Target) ([]block.Entry, error) {
+	st, err := e.manager().Load(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return st.Find(t)
 }
 
 // Unblock removes a target. op is "unblock" or "expire".
@@ -283,16 +379,36 @@ func (e *Env) Unblock(ctx context.Context, t block.Target, yes bool, op, reason 
 	if err != nil {
 		return err
 	}
+	var auditErr error
 	for _, x := range removed {
 		if e.Store != nil {
 			if err := e.Store.AddBlockEvent(store.BlockEvent{At: e.now(), Zone: e.Zone.ZoneID, Op: op, Type: string(t.Type), Value: t.Value,
 				Action: string(x.Action), Mechanism: string(x.Mechanism), RuleID: x.RuleID, Reason: reason, Actor: e.Actor}); err != nil {
 				e.printf("warning: unblocked, but the audit record failed: %v\n", err)
+				auditErr = fmt.Errorf("%w: %v", ErrAuditFailed, err)
 			}
 		}
 	}
 	e.printf("Done — %s removed (verified by read-back).\n", t)
-	return nil
+	return auditErr
+}
+
+// Renew changes the expiry of an active block (zero: permanent). Only
+// the audit log changes: expiry is FlareHound's, Cloudflare has no TTL.
+func (e *Env) Renew(ctx context.Context, t block.Target, expires time.Time, reason string) (store.BlockEvent, error) {
+	if e.Store == nil {
+		return store.BlockEvent{}, errors.New("expiry times live in the archive, which is disabled")
+	}
+	es, err := e.Current(ctx, t)
+	if err != nil {
+		return store.BlockEvent{}, err
+	}
+	if len(es) == 0 {
+		return store.BlockEvent{}, fmt.Errorf("%s: %w", t, block.ErrNotBlocked)
+	}
+	ev := store.BlockEvent{At: e.now(), Zone: e.Zone.ZoneID, Op: "renew", Type: string(t.Type), Value: t.Value,
+		Action: string(es[0].Action), Mechanism: string(es[0].Mechanism), RuleID: es[0].RuleID, Reason: reason, ExpiresAt: expires, Actor: e.Actor}
+	return ev, e.Store.AddBlockEvent(ev)
 }
 
 // List prints every FlareHound block in the zone with its attempts over
@@ -383,7 +499,7 @@ func (e *Env) Expire(ctx context.Context) (int, error) {
 		switch {
 		case err == nil:
 			n++
-		case errors.Is(err, block.ErrNotBlocked):
+		case errors.Is(err, block.ErrNotBlocked), errors.Is(err, ErrAuditFailed):
 			n++
 		default:
 			errs = append(errs, fmt.Errorf("%s: %w", t, err))

@@ -349,7 +349,7 @@ type BlockEvent struct {
 	ID        int64
 	At        time.Time
 	Zone      string
-	Op        string // block | unblock | expire
+	Op        string // block | renew | unblock | expire
 	Type      string
 	Value     string
 	Action    string
@@ -395,12 +395,13 @@ func scanEvents(rows *sql.Rows) ([]BlockEvent, error) {
 
 const eventCols = `id, at, zone, op, type, value, action, mechanism, rule_id, reason, expires_at, actor`
 
-// ActiveBlocks returns, per target, the latest event when it is a block —
-// i.e. what the audit log believes is currently blocked in a zone.
+// ActiveBlocks returns, per target, the latest event when it is a block
+// or a renewal (a changed expiry) — i.e. what the audit log believes is
+// currently blocked in a zone.
 func (s *Store) ActiveBlocks(zone string) ([]BlockEvent, error) {
 	rows, err := s.db.Query(`SELECT `+eventCols+` FROM block_events e
 		WHERE zone = ? AND id = (SELECT MAX(id) FROM block_events WHERE zone = e.zone AND type = e.type AND value = e.value)
-		AND op = 'block' ORDER BY type, value`, zone)
+		AND op IN ('block', 'renew') ORDER BY type, value`, zone)
 	if err != nil {
 		return nil, err
 	}
@@ -726,4 +727,40 @@ func (s *Store) BlockEventsBetween(zone string, from, to time.Time, limit int) (
 		return nil, err
 	}
 	return scanEvents(rows)
+}
+
+// BlockEventByID returns one audit record.
+func (s *Store) BlockEventByID(id int64) (BlockEvent, bool, error) {
+	rows, err := s.db.Query(`SELECT `+eventCols+` FROM block_events WHERE id = ?`, id)
+	if err != nil {
+		return BlockEvent{}, false, err
+	}
+	evs, err := scanEvents(rows)
+	if err != nil || len(evs) == 0 {
+		return BlockEvent{}, false, err
+	}
+	return evs[0], true, nil
+}
+
+// LatestBlockEvent returns the newest record for one target.
+func (s *Store) LatestBlockEvent(zone, typ, value string) (BlockEvent, bool, error) {
+	return s.blockEventBefore(zone, typ, value, 1<<62)
+}
+
+// PrevBlockEvent returns the record for the same target just before id.
+func (s *Store) PrevBlockEvent(zone, typ, value string, id int64) (BlockEvent, bool, error) {
+	return s.blockEventBefore(zone, typ, value, id)
+}
+
+func (s *Store) blockEventBefore(zone, typ, value string, id int64) (BlockEvent, bool, error) {
+	rows, err := s.db.Query(`SELECT `+eventCols+` FROM block_events WHERE zone = ? AND type = ? AND value = ? AND id < ?
+		ORDER BY id DESC LIMIT 1`, zone, typ, value, id)
+	if err != nil {
+		return BlockEvent{}, false, err
+	}
+	evs, err := scanEvents(rows)
+	if err != nil || len(evs) == 0 {
+		return BlockEvent{}, false, err
+	}
+	return evs[0], true, nil
 }

@@ -2,6 +2,14 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.4.0 — 2026-11-18
+
+- **Blocking from the console.** When the console process holds the write token (and only then — the watch must never have it), admins block, unblock and change expiry from the console. Movers and new faces offer a prefilled **block…** link. Every change is form → review → apply: the review shows the plan, the measured share and every guard-rail warning (shared code with the CLI); applying needs a review token bound to what was reviewed, the typed target for blocks that can hit real users, and a fresh TOTP code for accounts with two-factor sign-in. The guard rails run again server-side; the console audit log records the request under the account before Cloudflare is touched, then the outcome; changes are verified by read-back; the archive records the operator as `console:<account>`.
+- **Undo** on every block-log record (opens the review of the inverse change), **change expiry** (`renew` audit events), live block list with attempts, rule quota and enforcer status.
+- **Before / after**: the hour before and after each block — the target's requests, share and status codes, the zone total and the rule's attempts — computed automatically once settled.
+- **Read-only snapshots** of the overview, movers and history: self-contained HTML (no script, no external resource, no tokens), downloadable, shareable through an expiring, revocable link that needs no sign-in.
+- `blockcli` split into `Prepare` / `Execute` (the CLI behaves as before); `doctor` reports whether the console can block and warns when it can without mandatory two-factor sign-in.
+
 ## v1.3.0 — 2026-11-18
 
 - **`flarehound console`**: a self-hosted web console, a separate process from the watch. Overview (newest settled hour vs the 28-day same-hour median, status against each alert line, 48-hour chart), movers (biggest risers and fallers by UA, ASN and uncached path, ranked by absolute change, with Top-N truncation shown as upper bounds), new faces (UA / ASN / path, first seen in 1 / 7 / 30 days), history (24 h / 7 d / 30 d with baseline band and a timeline of alerts, blocks and rule changes), WAF audit, and the block list (read-only). Server-rendered HTML with inline SVG charts, no JavaScript, strict CSP, mobile first, dark mode.

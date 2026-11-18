@@ -23,15 +23,16 @@
 {{end}}
 {{if .Chart}}<section class="card"><h2>{{t "last_48h"}}</h2>{{.Chart}}<p class="legend">{{t "hist_legend"}}</p></section>{{end}}
 <p class="note">{{t "settled_note"}}</p>
+{{template "snapform" .}}
 {{template "foot" .}}{{end}}
 
-{{define "moverrows"}}
-{{if not .}}<p class="muted">{{t "none"}}</p>{{else}}
+{{define "moverrows"}}{{$w := index . 0}}{{$rows := index . 1}}
+{{if not $rows}}<p class="muted">{{t "none"}}</p>{{else}}
 <table class="list">
 <thead><tr><th>{{t "name"}}</th><th class="r">{{t "current"}}</th><th class="r">{{t "baseline"}}</th><th class="r">{{t "change"}}</th></tr></thead>
 <tbody>
-{{range .}}<tr>
-  <td class="name"><span class="mono" title="{{.Name}}">{{short .Name 80}}</span>{{if .Known}} <span class="tag">{{t "known"}}</span>{{end}}</td>
+{{range $rows}}<tr>
+  <td class="name"><span class="mono" title="{{.Name}}">{{short .Name 80}}</span>{{if .Known}} <span class="tag">{{t "known"}}</span>{{end}}{{template "blocklink" (list $w.Dim .Name $w.ZoneName $w.Reason $w.Can)}}</td>
   <td class="r">{{if .CurCapped}}&lt; {{end}}{{num .Cur}}</td>
   <td class="r">{{if .BaseCapped}}&lt; {{end}}{{num .Base}}</td>
   <td class="r"><b>{{if or .BaseCapped .CurCapped}}≈{{end}}{{delta .Delta}}</b>{{if .HasPct}}<br><small class="muted">{{pct .Pct}}</small>{{end}}</td>
@@ -41,7 +42,7 @@
 
 {{define "movers"}}{{template "head" .}}
 {{$z := zq .Zone}}{{$dim := .Dim}}
-<nav class="seg">
+<nav class="seg{{if .Snapshot}} hide{{end}}">
   <a href="/movers?z={{$z}}&amp;dim=ua"{{if eq $dim "ua"}} class="on"{{end}}>{{t "dim_ua"}}</a>
   <a href="/movers?z={{$z}}&amp;dim=asn"{{if eq $dim "asn"}} class="on"{{end}}>{{t "dim_asn"}}</a>
   <a href="/movers?z={{$z}}&amp;dim=path"{{if eq $dim "path"}} class="on"{{end}}>{{t "dim_path"}}</a>
@@ -50,10 +51,11 @@
 {{if not .Has}}<section class="card"><p>{{t "no_data"}}</p></section>{{else}}
 {{template "windowline" .}}
 {{if lt .Samples 20}}<p class="note">{{if .Samples}}{{tf "baseline_thin" .Samples 20}}{{else}}{{t "baseline_none"}}{{end}}</p>{{end}}
-<section class="card"><h2 class="up">▲ {{t "risers"}}</h2>{{template "moverrows" .Up}}</section>
-<section class="card"><h2 class="down">▼ {{t "fallers"}}</h2>{{template "moverrows" .Down}}</section>
+<section class="card"><h2 class="up">▲ {{t "risers"}}</h2>{{template "moverrows" (rowsCtx $ .Up)}}</section>
+<section class="card"><h2 class="down">▼ {{t "fallers"}}</h2>{{template "moverrows" (rowsCtx $ .Down)}}</section>
 <p class="note">{{tf "movers_note" .TopN}}{{if eq $dim "path"}} {{t "path_note"}}{{end}}</p>
 {{end}}{{end}}
+{{template "snapform" .}}
 {{template "foot" .}}{{end}}
 
 {{define "faces"}}{{template "head" .}}
@@ -73,7 +75,7 @@
 <table class="list">
 <thead><tr><th>{{t "name"}}</th><th>{{t "first_seen"}}</th><th class="r">{{t "now"}}</th><th class="r">{{t "peak"}}</th></tr></thead>
 <tbody>{{range .Faces}}<tr>
-  <td class="name"><span class="mono" title="{{.Name}}">{{short .Name 80}}</span>{{if .Known}} <span class="tag">{{t "known"}}</span>{{end}}</td>
+  <td class="name"><span class="mono" title="{{.Name}}">{{short .Name 80}}</span>{{if .Known}} <span class="tag">{{t "known"}}</span>{{end}}{{template "blocklink" (list .Dim .Name $.Zone.Name "new face" $.CanWrite)}}</td>
   <td>{{when .FirstSeen}}<br><small class="muted">{{ago .FirstSeen}}</small></td>
   <td class="r">{{if .InCur}}{{num .Cur}}{{else}}<span class="muted">{{t "not_in_top"}}</span>{{end}}</td>
   <td class="r">{{num .MaxCount}}<br><small class="muted">{{t "last_seen"}} {{ago .LastSeen}}</small></td>
@@ -84,17 +86,18 @@
 
 {{define "history"}}{{template "head" .}}
 {{$z := zq .Zone}}{{$r := .Range}}
-<nav class="seg">
+<nav class="seg{{if .Snapshot}} hide{{end}}">
   <a href="/history?z={{$z}}&amp;range=24h"{{if eq $r "24h"}} class="on"{{end}}>24 h</a>
   <a href="/history?z={{$z}}&amp;range=7d"{{if eq $r "7d"}} class="on"{{end}}>7 {{t "days"}}</a>
   <a href="/history?z={{$z}}&amp;range=30d"{{if eq $r "30d"}} class="on"{{end}}>30 {{t "days"}}</a>
 </nav>
-<form class="inline" method="get" action="/history">
+{{if not .Snapshot}}<form class="inline" method="get" action="/history">
   <input type="hidden" name="z" value="{{.Zone.Name}}"><input type="hidden" name="range" value="{{.Range}}">
   <label>{{t "range"}} ≤ <input type="date" name="end"></label> <button class="small">OK</button>
-</form>
+</form>{{end}}
 <p class="meta">{{when .History.From}} – {{when .History.To}}</p>
 <section class="card">{{if .Chart}}{{.Chart}}{{else}}<p class="muted">{{t "none"}}</p>{{end}}<p class="legend">{{t "hist_legend"}}</p></section>
+{{template "snapform" .}}
 <section class="card"><h2>{{t "events"}}</h2>
 {{if not .History.Events}}<p class="muted">{{t "none"}}</p>{{else}}
 <table class="list">
@@ -118,29 +121,6 @@
 <p class="meta">{{tf "audit_cached" (when .At)}}</p>
 {{end}}
 <form method="post" action="/audit/run"><input type="hidden" name="csrf" value="{{.Req.CSRF}}"><input type="hidden" name="z" value="{{.Zone.Name}}"><button>{{t "audit_run"}}</button></form>
-</section>
-{{template "foot" .}}{{end}}
-
-{{define "blocks"}}{{template "head" .}}
-<p class="note">{{t "blocks_ro"}}</p>
-<section class="card"><h2>{{t "active_blocks"}}</h2>
-{{if not .Active}}<p class="muted">{{t "none"}}</p>{{else}}
-<table class="list">
-<thead><tr><th>{{t "type"}}</th><th>{{t "value"}}</th><th>{{t "action"}}</th><th>{{t "expires"}}</th><th>{{t "reason"}}</th></tr></thead>
-<tbody>{{range .Active}}<tr>
-  <td>{{.Type}}</td><td class="mono">{{.Value}}</td><td>{{.Action}}</td>
-  <td class="nowrap">{{if .ExpiresAt.IsZero}}{{t "permanent"}}{{else}}{{when .ExpiresAt}}{{end}}</td>
-  <td class="muted">{{.Reason}}<br><small>{{when .At}} · {{.Actor}}</small></td>
-</tr>{{end}}</tbody></table>{{end}}
-</section>
-<section class="card"><h2>{{t "block_log"}}</h2>
-{{if not .Log}}<p class="muted">{{t "none"}}</p>{{else}}
-<table class="list">
-<thead><tr><th>{{t "time"}}</th><th>{{t "op"}}</th><th>{{t "value"}}</th><th>{{t "actor"}}</th></tr></thead>
-<tbody>{{range .Log}}<tr>
-  <td class="nowrap">{{when .At}}</td><td><span class="ev ev-{{.Op}}">{{evName .Op}}</span> {{.Action}}</td>
-  <td><span class="mono">{{.Type}} {{.Value}}</span>{{if .Reason}}<br><small class="muted">{{.Reason}}</small>{{end}}</td><td>{{.Actor}}</td>
-</tr>{{end}}</tbody></table>{{end}}
 </section>
 {{template "foot" .}}{{end}}
 
@@ -248,3 +228,5 @@
 {{template "foot" .}}{{end}}
 
 {{define "uop"}}<form method="post" action="/users/{{index . 1}}/{{index . 0}}" class="op"><input type="hidden" name="csrf" value="{{index . 2}}"><button class="small">{{t (index . 3)}}</button></form>{{end}}
+
+{{define "blocklink"}}{{$dim := index . 0}}{{if and (index . 4) (or (eq $dim "ua") (eq $dim "asn"))}} <a class="act" href="/blocks/new?z={{index . 2}}&amp;type={{$dim}}&amp;value={{blockValue $dim (index . 1)}}&amp;reason={{index . 3}}">{{t "block_this"}}</a>{{end}}{{end}}

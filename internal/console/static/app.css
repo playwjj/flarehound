@@ -117,3 +117,18 @@ details summary { cursor: pointer; color: var(--link); font-size: .88rem; }
   body { font-size: 15px; }
   .tv { font-size: 1.8rem; }
 }
+
+/* v1.4 */
+.hide { display: none; }
+a.act { font-size: .8rem; margin-left: .4rem; white-space: nowrap; }
+a.btn { display: inline-block; background: var(--fg); color: var(--bg); border-radius: 8px; padding: .55rem 1rem; }
+select.tiny { width: auto; padding: .2rem .3rem; font-size: .8rem; }
+dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: .35rem .9rem; margin: 0 0 .8rem; font-size: .9rem; }
+dl.kv dt { color: var(--muted); }
+dl.kv dd { margin: 0; word-break: break-word; }
+form.confirm { border-top: 1px solid var(--line); padding-top: .8rem; margin-top: .6rem; }
+label.strong { color: var(--alert); font-weight: 600; }
+.snapform { justify-content: flex-end; }
+.snapnote { font-size: .8rem; }
+h1.snaph { margin: .2rem 0 .8rem; }
+@media (max-width: 480px) { dl.kv { grid-template-columns: 1fr; } dl.kv dd { margin-bottom: .4rem; } }

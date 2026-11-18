@@ -289,7 +289,7 @@ func runSubcommand(ctx context.Context, cfgPath, verb string, args []string, red
 		}
 		e := env(z, "cli")
 		if verb == "unblock" {
-			if err := e.Unblock(ctx, t, *yes, "unblock", *reason); err != nil {
+			if err := e.Unblock(ctx, t, *yes, "unblock", *reason); err != nil && !errors.Is(err, blockcli.ErrAuditFailed) {
 				return fail(err)
 			}
 			return 0

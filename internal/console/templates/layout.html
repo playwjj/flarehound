@@ -4,16 +4,25 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
-{{if .Refresh}}<meta http-equiv="refresh" content="{{.Refresh}}">{{end}}
+{{if .Snapshot}}<meta name="robots" content="noindex, nofollow">
+<title>{{.Title}} · {{.Zone.Name}} · FlareHound</title>
+<style>{{.CSS}}</style>
+{{else}}{{if .Refresh}}<meta http-equiv="refresh" content="{{.Refresh}}">{{end}}
 <title>{{.Title}} · FlareHound</title>
-<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/app.css">{{end}}
 </head>
 <body>
+{{if .Snapshot}}
+<header class="top"><span class="brand">FlareHound</span><span class="muted snapnote">{{t "snap_badge"}} · {{.Zone.Name}} · {{when .SnapAt}}</span></header>
+<main>
+<h1 class="snaph">{{.Title}}</h1>
+{{else}}
 <header class="top">
   <a class="brand" href="/{{if .Zone.Name}}?z={{zq .Zone}}{{end}}">FlareHound</a>
   {{if and .Req.User (or (not .Req.Session) .Req.Session.MFAOK)}}
   <nav class="user">
     <a href="/account">{{.Req.User.Username}}</a>
+    <a href="/snapshots">{{t "nav_snapshots"}}</a>
     {{if .Req.User.Admin}}<a href="/users">{{t "nav_users"}}</a>{{end}}
     {{if .Req.Session}}<form method="post" action="/logout"><input type="hidden" name="csrf" value="{{.Req.CSRF}}"><button class="link">{{t "logout"}}</button></form>{{end}}
   </nav>
@@ -35,16 +44,25 @@
 </nav>
 {{end}}
 <main>
+{{end}}
 {{if .Flash}}<div class="banner ok">{{.Flash}}</div>{{end}}
 {{if .Err}}<div class="banner err">{{.Err}}</div>{{end}}
 {{end}}
 
 {{define "foot"}}
 </main>
-<footer>FlareHound {{.Version}} · {{t "readonly_badge"}}{{if .Refresh}} · {{tf "auto_refresh" .Refresh}}{{end}} · {{tz}}</footer>
+{{if .Snapshot}}<footer>{{t "snap_footer"}} · FlareHound {{.Version}} · {{tz}}</footer>
+{{else}}<footer>FlareHound {{.Version}} · {{if .WriteOn}}{{t "write_badge"}}{{else}}{{t "readonly_badge"}}{{end}}{{if .Refresh}} · {{tf "auto_refresh" .Refresh}}{{end}} · {{tz}}</footer>{{end}}
 </body>
 </html>
 {{end}}
+
+{{define "snapform"}}{{if and (not .Snapshot) .SnapView}}
+<form class="inline snapform" method="post" action="/snapshots/create">
+  <input type="hidden" name="csrf" value="{{.Req.CSRF}}"><input type="hidden" name="view" value="{{.SnapView}}"><input type="hidden" name="params" value="{{.SnapParams}}">
+  <select name="ttl"><option value="24h">24 h</option><option value="7d" selected>7 {{t "days"}}</option><option value="30d">30 {{t "days"}}</option></select>
+  <button class="small">{{t "snap_make"}}</button>
+</form>{{end}}{{end}}
 
 {{define "message"}}{{template "head" .}}
 <section class="card narrow"><h1>{{.Title}}</h1><p>{{.Msg}}</p><p><a href="/">← FlareHound</a></p></section>

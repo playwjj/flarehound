@@ -8,7 +8,7 @@
 
 Cloudflare gives you data. FlareHound gives you the conclusion.
 
-> Status: **v1.3** — read-only web console with built-in accounts. Documentation: **https://playwjj.github.io/flarehound/** · Changelog: [CHANGELOG.md](CHANGELOG.md)
+> Status: **v1.4** — web console with in-console blocking, undo, before/after and read-only snapshots. Documentation: **https://playwjj.github.io/flarehound/** · Changelog: [CHANGELOG.md](CHANGELOG.md)
 >
 > **Direction:** FlareHound is growing a built-in web console — live movers (who is up, who is down), new-face tracking, history against the long-term baseline, the WAF audit, and in-console blocking with per-account audit — landing in v1.3–v1.5. Notifications become the alerting layer that brings you to the console. See the [web console revision note](docs/web-console-revision.md).
 >
@@ -117,7 +117,7 @@ Permission names: custom rules always need **Zone → WAF**. IP Access Rules var
 
 The watchdog makes GraphQL Analytics calls only (`api.cloudflare.com/client/v4/graphql`), which is why Analytics: Read is enough; older versions of this README also asked for Logs, Zone and Workers Scripts read access, which no code path uses. (This minimum is derived from the code's call sites; a quick check with your own token: create one with only Zone → Analytics: Read and run `flarehound -once -dry-run`.) The audit will additionally read rulesets through the REST API on the same host. Your token never leaves your machine and is never written to disk or logs by the program.
 
-## Web console (v1.3, read-only)
+## Web console
 
 ```bash
 # config.json: "console": {"enabled": true}
@@ -125,7 +125,9 @@ flarehound -config config.json console init-admin --user you   # or use the one-
 flarehound -config config.json console                         # http://127.0.0.1:8640
 ```
 
-A separate process from the watch, reading the same archive: the newest hour against the 28-day baseline, biggest risers and fallers by user agent / ASN / uncached path, new faces, history with alerts and blocks on a timeline, the WAF audit and the block list. Built for a phone first. Accounts (admin / viewer) with TOTP; it binds to loopback and never holds the write token — reach it through Tailscale, a TLS reverse proxy or Cloudflare Tunnel. See [docs/console.md](docs/console.md).
+A separate process from the watch, reading the same archive: the newest hour against the 28-day baseline, biggest risers and fallers by user agent / ASN / uncached path, new faces, history with alerts and blocks on a timeline, the WAF audit and the block list. Built for a phone first. Accounts (admin / viewer) with TOTP; it binds to loopback — reach it through Tailscale, a TLS reverse proxy or Cloudflare Tunnel.
+
+Give the write token to the console process (never the watch) and admins block from it: prefilled from the movers, the same guard rails and review as the CLI, a fresh two-factor code per change, audit under the account before anything is touched, read-back, one-click undo and an automatic before/after comparison. Any view can be frozen into a read-only snapshot with an expiring, revocable share link. See [docs/console.md](docs/console.md).
 
 ## One-click blocking
 
@@ -219,7 +221,7 @@ The primary form factor is a single Go binary in a Docker container, running on 
 - ~~v1.0~~ — calibration against the dashboard (`flarehound calibrate`), documentation site, first stable release ✅
 
 - ~~v1.3~~ — read-only web console (overview vs baseline, movers, new faces, history, WAF audit, blocks) with built-in accounts and two-factor sign-in ✅
-- v1.4 — blocking from the console (write token only in the console process, guard-rail confirmation, before/after effect, undo, read-only snapshots)
+- ~~v1.4~~ — blocking from the console (write token only in the console process, guard-rail confirmation, before/after effect, undo, read-only snapshots) ✅
 - v1.5 — Google / GitHub sign-in bound to local accounts
 
 Full specification: [SPEC.md](SPEC.md) (Chinese).

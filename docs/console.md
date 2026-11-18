@@ -1,9 +1,8 @@
 # Web console
 
-!!! note "v1.3 — read-only"
-    This version shows; it does not act. Blocking from the console arrives in v1.4 — until then use [`flarehound block`](blocking.md). Background: [web console revision](web-console-revision.md).
+The console is a second process next to the watch. It reads the archive the watch writes (`data/archive.db`) and keeps its own account database (`data/console.db`). The watch never opens the account database. Background: [web console revision](web-console-revision.md).
 
-The console is a second process next to the watch. It reads the archive the watch writes (`data/archive.db`) and keeps its own account database (`data/console.db`). The watch never opens the account database, and this console version never reads the write token.
+Without the write token the console is read-only. Give the write token to the **console process only** and admins can block, unblock and change expiry from it ([Blocking from the console](#blocking-from-the-console)); the watch must never hold it, and `flarehound doctor` checks both.
 
 ## Turn it on
 
@@ -17,11 +16,12 @@ Create the first admin, then start it:
 flarehound -config config.json console init-admin --user you
 flarehound -config config.json console
 # flarehound … console listening on http://127.0.0.1:8640 (read-only)
+# … or "(blocking enabled for admins)" when CF_WRITE_TOKEN is in its environment
 ```
 
 If no account exists, the console also logs a one-time setup link (`/setup?token=…`) that creates the first admin and then stops working.
 
-In Docker, run it as a second service from the same image and data volume, **without** `CF_WRITE_TOKEN` in its environment:
+In Docker, run it as a second service from the same image and data volume. Put `CF_WRITE_TOKEN` in **this** service only if you want in-console blocking — never in the watch service:
 
 ```yaml
   console:
@@ -29,6 +29,7 @@ In Docker, run it as a second service from the same image and data volume, **wit
     command: ["-config", "/app/config.json", "console"]
     environment:
       - CF_API_TOKEN=${CF_API_TOKEN}
+      - CF_WRITE_TOKEN=${CF_WRITE_TOKEN}   # optional: in-console blocking
     volumes:
       - ./config.json:/app/config.json:ro
       - ./data:/app/data
@@ -61,7 +62,7 @@ With `base_url` set, alerts link to the movers view, recoveries and daily report
 | **New faces** | User agents, ASNs and paths first seen in the last 24 h / 7 / 30 days, with their current volume. Entries in `known_faces` are marked. |
 | **History** | 24 h / 7 d / 30 d (or ending on a chosen date): requests and `dynamic` against a 28-day same-hour P25–P75 band, plus a timeline of alerts, recoveries, blocks, unblocks, expiries and rule changes. |
 | **WAF audit** | The same audit as `flarehound audit`, cached for 30 minutes; re-run on demand (once a minute at most). |
-| **Blocks** | Active blocks and the last 30 days of the block audit log (read-only). |
+| **Blocks** | With the write token: the blocks as Cloudflare holds them, joined with the audit log, attempts since each block, expiry, the rule quota and whether `flarehound enforce` is running; unblock, change expiry, undo, before/after. Without it: the audit log's view. |
 
 All numbers come from settled hourly windows in the archive — the same windows, calibration and baseline the alerts use. The hour in progress is not shown.
 
@@ -74,9 +75,34 @@ The archive keeps each hour's Top N per dimension. An entry that was below a lis
 
 Path movers and path faces count uncached requests — the expensive part. Path history starts with v1.3.
 
+## Blocking from the console
+
+Admins of a console holding the write token get a **block…** link next to user agents and ASNs on the movers and new-faces pages (prefilled), and **New block** on the blocks page. Every change goes through the same steps:
+
+1. **Form** — target, action (default: block for IP / UA, challenge for ASN / country), duration, reason.
+2. **Review** — the exact change (mechanism, the rule as it will read, rule quota), the measured share of the last hour's excess, and every guard-rail warning, exactly as the CLI shows them. Protected targets (your origin, Cloudflare, `never_block`, reserved ranges) are refused here. Nothing has changed yet.
+3. **Apply** — needs the review (a token bound to exactly what was reviewed and by whom, valid 15 minutes), the typed target where a block can hit real users (eyeball / unknown ASN, a country), and a fresh two-factor code for accounts with TOTP. The guard rails run again on the server: the page is never trusted.
+4. **Record, change, verify** — the console audit log records the request under your account *before* Cloudflare is touched, then the outcome; the archive's block log records the operator as `console:<account>`. The change is read back from Cloudflare.
+
+The same steps apply to **unblock** and to **change expiry** (+24 h, +7 days, +30 days or permanent).
+
+**Undo** is on every record of the block log: it opens the review of the inverse change — unblock a block, re-block an unblock (prefilled form), restore the previous expiry — and goes through the same confirmation. Only a target's newest record can be undone.
+
+**Before / after**: for every block, the console compares the hour before with the hour after it took effect — the target's requests and share of the zone, its status codes (blocked requests are still counted, as 403), the zone total, and the rule's attempts. It is computed automatically once that hour has settled (a partial comparison is shown before) and the block is marked on the history timeline.
+
+**Expiry** stays the job of `flarehound enforce` (CLI, or the `admin` service in docker-compose). The blocks page shows when it last ran and warns when blocks have an expiry but the enforcer is not running.
+
+The CLI (`flarehound block / unblock / blocks / enforce`) is unchanged and remains the fallback when the console is down.
+
+## Read-only snapshots
+
+Overview, movers and history have a **Snapshot** button. It freezes the view into one self-contained HTML page — stylesheet inlined, no script, no external resource, no account data or tokens — and gives you a share link that works **without sign-in** for 24 hours, 7 or 30 days. Use it for incident reviews and to show the situation to a site team or partner without giving them an account.
+
+The **Snapshots** page lists them (admins see all, others their own): download the HTML file, or revoke the link at any time. Creating and revoking are recorded in the account audit log. Shared pages are served with `noindex` and a strict Content-Security-Policy.
+
 ## Accounts
 
-- **Roles**: `admin` (manages accounts; from v1.4 also blocks) and `viewer` (reads).
+- **Roles**: `admin` (manages accounts; blocks when the console holds the write token) and `viewer` (reads, creates snapshots).
 - **No self-sign-up**. Admins create accounts on the Users page (a temporary password is shown once; the user must change it at first sign-in) or issue a single-use invitation link (72 hours).
 - **Passwords**: at least 10 characters, stored as argon2id hashes. Changing a password signs out every other session.
 - **Two-factor sign-in (TOTP)**: each user can turn it on under Account (any authenticator app; the key is shown for manual entry with an `otpauth://` URI). `console.require_totp` makes it mandatory. Accounts with TOTP confirm a fresh code before account administration (step-up).
@@ -111,4 +137,5 @@ The header is read only from `trusted_proxies` (the config refuses `proxy_auth.h
 - No JavaScript; strict Content-Security-Policy (`default-src 'none'`); no external resources.
 - Every form carries a CSRF token; cross-site POSTs are refused.
 - `console.db` is created with mode 0600 and holds password hashes and TOTP secrets — back it up like a credential store.
-- `flarehound doctor` checks: console on/off, loopback-only listening, proxy settings, accounts and admins, and whether the **watch** or this **console** has the write token in its environment (it must not).
+- `flarehound doctor` checks: console on/off, loopback-only listening, proxy settings, accounts and admins, and where the write token is: an error if the **watch** has it; for the console, whether blocking is enabled — with a warning when it is and `console.require_totp` is off.
+- With the write token in the console, turn on `console.require_totp`: then every account that can change Cloudflare signs in with two factors and confirms every change with a fresh code.

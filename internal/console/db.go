@@ -69,6 +69,25 @@ CREATE TABLE IF NOT EXISTS invites (
 	used_at    INTEGER NOT NULL DEFAULT 0,
 	used_by    INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS effects (
+	zone       TEXT    NOT NULL,
+	event_id   INTEGER NOT NULL, -- archive block_events.id
+	computed   INTEGER NOT NULL,
+	data       TEXT    NOT NULL, -- Effect as JSON
+	PRIMARY KEY (zone, event_id)
+);
+CREATE TABLE IF NOT EXISTS snapshots (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	token_hash TEXT    NOT NULL UNIQUE,
+	created_by INTEGER NOT NULL,
+	creator    TEXT    NOT NULL,
+	title      TEXT    NOT NULL,
+	zone       TEXT    NOT NULL,
+	html       TEXT    NOT NULL,
+	created_at INTEGER NOT NULL,
+	expires_at INTEGER NOT NULL,
+	revoked    INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS audit (
 	id     INTEGER PRIMARY KEY AUTOINCREMENT,
 	at     INTEGER NOT NULL,
@@ -615,4 +634,111 @@ func (d *DB) AuditLog(limit int) ([]AuditEntry, error) {
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// --- block effects (cache) ---
+
+// PutEffect caches a computed before/after comparison.
+func (d *DB) PutEffect(zone string, eventID int64, data []byte) error {
+	_, err := d.db.Exec(`INSERT INTO effects (zone, event_id, computed, data) VALUES (?, ?, ?, ?)
+		ON CONFLICT (zone, event_id) DO UPDATE SET computed = excluded.computed, data = excluded.data`,
+		zone, eventID, d.now().Unix(), string(data))
+	return err
+}
+
+// Effect returns a cached comparison.
+func (d *DB) Effect(zone string, eventID int64) ([]byte, bool, error) {
+	var raw string
+	err := d.db.QueryRow(`SELECT data FROM effects WHERE zone = ? AND event_id = ?`, zone, eventID).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	return []byte(raw), err == nil, err
+}
+
+// --- read-only snapshots ---
+
+// Snapshot is a self-contained HTML export of one view, optionally
+// shared through a signed, expiring, revocable link.
+type Snapshot struct {
+	ID        int64
+	CreatedBy int64
+	Creator   string
+	Title     string
+	Zone      string
+	HTML      string
+	CreatedAt time.Time
+	ExpiresAt time.Time
+	Revoked   bool
+}
+
+// Live reports whether the share link still works.
+func (s Snapshot) Live(now time.Time) bool { return !s.Revoked && now.Before(s.ExpiresAt) }
+
+// CreateSnapshot stores a snapshot and returns the link token.
+func (d *DB) CreateSnapshot(by int64, creator, title, zone, html string, ttl time.Duration) (string, int64, error) {
+	t := randToken(24)
+	now := d.now()
+	res, err := d.db.Exec(`INSERT INTO snapshots (token_hash, created_by, creator, title, zone, html, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		hashToken(t), by, creator, title, zone, html, now.Unix(), now.Add(ttl).Unix())
+	if err != nil {
+		return "", 0, err
+	}
+	id, _ := res.LastInsertId()
+	return t, id, nil
+}
+
+const snapCols = `id, created_by, creator, title, zone, html, created_at, expires_at, revoked`
+
+func scanSnapshot(sc interface{ Scan(...any) error }) (Snapshot, error) {
+	var s Snapshot
+	var c, e int64
+	var r int
+	err := sc.Scan(&s.ID, &s.CreatedBy, &s.Creator, &s.Title, &s.Zone, &s.HTML, &c, &e, &r)
+	s.CreatedAt, s.ExpiresAt, s.Revoked = time.Unix(c, 0), time.Unix(e, 0), r == 1
+	return s, err
+}
+
+// SnapshotByToken returns a snapshot whose link is still live.
+func (d *DB) SnapshotByToken(t string) (Snapshot, bool, error) {
+	s, err := scanSnapshot(d.db.QueryRow(`SELECT `+snapCols+` FROM snapshots WHERE token_hash = ?`, hashToken(t)))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Snapshot{}, false, nil
+	}
+	if err != nil {
+		return Snapshot{}, false, err
+	}
+	return s, s.Live(d.now()), nil
+}
+
+func (d *DB) SnapshotByID(id int64) (Snapshot, bool, error) {
+	s, err := scanSnapshot(d.db.QueryRow(`SELECT `+snapCols+` FROM snapshots WHERE id = ?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Snapshot{}, false, nil
+	}
+	return s, err == nil, err
+}
+
+// Snapshots lists snapshots (all when by is 0), newest first, without HTML.
+func (d *DB) Snapshots(by int64, limit int) ([]Snapshot, error) {
+	rows, err := d.db.Query(`SELECT id, created_by, creator, title, zone, '', created_at, expires_at, revoked FROM snapshots
+		WHERE ? = 0 OR created_by = ? ORDER BY id DESC LIMIT ?`, by, by, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Snapshot
+	for rows.Next() {
+		s, err := scanSnapshot(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) RevokeSnapshot(id int64) error {
+	_, err := d.db.Exec(`UPDATE snapshots SET revoked = 1 WHERE id = ?`, id)
+	return err
 }

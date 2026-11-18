@@ -2,6 +2,7 @@ package console
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"html/template"
 	"log"
@@ -11,6 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/playwjj/flarehound/internal/block"
+	"github.com/playwjj/flarehound/internal/blockcli"
+	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/config"
 	"github.com/playwjj/flarehound/internal/report"
 	"github.com/playwjj/flarehound/internal/store"
@@ -47,6 +51,29 @@ type page struct {
 	Active   []store.BlockEvent
 	Log      []store.BlockEvent
 
+	// writes (v1.4)
+	CanWrite  bool // this viewer may block (admin, console holds the write token)
+	WriteOn   bool // this console holds the write token
+	LiveB     *liveBlocks
+	Form      *blockForm
+	Prep      *blockcli.Prepared
+	Target    block.Target
+	Reason    string
+	Entries   []block.Entry
+	Event     store.BlockEvent
+	Until     int64
+	UntilTime time.Time
+	Effect    *Effect
+
+	// snapshots
+	Snapshot   bool         // rendering a self-contained snapshot
+	CSS        template.CSS // inlined stylesheet (snapshots)
+	SnapAt     time.Time
+	SnapView   string // view key for the snapshot form
+	SnapParams string // encoded view parameters
+	Snapshots  []Snapshot
+	ShareLink  string
+
 	// accounts
 	Sessions   []Session
 	TOTPSecret string
@@ -73,9 +100,35 @@ func urlQuery(s string) string { return url.QueryEscape(s) }
 func (s *Server) funcs() template.FuncMap {
 	return template.FuncMap{
 		"t":    func(k string) string { return s.lang.t(k) },
-		"list": func(a ...string) []string { return a },
-		"tf":   func(k string, a ...any) string { return fmt.Sprintf(s.lang.t(k), a...) },
-		"num":  fmtNum,
+		"list": func(a ...any) []any { return a },
+		"rowsCtx": func(p page, rows []Mover) []any {
+			ctx := struct {
+				Dim, ZoneName, Reason string
+				Can                   bool
+			}{p.Dim, p.Zone.Name, "movers: " + p.Dim, p.CanWrite && !p.Snapshot}
+			return []any{ctx, rows}
+		},
+		"blockValue": func(dim, name string) string {
+			if dim == DimASN {
+				return strings.TrimPrefix(strings.ToUpper(name), "AS")
+			}
+			return name
+		},
+		"unix":      func(t time.Time) int64 { return t.Unix() },
+		"now":       func() time.Time { return s.Now() },
+		"formQuery": func(f *blockForm) template.URL { return template.URL(f.query()) },
+		"fmtFace": func(fs []cfapi.Face) string {
+			var parts []string
+			for _, f := range fs {
+				parts = append(parts, f.Name+": "+fmtNum(f.Count))
+			}
+			if len(parts) == 0 {
+				return "—"
+			}
+			return strings.Join(parts, " · ")
+		},
+		"tf":  func(k string, a ...any) string { return fmt.Sprintf(s.lang.t(k), a...) },
+		"num": fmtNum,
 		"numf": func(v float64, unit string) string {
 			if unit == "ms" {
 				return fmt.Sprintf("%.1f ms", v)
@@ -163,6 +216,8 @@ func fmtAgo(d time.Duration, l string) string {
 
 func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, name string, p page) {
 	p.Req = reqOf(r)
+	p.WriteOn = s.CanWrite()
+	p.CanWrite = p.WriteOn && p.Req.User != nil && p.Req.User.Admin()
 	p.Lang = string(s.lang)
 	p.Version = s.Version
 	if p.Zones == nil {
@@ -171,15 +226,31 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, name
 	if p.Zone.ZoneID == "" && len(p.Zones) > 0 {
 		p.Zone = p.Zones[0]
 	}
-	var buf bytes.Buffer
-	if err := s.tmpl.ExecuteTemplate(&buf, name, p); err != nil {
+	out, err := s.renderBytes(name, p)
+	if err != nil {
 		log.Printf("console: template %s: %v", name, err)
 		http.Error(w, "template error", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
-	_, _ = w.Write(buf.Bytes())
+	_, _ = w.Write(out)
+}
+
+func (s *Server) renderBytes(name string, p page) ([]byte, error) {
+	p.Lang = string(s.lang)
+	p.Version = s.Version
+	if p.Zones == nil {
+		p.Zones = s.Cfg.Cloudflare.Zones
+	}
+	if p.Req == nil {
+		p.Req = &Req{Secure: true, Loopback: true}
+	}
+	var buf bytes.Buffer
+	if err := s.tmpl.ExecuteTemplate(&buf, name, p); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // zone picks the zone named by ?z= (name or ID), default the first.
@@ -196,42 +267,101 @@ func (s *Server) zone(r *http.Request) config.Zone {
 	return s.Cfg.Cloudflare.Zones[0]
 }
 
-func (s *Server) overviewPage(w http.ResponseWriter, r *http.Request) {
-	z := s.zone(r)
-	ov, err := BuildOverview(s.Archive, s.Cfg, z, s.Now())
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	p := page{Title: s.lang.t("nav_overview"), Zone: z, Nav: "overview", Overview: &ov, Refresh: s.Cfg.Console.RefreshSeconds}
-	if ov.Has {
-		// Up to the end of the hour in progress, so a fresh block or
-		// alert is on the chart (its traffic point is simply not there yet).
-		to := s.Now().Truncate(time.Hour).Add(time.Hour)
-		if h, err := BuildHistory(s.Archive, z, to.Add(-48*time.Hour), to); err == nil {
-			p.Chart = historyChart(h, s.Cfg.Location, 720, 200, false)
-		} else {
-			log.Printf("console: overview chart: %v", err)
+// Views that can also be exported as snapshots are built from their
+// query parameters alone.
+const (
+	viewOverview = "overview"
+	viewMovers   = "movers"
+	viewHistory  = "history"
+)
+
+func (s *Server) zoneOf(q url.Values) config.Zone {
+	want := q.Get("z")
+	for _, z := range s.Cfg.Cloudflare.Zones {
+		if z.Name == want || z.ZoneID == want {
+			return z
 		}
 	}
-	s.render(w, r, http.StatusOK, "overview", p)
+	return s.Cfg.Cloudflare.Zones[0]
 }
 
-func (s *Server) moversPage(w http.ResponseWriter, r *http.Request) {
-	z := s.zone(r)
-	dim := r.URL.Query().Get("dim")
-	switch dim {
-	case DimUA, DimASN, DimPath:
-	default:
-		dim = DimUA
+// buildView builds one exportable view: template name and page data.
+func (s *Server) buildView(view string, q url.Values) (string, page, error) {
+	z := s.zoneOf(q)
+	switch view {
+	case viewOverview:
+		ov, err := BuildOverview(s.Archive, s.Cfg, z, s.Now())
+		if err != nil {
+			return "", page{}, err
+		}
+		p := page{Title: s.lang.t("nav_overview"), Zone: z, Nav: "overview", Overview: &ov, Refresh: s.Cfg.Console.RefreshSeconds,
+			SnapView: view, SnapParams: url.Values{"z": {z.Name}}.Encode()}
+		if ov.Has {
+			// Up to the end of the hour in progress, so a fresh block or
+			// alert is on the chart (its traffic point is simply not there yet).
+			to := s.Now().Truncate(time.Hour).Add(time.Hour)
+			if h, err := BuildHistory(s.Archive, z, to.Add(-48*time.Hour), to); err == nil {
+				p.Chart = historyChart(h, s.Cfg.Location, 720, 200, false)
+			} else {
+				log.Printf("console: overview chart: %v", err)
+			}
+		}
+		return "overview", p, nil
+	case viewMovers:
+		dim := q.Get("dim")
+		switch dim {
+		case DimUA, DimASN, DimPath:
+		default:
+			dim = DimUA
+		}
+		mv, err := BuildMovers(s.Archive, s.Cfg, z, dim, 10)
+		if err != nil {
+			return "", page{}, err
+		}
+		return "movers", page{Title: s.lang.t("nav_movers"), Zone: z, Nav: "movers", Movers: &mv, Dim: dim,
+			Refresh: s.Cfg.Console.RefreshSeconds, SnapView: view, SnapParams: url.Values{"z": {z.Name}, "dim": {dim}}.Encode()}, nil
+	case viewHistory:
+		rng := q.Get("range")
+		span := 7 * 24 * time.Hour
+		switch rng {
+		case "24h":
+			span = 24 * time.Hour
+		case "30d":
+			span = 30 * 24 * time.Hour
+		default:
+			rng = "7d"
+		}
+		end := s.Now().Truncate(time.Hour).Add(time.Hour) // include the hour in progress (events)
+		endParam := ""
+		if e := q.Get("end"); e != "" {
+			if t, err := time.ParseInLocation("2006-01-02", e, s.Cfg.Location); err == nil {
+				end, endParam = t.Add(24*time.Hour), e
+			}
+		}
+		h, err := BuildHistory(s.Archive, z, end.Add(-span), end)
+		if err != nil {
+			return "", page{}, err
+		}
+		params := url.Values{"z": {z.Name}, "range": {rng}}
+		if endParam != "" {
+			params.Set("end", endParam)
+		}
+		p := page{Title: s.lang.t("nav_history"), Zone: z, Nav: "history", History: &h, Range: rng, SnapView: view, SnapParams: params.Encode()}
+		p.Chart = historyChart(h, s.Cfg.Location, 960, 280, true)
+		return "history", p, nil
 	}
-	mv, err := BuildMovers(s.Archive, s.Cfg, z, dim, 10)
-	if err != nil {
-		s.fail(w, r, err)
-		return
+	return "", page{}, fmt.Errorf("unknown view %q", view)
+}
+
+func (s *Server) viewPage(view string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name, p, err := s.buildView(view, r.URL.Query())
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		s.render(w, r, http.StatusOK, name, p)
 	}
-	s.render(w, r, http.StatusOK, "movers", page{Title: s.lang.t("nav_movers"), Zone: z, Nav: "movers", Movers: &mv, Dim: dim,
-		Refresh: s.Cfg.Console.RefreshSeconds})
 }
 
 func (s *Server) facesPage(w http.ResponseWriter, r *http.Request) {
@@ -250,34 +380,6 @@ func (s *Server) facesPage(w http.ResponseWriter, r *http.Request) {
 	}
 	s.render(w, r, http.StatusOK, "faces", page{Title: s.lang.t("nav_faces"), Zone: z, Nav: "faces", Faces: &nf, Days: days,
 		Refresh: s.Cfg.Console.RefreshSeconds})
-}
-
-func (s *Server) historyPage(w http.ResponseWriter, r *http.Request) {
-	z := s.zone(r)
-	rng := r.URL.Query().Get("range")
-	span := 7 * 24 * time.Hour
-	switch rng {
-	case "24h":
-		span = 24 * time.Hour
-	case "30d":
-		span = 30 * 24 * time.Hour
-	default:
-		rng = "7d"
-	}
-	end := s.Now().Truncate(time.Hour).Add(time.Hour) // include the hour in progress (events)
-	if e := r.URL.Query().Get("end"); e != "" {
-		if t, err := time.ParseInLocation("2006-01-02", e, s.Cfg.Location); err == nil {
-			end = t.Add(24 * time.Hour)
-		}
-	}
-	h, err := BuildHistory(s.Archive, z, end.Add(-span), end)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	p := page{Title: s.lang.t("nav_history"), Zone: z, Nav: "history", History: &h, Range: rng}
-	p.Chart = historyChart(h, s.Cfg.Location, 960, 280, true)
-	s.render(w, r, http.StatusOK, "history", p)
 }
 
 func (s *Server) auditPage(w http.ResponseWriter, r *http.Request) {
@@ -323,5 +425,12 @@ func (s *Server) blocksPage(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	s.render(w, r, http.StatusOK, "blocks", page{Title: s.lang.t("nav_blocks"), Zone: z, Nav: "blocks", Active: active, Log: logs})
+	p := page{Title: s.lang.t("nav_blocks"), Zone: z, Nav: "blocks", Active: active, Log: logs, Flash: r.URL.Query().Get("ok")}
+	if s.CanWrite() {
+		ctx, cancel := context.WithTimeout(r.Context(), writeTO)
+		defer cancel()
+		lb := s.loadLive(ctx, z)
+		p.LiveB = &lb
+	}
+	s.render(w, r, http.StatusOK, "blocks", p)
 }

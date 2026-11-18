@@ -9,6 +9,7 @@ package console
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
 	"embed"
 	"errors"
@@ -23,8 +24,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/playwjj/flarehound/internal/blockcli"
 	"github.com/playwjj/flarehound/internal/config"
 	"github.com/playwjj/flarehound/internal/report"
+	"github.com/playwjj/flarehound/internal/store"
 )
 
 //go:embed templates/*.html static/*
@@ -49,6 +52,12 @@ type Server struct {
 	Version string
 	Now     func() time.Time
 
+	// Writes (v1.4). All three set: this console holds the write token
+	// and admins can block, unblock and renew. Unset: read-only.
+	Write blockcli.WriteAPI
+	Live  LiveAPI
+	Store *store.Store
+
 	tmpl    *template.Template
 	trusted []netip.Prefix
 	lang    lang
@@ -60,6 +69,13 @@ type Server struct {
 
 	auditMu    sync.Mutex
 	auditCache map[string]auditEntry
+
+	css     template.CSS // inlined into snapshots
+	cssHash string       // its CSP hash
+
+	reviewKey     []byte
+	attemptsMu    sync.Mutex
+	attemptsCache map[string]attemptsEntry
 }
 
 type auditEntry struct {
@@ -73,12 +89,19 @@ type auditEntry struct {
 func New(cfg *config.Config, db *DB, arch Archive, auditor Auditor, version string) (*Server, string, error) {
 	s := &Server{Cfg: cfg, DB: db, Archive: arch, Auditor: auditor, Version: version, Now: time.Now,
 		trusted: cfg.TrustedProxies(), lang: lang(cfg.Report.Language), limiter: newLimiter(10, time.Minute),
-		auditCache: map[string]auditEntry{}}
+		auditCache: map[string]auditEntry{}, attemptsCache: map[string]attemptsEntry{}}
+	s.reviewKey = make([]byte, 32)
+	if _, err := rand.Read(s.reviewKey); err != nil {
+		return nil, "", err
+	}
 	t, err := template.New("").Funcs(s.funcs()).ParseFS(assets, "templates/*.html")
 	if err != nil {
 		return nil, "", err
 	}
 	s.tmpl = t
+	if err := s.loadCSS(); err != nil {
+		return nil, "", err
+	}
 	n, err := db.CountUsers()
 	if err != nil {
 		return nil, "", err
@@ -180,13 +203,27 @@ func (s *Server) Handler() http.Handler {
 	// Signed in.
 	user := func(h http.HandlerFunc) http.Handler { return s.requireUser(h, false) }
 	admin := func(h http.HandlerFunc) http.Handler { return s.requireUser(h, true) }
-	mux.Handle("GET /{$}", user(s.overviewPage))
-	mux.Handle("GET /movers", user(s.moversPage))
+	mux.Handle("GET /{$}", user(s.viewPage(viewOverview)))
+	mux.Handle("GET /movers", user(s.viewPage(viewMovers)))
 	mux.Handle("GET /faces", user(s.facesPage))
-	mux.Handle("GET /history", user(s.historyPage))
+	mux.Handle("GET /history", user(s.viewPage(viewHistory)))
 	mux.Handle("GET /audit", user(s.auditPage))
 	mux.Handle("POST /audit/run", user(s.auditRun))
 	mux.Handle("GET /blocks", user(s.blocksPage))
+	mux.Handle("GET /blocks/new", admin(s.requireWrite(s.blockNewPage)))
+	mux.Handle("POST /blocks/review", admin(s.requireWrite(s.blockReview)))
+	mux.Handle("POST /blocks/apply", admin(s.requireWrite(s.blockApply)))
+	mux.Handle("POST /blocks/unblock/review", admin(s.requireWrite(s.unblockReview)))
+	mux.Handle("POST /blocks/unblock/apply", admin(s.requireWrite(s.unblockApply)))
+	mux.Handle("POST /blocks/renew/review", admin(s.requireWrite(s.renewReview)))
+	mux.Handle("POST /blocks/renew/apply", admin(s.requireWrite(s.renewApply)))
+	mux.Handle("GET /blocks/undo/{id}", admin(s.requireWrite(s.undo)))
+	mux.Handle("GET /blocks/effect/{id}", user(s.requireWrite(s.effectPage)))
+	mux.Handle("POST /snapshots/create", user(s.snapshotCreate))
+	mux.Handle("GET /snapshots", user(s.snapshotsPage))
+	mux.Handle("GET /snapshots/{id}/download", user(s.snapshotDownload))
+	mux.Handle("POST /snapshots/{id}/revoke", user(s.snapshotRevoke))
+	mux.HandleFunc("GET /s/{token}", s.snapshotPublic)
 	mux.Handle("GET /account", user(s.accountPage))
 	mux.Handle("POST /account/password", user(s.accountPassword))
 	mux.Handle("POST /account/totp/start", user(s.totpStart))

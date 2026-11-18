@@ -328,7 +328,12 @@ func doctorConsole(d *doctorOut, cfg *config.Config, now time.Time) {
 			d.ok("console running on %s (heartbeat %s ago)", b.Listen, age)
 		}
 		if b.WriteTokenInEnv {
-			d.bad("the console process has %s in its environment: this version is read-only and must not hold the write token", cfg.Blocking.WriteTokenEnv)
+			d.ok("the console holds the write token: admins can block from the console")
+			if !cs.RequireTOTP {
+				d.warn("the console can change Cloudflare but console.require_totp is off: require two-factor sign-in for accounts that can block")
+			}
+		} else {
+			d.ok("the console has no write token: read-only (blocking via the CLI)")
 		}
 	}
 	db, err := console.OpenDB(cfg.Console.DBFile)

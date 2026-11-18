@@ -32,7 +32,7 @@ import (
 	"github.com/playwjj/flarehound/internal/store"
 )
 
-const consoleUsage = `Web console (v1.3, read-only; set "console": {"enabled": true} first):
+const consoleUsage = `Web console (set "console": {"enabled": true} first; blocking needs the write token in the console's environment):
 
   flarehound console                               serve the console (default 127.0.0.1:8640)
   flarehound console init-admin --user NAME [--email ADDR]
@@ -75,6 +75,7 @@ func runConsole(ctx context.Context, cfgPath string, args []string, redactor *lo
 
 	switch verb {
 	case "serve":
+		redactorAdd = func(s string) { redactor.Add(s) }
 		return serveConsole(ctx, cfg, db)
 	case "init-admin":
 		if *user == "" {
@@ -149,6 +150,9 @@ func runConsole(ctx context.Context, cfgPath string, args []string, redactor *lo
 	return 2
 }
 
+// redactorAdd registers a secret with the log redactor.
+var redactorAdd = func(string) {}
+
 func readNewPassword() (string, error) {
 	if pw := os.Getenv("FLAREHOUND_ADMIN_PASSWORD"); pw != "" {
 		return pw, console.CheckPasswordPolicy(pw)
@@ -207,10 +211,14 @@ func serveConsole(ctx context.Context, cfg *config.Config, db *console.DB) int {
 		log.Print("the console reads the local archive, but archive.disabled is true")
 		return 1
 	}
-	// v1.3 is read-only: the write token belongs to the CLI only (and to
-	// the console from v1.4, behind its own isolation rules).
-	if os.Getenv(cfg.Blocking.WriteTokenEnv) != "" {
-		log.Printf("warning: %s is set in the console's environment. This console version never uses it — remove it from this process.", cfg.Blocking.WriteTokenEnv)
+	// The write token lives in this process only (never in the watch):
+	// present, admins can block from the console; absent, it is read-only.
+	writeToken := os.Getenv(cfg.Blocking.WriteTokenEnv)
+	if writeToken != "" {
+		redactorAdd(writeToken)
+		if !cs.RequireTOTP {
+			log.Print("note: the console holds the write token but console.require_totp is off — consider requiring two-factor sign-in")
+		}
 	}
 	if !listenIsLocal(cs.Listen) {
 		log.Printf("warning: console.listen %s is not loopback-only. FlareHound does no TLS: put it behind Tailscale, a TLS reverse proxy or Cloudflare Tunnel, and list that proxy in console.trusted_proxies.", cs.Listen)
@@ -231,6 +239,12 @@ func serveConsole(ctx context.Context, cfg *config.Config, db *console.DB) int {
 		log.Printf("console: %v", err)
 		return 1
 	}
+	mode := "read-only"
+	if writeToken != "" {
+		srv.Write, srv.Live, srv.Store = cfapi.NewREST(writeToken), cfapi.New(cfg.APIToken), st
+		mode = "blocking enabled for admins"
+		go srv.Background(ctx)
+	}
 	hs := &http.Server{Addr: cs.Listen, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout: 30 * time.Second, WriteTimeout: 3 * time.Minute, IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 64 << 10}
 
@@ -239,7 +253,7 @@ func serveConsole(ctx context.Context, cfg *config.Config, db *console.DB) int {
 		log.Printf("console: %v", err)
 		return 1
 	}
-	log.Printf("flarehound %s console listening on http://%s (read-only)", version, ln.Addr())
+	log.Printf("flarehound %s console listening on http://%s (%s)", version, ln.Addr(), mode)
 	if setup != "" {
 		base := cs.BaseURL
 		if base == "" {

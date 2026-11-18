@@ -1,0 +1,202 @@
+{{define "blocks"}}{{template "head" .}}
+{{$z := .Zone}}{{$rq := .Req}}{{$can := .CanWrite}}
+{{if .CanWrite}}<p><a class="btn" href="/blocks/new?z={{zq .Zone}}">＋ {{t "block_new"}}</a></p>{{end}}
+{{with .LiveB}}
+  {{if .Err}}<div class="banner err">{{t "live_err"}} {{.Err}}</div>{{else}}
+  <p class="meta">{{tf "rules_used" .RulesUsed .RuleLimit .Plan}}{{if or .NoLists .NoAccess}} · {{t "live_partial"}}{{end}}</p>
+  {{if .EnforceOld}}<div class="banner warn">{{t "enforcer_off"}}</div>{{else if .Enforcer}}<p class="meta">{{t "enforcer_on"}} {{ago .Enforcer.At}}</p>{{end}}
+  <section class="card"><h2>{{t "active_blocks"}}</h2>
+  {{if not .Rows}}<p class="muted">{{t "none"}}</p>{{else}}
+  <table class="list">
+  <thead><tr><th>{{t "value"}}</th><th>{{t "action"}}</th><th class="r">{{t "attempts"}}</th><th>{{t "expires"}}</th><th>{{t "actions"}}</th></tr></thead>
+  <tbody>{{range .Rows}}<tr>
+    <td><span class="mono">{{.Target}}</span><br><small class="muted">{{.Mechanism}}{{if .HasEvent}} · {{when .Event.At}} · {{.Event.Actor}}{{end}}</small>
+      {{if .Missing}}<br><span class="bad">{{t "missing_cf"}}</span>{{else if not .HasEvent}}<br><small class="muted">{{t "no_audit"}}</small>{{end}}
+      {{if and .HasEvent .Event.Reason}}<br><small class="muted">{{.Event.Reason}}</small>{{end}}</td>
+    <td>{{.Action}}</td>
+    <td class="r">{{if .AttemptsKnown}}{{num .Attempts}}<br><small class="muted">{{t "since"}} {{when .AttemptsFrom}}</small>{{else}}<span class="muted">—</span>{{end}}</td>
+    <td class="nowrap">{{if and .HasEvent (not .Event.ExpiresAt.IsZero)}}{{when .Event.ExpiresAt}}{{else}}{{t "permanent"}}{{end}}</td>
+    <td class="acts">{{if and $can (not .Missing)}}
+      <form method="post" action="/blocks/unblock/review" class="op"><input type="hidden" name="csrf" value="{{$rq.CSRF}}"><input type="hidden" name="z" value="{{$z.Name}}"><input type="hidden" name="type" value="{{.Target.Type}}"><input type="hidden" name="value" value="{{.Target.Value}}"><button class="small">{{t "unblock"}}</button></form>
+      <form method="post" action="/blocks/renew/review" class="op"><input type="hidden" name="csrf" value="{{$rq.CSRF}}"><input type="hidden" name="z" value="{{$z.Name}}"><input type="hidden" name="type" value="{{.Target.Type}}"><input type="hidden" name="value" value="{{.Target.Value}}">
+        <select name="for" class="tiny"><option value="24h">+24 h</option><option value="7d">+7 {{t "days"}}</option><option value="30d">+30 {{t "days"}}</option><option value="">{{t "permanent"}}</option></select><button class="small">{{t "renew"}}</button></form>
+    {{end}}</td>
+  </tr>{{end}}</tbody></table>{{end}}
+  </section>
+  {{end}}
+{{else}}
+<p class="note">{{t "blocks_ro"}}</p>
+<section class="card"><h2>{{t "active_blocks"}}</h2>
+{{if not $.Active}}<p class="muted">{{t "none"}}</p>{{else}}
+<table class="list">
+<thead><tr><th>{{t "type"}}</th><th>{{t "value"}}</th><th>{{t "action"}}</th><th>{{t "expires"}}</th><th>{{t "reason"}}</th></tr></thead>
+<tbody>{{range $.Active}}<tr>
+  <td>{{.Type}}</td><td class="mono">{{.Value}}</td><td>{{.Action}}</td>
+  <td class="nowrap">{{if .ExpiresAt.IsZero}}{{t "permanent"}}{{else}}{{when .ExpiresAt}}{{end}}</td>
+  <td class="muted">{{.Reason}}<br><small>{{when .At}} · {{.Actor}}</small></td>
+</tr>{{end}}</tbody></table>{{end}}
+</section>
+{{end}}
+<section class="card"><h2>{{t "block_log"}}</h2>
+{{if not .Log}}<p class="muted">{{t "none"}}</p>{{else}}
+<table class="list">
+<thead><tr><th>{{t "time"}}</th><th>{{t "op"}}</th><th>{{t "value"}}</th><th>{{t "actor"}}</th><th></th></tr></thead>
+<tbody>{{range .Log}}<tr>
+  <td class="nowrap">{{when .At}}<br><small class="muted">#{{.ID}}</small></td><td><span class="ev ev-{{.Op}}">{{evName .Op}}</span> {{.Action}}{{if and (eq .Op "renew") (not .ExpiresAt.IsZero)}}<br><small class="muted">→ {{when .ExpiresAt}}</small>{{end}}</td>
+  <td><span class="mono">{{.Type}} {{.Value}}</span>{{if .Reason}}<br><small class="muted">{{.Reason}}</small>{{end}}</td><td>{{.Actor}}</td>
+  <td class="acts">{{if $.WriteOn}}{{if eq .Op "block"}}<a class="act" href="/blocks/effect/{{.ID}}?z={{zq $z}}">{{t "effect"}}</a> {{end}}{{if $can}}<a class="act" href="/blocks/undo/{{.ID}}?z={{zq $z}}">{{t "undo"}}</a>{{end}}{{end}}</td>
+</tr>{{end}}</tbody></table>
+{{if $.WriteOn}}<p class="note">{{t "undo_note"}}</p>{{end}}{{end}}
+</section>
+{{template "foot" .}}{{end}}
+
+{{define "blockfields"}}{{with .Form}}
+  <input type="hidden" name="z" value="{{.Zone.Name}}">
+  <input type="hidden" name="type" value="{{.Type}}"><input type="hidden" name="value" value="{{.Value}}">
+  <input type="hidden" name="action" value="{{.Action}}"><input type="hidden" name="for" value="{{.For}}"><input type="hidden" name="reason" value="{{.Reason}}">
+{{end}}{{end}}
+
+{{define "blocknew"}}{{template "head" .}}
+<section class="card">
+<h1>{{t "block_new"}} · {{.Zone.Name}}</h1>
+<p class="note">{{t "block_new_note"}}</p>
+{{with .Form}}
+<form method="post" action="/blocks/review" class="stack">
+  <input type="hidden" name="csrf" value="{{$.Req.CSRF}}"><input type="hidden" name="z" value="{{.Zone.Name}}">
+  <label>{{t "type"}}<select name="type">
+    {{$ty := .Type}}{{range (list "ip" "asn" "country" "ua")}}<option value="{{.}}"{{if eq . $ty}} selected{{end}}>{{t (print "tt_" .)}}</option>{{end}}
+  </select></label>
+  <label>{{t "value"}}<input name="value" value="{{.Value}}" required autocapitalize="none" autocomplete="off"></label>
+  <label>{{t "action"}}<select name="action">{{$a := .Action}}
+    <option value=""{{if eq $a ""}} selected{{end}}>{{t "act_default"}}</option>
+    <option value="challenge"{{if eq $a "challenge"}} selected{{end}}>{{t "act_challenge"}}</option>
+    <option value="block"{{if eq $a "block"}} selected{{end}}>{{t "act_block"}}</option>
+  </select></label>
+  <label>{{t "duration"}}<select name="for">{{$f := .For}}
+    <option value="1h"{{if eq $f "1h"}} selected{{end}}>1 h</option>
+    <option value="24h"{{if eq $f "24h"}} selected{{end}}>24 h</option>
+    <option value="7d"{{if eq $f "7d"}} selected{{end}}>7 {{t "days"}}</option>
+    <option value="30d"{{if eq $f "30d"}} selected{{end}}>30 {{t "days"}}</option>
+    <option value=""{{if eq $f ""}} selected{{end}}>{{t "permanent"}}</option>
+  </select></label>
+  <label>{{t "reason"}}<input name="reason" value="{{.Reason}}" maxlength="200"></label>
+  <button>{{t "review_btn"}}</button>
+</form>
+{{end}}
+</section>
+{{template "foot" .}}{{end}}
+
+{{define "blockreview"}}{{template "head" .}}
+<section class="card">
+<h1>{{t "block_review"}} · {{.Zone.Name}}</h1>
+{{with .Prep}}
+  {{if .AlreadyDone}}<div class="banner info">{{.Plan.Note}}</div>{{else}}
+  <dl class="kv">
+    <dt>{{t "value"}}</dt><dd class="mono">{{.Label}}</dd>
+    <dt>{{t "action"}}</dt><dd><b>{{.Opts.Action}}</b></dd>
+    <dt>{{t "mechanism"}}</dt><dd>{{.Plan.Note}}</dd>
+    {{if .Plan.Expression}}<dt>{{t "rule_after"}}</dt><dd><code class="wrap">{{.Plan.Expression}}</code></dd>{{end}}
+    <dt>{{t "measured"}}</dt><dd>{{if .ShareKnown}}{{.Measured}}{{else}}<span class="muted">{{t "not_measurable"}}</span>{{end}}</dd>
+    <dt>{{t "expires"}}</dt><dd>{{if .ExpiresAt.IsZero}}{{t "permanent"}}{{else}}{{when .ExpiresAt}} <small class="muted">({{t "needs_enforce"}})</small>{{end}}</dd>
+    {{if .Opts.Reason}}<dt>{{t "reason"}}</dt><dd>{{.Opts.Reason}}</dd>{{end}}
+  </dl>
+  {{range .Notes}}<div class="banner info">{{.}}</div>{{end}}
+  <h2>{{t "guard_title"}}</h2>
+  {{if .Warnings}}{{range .Warnings}}<div class="banner warn">⚠ {{.}}</div>{{end}}{{else}}<p class="good">✓ {{t "guard_clean"}}</p>{{end}}
+  {{end}}
+{{end}}
+{{if .Token}}
+<form method="post" action="/blocks/apply" class="stack confirm">
+  <input type="hidden" name="csrf" value="{{.Req.CSRF}}"><input type="hidden" name="review" value="{{.Token}}">
+  {{template "blockfields" .}}
+  {{if .Prep.Strong}}<label class="strong">{{tf "strong_label" .Prep.StrongWant}}<input name="confirm" autocomplete="off" autocapitalize="none" required></label>{{end}}
+  {{if .Req.User.TOTPEnabled}}<label>{{t "totp_code"}}<input name="code" inputmode="numeric" autocomplete="one-time-code" required></label>{{end}}
+  <button class="danger">{{t "apply_btn"}}</button>
+</form>
+<p class="note">{{t "apply_note"}}</p>
+{{end}}
+<p><a href="/blocks?z={{zq .Zone}}">← {{t "nav_blocks"}}</a>{{with .Form}} · <a href="/blocks/new?{{formQuery .}}">{{t "edit_btn"}}</a>{{end}}</p>
+</section>
+{{template "foot" .}}{{end}}
+
+{{define "unblockreview"}}{{template "head" .}}
+<section class="card">
+<h1>{{t "unblock_review"}} · {{.Zone.Name}}</h1>
+<p class="mono">{{.Target}}</p>
+{{if .Entries}}<ul>{{range .Entries}}<li>{{.Action}} — {{.Mechanism}}</li>{{end}}</ul>{{end}}
+{{if .Token}}
+<form method="post" action="/blocks/unblock/apply" class="stack confirm">
+  <input type="hidden" name="csrf" value="{{.Req.CSRF}}"><input type="hidden" name="review" value="{{.Token}}">
+  <input type="hidden" name="z" value="{{.Zone.Name}}"><input type="hidden" name="type" value="{{.Target.Type}}"><input type="hidden" name="value" value="{{.Target.Value}}"><input type="hidden" name="reason" value="{{.Reason}}">
+  {{if .Reason}}<p>{{t "reason"}}: {{.Reason}}</p>{{end}}
+  {{if .Req.User.TOTPEnabled}}<label>{{t "totp_code"}}<input name="code" inputmode="numeric" autocomplete="one-time-code" required></label>{{end}}
+  <button class="danger">{{t "unblock_btn"}}</button>
+</form>
+{{end}}
+<p><a href="/blocks?z={{zq .Zone}}">← {{t "nav_blocks"}}</a></p>
+</section>
+{{template "foot" .}}{{end}}
+
+{{define "renewreview"}}{{template "head" .}}
+<section class="card">
+<h1>{{t "renew_review"}} · {{.Zone.Name}}</h1>
+<p class="mono">{{.Target}}</p>
+{{if .Event.ID}}<dl class="kv">
+  <dt>{{t "expires_now"}}</dt><dd>{{if .Event.ExpiresAt.IsZero}}{{t "permanent"}}{{else}}{{when .Event.ExpiresAt}}{{end}}</dd>
+  <dt>{{t "expires_new"}}</dt><dd><b>{{if .Until}}{{when .UntilTime}}{{else}}{{t "permanent"}}{{end}}</b></dd>
+</dl>{{end}}
+{{if .Token}}
+<form method="post" action="/blocks/renew/apply" class="stack confirm">
+  <input type="hidden" name="csrf" value="{{.Req.CSRF}}"><input type="hidden" name="review" value="{{.Token}}">
+  <input type="hidden" name="z" value="{{.Zone.Name}}"><input type="hidden" name="type" value="{{.Target.Type}}"><input type="hidden" name="value" value="{{.Target.Value}}">
+  <input type="hidden" name="until" value="{{.Until}}"><input type="hidden" name="reason" value="{{.Reason}}">
+  {{if .Reason}}<p>{{t "reason"}}: {{.Reason}}</p>{{end}}
+  {{if .Req.User.TOTPEnabled}}<label>{{t "totp_code"}}<input name="code" inputmode="numeric" autocomplete="one-time-code" required></label>{{end}}
+  <button>{{t "renew_btn"}}</button>
+</form>
+{{end}}
+<p><a href="/blocks?z={{zq .Zone}}">← {{t "nav_blocks"}}</a></p>
+</section>
+{{template "foot" .}}{{end}}
+
+{{define "effect"}}{{template "head" .}}
+<section class="card">
+<h1>{{t "effect_title"}}</h1>
+<p><span class="mono">{{.Effect.Target}}</span> · {{.Event.Action}} · {{when .Effect.At}} · #{{.Event.ID}}</p>
+{{with .Effect}}
+{{if .Err}}<div class="banner warn">{{t "effect_err"}} {{.Err}}</div>{{end}}
+{{if not .Settled}}<div class="banner info">{{t "effect_partial"}}</div>{{end}}
+<table class="list">
+<thead><tr><th></th><th class="r">{{t "before_1h"}}</th><th class="r">{{t "after_1h"}}</th></tr></thead>
+<tbody>
+{{if .Measurable}}
+<tr><td>{{t "eff_requests"}}</td><td class="r">{{num .Before}}</td><td class="r">{{num .After}}</td></tr>
+<tr><td>{{t "eff_share"}}</td><td class="r">{{printf "%.1f%%" .ShareBefore}}</td><td class="r">{{printf "%.1f%%" .ShareAfter}}</td></tr>
+<tr><td>{{t "eff_status"}}</td><td class="r"><small>{{fmtFace .StatusBefore}}</small></td><td class="r"><small>{{fmtFace .StatusAfter}}</small></td></tr>
+{{end}}
+<tr><td>{{t "m_total"}}</td><td class="r">{{num .ZoneBefore}}</td><td class="r">{{num .ZoneAfter}}</td></tr>
+<tr><td>{{t "attempts"}}</td><td class="r">—</td><td class="r">{{if .AttemptsKnown}}{{num .Attempts}}{{else}}—{{end}}</td></tr>
+</tbody></table>
+{{if not .Measurable}}<p class="note">{{t "effect_not_measurable"}}</p>{{end}}
+<p class="note">{{t "effect_note"}}</p>
+{{end}}
+<p><a href="/blocks?z={{zq .Zone}}">← {{t "nav_blocks"}}</a> · <a href="/history?z={{zq .Zone}}&amp;range=24h">{{t "nav_history"}}</a></p>
+</section>
+{{template "foot" .}}{{end}}
+
+{{define "snapshots"}}{{template "head" .}}
+{{if .ShareLink}}<div class="banner info">{{t "snap_link_note"}}<br><code class="wrap">{{.ShareLink}}</code></div>{{end}}
+<section class="card"><h1>{{t "snap_title"}}</h1>
+<p class="note">{{t "snap_note"}}</p>
+{{if not .Snapshots}}<p class="muted">{{t "none"}}</p>{{else}}{{$rq := .Req}}{{$now := now}}
+<table class="list">
+<thead><tr><th>{{t "name"}}</th><th>{{t "created"}}</th><th>{{t "status"}}</th><th></th></tr></thead>
+<tbody>{{range .Snapshots}}<tr>
+  <td>{{.Title}}<br><small class="muted">#{{.ID}} · {{.Creator}}</small></td>
+  <td class="nowrap">{{when .CreatedAt}}</td>
+  <td>{{if .Revoked}}<span class="muted">{{t "snap_revoked"}}</span>{{else if .Live $now}}{{t "snap_live_until"}} {{when .ExpiresAt}}{{else}}<span class="muted">{{t "snap_expired"}}</span>{{end}}</td>
+  <td class="acts"><a class="act" href="/snapshots/{{.ID}}/download">{{t "download"}}</a>
+    {{if .Live $now}}<form method="post" action="/snapshots/{{.ID}}/revoke" class="op"><input type="hidden" name="csrf" value="{{$rq.CSRF}}"><button class="small">{{t "revoke"}}</button></form>{{end}}</td>
+</tr>{{end}}</tbody></table>{{end}}
+</section>
+{{template "foot" .}}{{end}}
