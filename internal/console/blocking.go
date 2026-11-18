@@ -758,18 +758,39 @@ func (s *Server) warmEffects(ctx context.Context) {
 
 // Background runs the console's periodic jobs until ctx ends.
 func (s *Server) Background(ctx context.Context) {
-	if !s.CanWrite() {
-		return
-	}
 	t := time.NewTicker(10 * time.Minute)
 	defer t.Stop()
 	for {
-		s.warmEffects(ctx)
-		s.warmBlocks(ctx)
+		if s.CanWrite() {
+			s.warmEffects(ctx)
+			s.warmBlocks(ctx)
+		}
+		s.warmPages(ctx)
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+		}
+	}
+}
+
+// warmPages keeps the slow, rarely changing pages ready: the WAF rules
+// (both phases) and the WAF audit, per zone. Each costs a few REST reads
+// every 10 minutes at most (the audit re-runs only when 30 minutes old).
+func (s *Server) warmPages(ctx context.Context) {
+	for _, z := range s.Cfg.Cloudflare.Zones {
+		if ctx.Err() != nil {
+			return
+		}
+		if s.RulesRead != nil || s.RulesWrite != nil {
+			for _, ph := range []string{"custom", "ratelimit"} {
+				cctx, cancel := context.WithTimeout(ctx, time.Minute)
+				s.cachedRules(cctx, z, ph, true)
+				cancel()
+			}
+		}
+		if s.Auditor != nil && !s.Cfg.WAFAudit.Disabled {
+			s.cachedAudit(ctx, z, false)
 		}
 	}
 }

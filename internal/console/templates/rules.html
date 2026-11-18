@@ -9,7 +9,7 @@
 <h1>{{t "nav_rules"}} · {{$z.Name}}</h1>
 <p class="note">{{t "rules_order_note"}}</p>
 {{if .Err}}<div class="banner warn">{{.Err}}</div>{{else}}
-<p class="meta">{{tf "rules_quota" .Used .Limit}}{{if .Plan}} · {{.Plan}}{{end}}{{if .Version}} · v{{.Version}}{{end}}</p>
+<p class="meta">{{tf "rules_quota" .Used .Limit}}{{if .Plan}} · {{.Plan}}{{end}}{{if .Version}} · v{{.Version}}{{end}}{{if not .At.IsZero}} · {{t "read_at"}} {{ago .At}} · <a href="/rules?z={{zq $z}}&amp;phase={{$ph}}&amp;fresh=1">{{t "refresh"}}</a>{{end}}</p>
 {{if $can}}<p><a class="btn" href="/rules/recipes?z={{zq $z}}">＋ {{t "add_from_recipe"}}</a></p>{{end}}
 {{if not .Rules}}<p class="muted">{{t "none"}}</p>{{else}}
 <ol class="rulelist">
@@ -53,7 +53,8 @@
   <h2>{{tr .Title}}</h2>
   <p>{{tr .Summary}}</p>
   <details><summary>{{t "recipe_why"}}</summary><p class="muted">{{tr .Why}}</p></details>
-  {{if $can}}<p><a class="btn" href="/rules/recipe/{{.Name}}?z={{zq $z}}">{{t "recipe_use"}}</a></p>{{else}}<p class="note">CLI: <code>flarehound rules recipe {{.Name}}</code></p>{{end}}
+  {{if full $.Quota .Phase}}{{$qv := quotaOf $.Quota .Phase}}<div class="banner warn">{{tf "quota_full" $qv.Used $qv.Limit}}</div>
+  {{else if $can}}<p><a class="btn" href="/rules/recipe/{{.Name}}?z={{zq $z}}">{{t "recipe_use"}}</a></p>{{else}}<p class="note">CLI: <code>flarehound rules recipe {{.Name}}</code></p>{{end}}
 </section>
 {{end}}
 <section class="card"><h2>{{t "basics_title"}}</h2>
@@ -67,24 +68,27 @@
 {{template "foot" .}}{{end}}
 
 {{define "recipe"}}{{template "head" .}}
-{{$in := .Inputs}}
-{{with .Recipe}}
+{{$in := .Inputs}}{{$plan := .ZonePlan}}{{$q := .Quota}}
+{{with .Recipe}}{{$isFull := full $q .Phase}}
 <section class="card">
 <h1>{{tr .Title}}</h1>
 <p>{{tr .Summary}}</p>
 <details open><summary>{{t "recipe_why"}}</summary><p class="muted">{{tr .Why}}</p></details>
+{{if $isFull}}{{$qv := quotaOf $q .Phase}}<div class="banner warn">{{tf "quota_full" $qv.Used $qv.Limit}}</div>{{else}}
+{{if eq $plan "free"}}<p class="note">{{t "free_plan_note"}}</p>{{end}}
 <form method="post" action="/rules/review" class="stack">
   <input type="hidden" name="csrf" value="{{$.Req.CSRF}}"><input type="hidden" name="z" value="{{$.Zone.Name}}">
   <input type="hidden" name="op" value="recipe"><input type="hidden" name="recipe" value="{{.Name}}">
   {{range .Params}}{{$v := index $in .Name}}
   <label>{{tr .Label}}{{if .Required}} *{{end}}
-    {{if .Choices}}<select name="in_{{.Name}}">{{$cur := $v}}{{range .Choices}}<option value="{{.}}"{{if eq . $cur}} selected{{end}}>{{.}}</option>{{end}}</select>
+    {{if .Choices}}<select name="in_{{.Name}}">{{$cur := $v}}{{range (choicesFor . $plan)}}<option value="{{.}}"{{if eq . $cur}} selected{{end}}>{{.}}</option>{{end}}</select>
+    {{else if and (eq $plan "free") (or (eq .Name "period") (eq .Name "timeout"))}}<input name="in_{{.Name}}" value="10" readonly><small class="muted">{{t "free_rl_fixed"}}</small>
     {{else if .Secret}}<input name="in_{{.Name}}" type="password" autocomplete="new-password">
     {{else}}<input name="in_{{.Name}}" value="{{if $v}}{{$v}}{{else}}{{.Default}}{{end}}" autocapitalize="none" autocomplete="off">{{end}}
     {{if or (index .Help 0) (index .Help 1)}}<small class="muted">{{tr .Help}}</small>{{end}}
   </label>{{end}}
   <button>{{t "review_btn"}}</button>
-</form>
+</form>{{end}}
 </section>
 {{end}}
 <p><a href="/rules/recipes?z={{zq .Zone}}">← {{t "recipes_title"}}</a></p>

@@ -41,6 +41,7 @@ type page struct {
 	Role    string
 
 	// views
+	NoASN    bool // the plan's analytics have no ASN dimension
 	Overview *Overview
 	Live     *LiveView
 	Drill    *Drill
@@ -82,6 +83,8 @@ type page struct {
 	Notes     []string
 	RSVersion string // ruleset version the review was planned on
 	Fixes     []wafkit.Fix
+	Quota     map[string]rulesView // per Cloudflare phase
+	ZonePlan  string
 
 	// third-party sign-in
 	Providers  []*Provider
@@ -149,6 +152,12 @@ func (s *Server) funcs() template.FuncMap {
 		},
 		"phaseShort": func(p string) string { return ruleexec.PhaseName(p) },
 		"drillable":  func(dim, name string) bool { _, ok := drillFilter(dim, name); return ok },
+		"choicesFor": func(p wafkit.Param, plan string) []string { return p.ChoicesFor(plan) },
+		"full": func(q map[string]rulesView, phase string) bool {
+			v, ok := q[phase]
+			return ok && v.Limit > 0 && v.Used >= v.Limit
+		},
+		"quotaOf": func(q map[string]rulesView, phase string) rulesView { return q[phase] },
 		"providerLabel": func(name string) string {
 			switch name {
 			case "google":
@@ -361,7 +370,7 @@ func (s *Server) buildView(ctx context.Context, view string, q url.Values) (stri
 		if err != nil {
 			return "", page{}, err
 		}
-		return "movers", page{Title: s.lang.t("nav_movers"), Zone: z, Nav: "movers", Movers: &mv, Dim: dim,
+		return "movers", page{Title: s.lang.t("nav_movers"), Zone: z, Nav: "movers", Movers: &mv, Dim: dim, NoASN: dim == DimASN && s.noASN(ctx, z),
 			Refresh: s.Cfg.Console.RefreshSeconds, SnapView: view, SnapParams: url.Values{"z": {z.Name}, "dim": {dim}}.Encode()}, nil
 	case viewHistory:
 		rng := q.Get("range")
@@ -421,7 +430,7 @@ func (s *Server) facesPage(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	s.render(w, r, http.StatusOK, "faces", page{Title: s.lang.t("nav_faces"), Zone: z, Nav: "faces", Faces: &nf, Days: days,
+	s.render(w, r, http.StatusOK, "faces", page{Title: s.lang.t("nav_faces"), Zone: z, Nav: "faces", Faces: &nf, Days: days, NoASN: s.noASN(r.Context(), z),
 		Refresh: s.Cfg.Console.RefreshSeconds})
 }
 
@@ -480,4 +489,13 @@ func (s *Server) blocksPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.render(w, r, http.StatusOK, "blocks", p)
+}
+
+// noASN reports a plan without the ASN analytics dimension (Free).
+func (s *Server) noASN(ctx context.Context, z config.Zone) bool {
+	if s.Caps == nil {
+		return false
+	}
+	c := s.Caps(ctx, z)
+	return c.Probed && !c.HasDim(cfapi.DimASN)
 }

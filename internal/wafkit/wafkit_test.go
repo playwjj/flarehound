@@ -176,3 +176,30 @@ func TestFixes(t *testing.T) {
 		t.Fatalf("protect-paths inputs: %v", fs[0].Inputs)
 	}
 }
+
+func TestFreePlan(t *testing.T) {
+	r, _ := RecipeByName("allow-verified-bots")
+	var skip Param
+	for _, p := range r.Params {
+		if p.Name == "skip" {
+			skip = p
+		}
+	}
+	for _, c := range skip.ChoicesFor("free") {
+		if strings.Contains(c, "bots") {
+			t.Fatalf("Free choices include %q", c)
+		}
+	}
+	if len(skip.ChoicesFor("pro")) != len(skip.Choices) {
+		t.Fatal("Pro choices filtered")
+	}
+	if _, err := r.Build(map[string]string{"skip": "rules,bots"}, "free"); err == nil {
+		t.Fatal("Free plan skip of Super Bot Fight Mode accepted")
+	}
+	if _, err := r.Build(map[string]string{"skip": "rules,bots"}, "pro"); err != nil {
+		t.Fatalf("Pro: %v", err)
+	}
+	if got := PaidScopes([]string{"rules", "Managed", "bots"}); len(got) != 2 {
+		t.Fatalf("paid scopes: %v", got)
+	}
+}

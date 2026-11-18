@@ -688,6 +688,10 @@ type Snapshot struct {
 	Revoked   bool
 }
 
+// Pruned reports a listed snapshot whose page was dropped by retention
+// (in listings HTML is only a marker, never the page).
+func (s Snapshot) Pruned() bool { return s.HTML == "" }
+
 // Live reports whether the share link still works.
 func (s Snapshot) Live(now time.Time) bool { return !s.Revoked && now.Before(s.ExpiresAt) }
 
@@ -737,7 +741,7 @@ func (d *DB) SnapshotByID(id int64) (Snapshot, bool, error) {
 
 // Snapshots lists snapshots (all when by is 0), newest first, without HTML.
 func (d *DB) Snapshots(by int64, limit int) ([]Snapshot, error) {
-	rows, err := d.db.Query(`SELECT id, created_by, creator, title, zone, '', created_at, expires_at, revoked FROM snapshots
+	rows, err := d.db.Query(`SELECT id, created_by, creator, title, zone, CASE WHEN html = '' THEN '' ELSE 'x' END, created_at, expires_at, revoked FROM snapshots
 		WHERE ? = 0 OR created_by = ? ORDER BY id DESC LIMIT ?`, by, by, limit)
 	if err != nil {
 		return nil, err
@@ -913,4 +917,48 @@ func (d *DB) TakeOAuthState(state string) (OAuthState, bool, error) {
 		return st, false, nil
 	}
 	return st, true, nil
+}
+
+// Retention of console data (sessions and invites: see PruneSessions).
+const (
+	snapshotKeep = 30 * 24 * time.Hour  // a dead snapshot's page, after its link died
+	auditKeep    = 365 * 24 * time.Hour // account audit log
+	effectKeep   = 90 * 24 * time.Hour  // cached before/after comparisons
+)
+
+// PruneStats says what Prune removed.
+type PruneStats struct {
+	Sessions, Snapshots, Audit, Effects, OAuth int64
+}
+
+// Prune applies the retention rules. Snapshot rows stay (who shared what,
+// when) but the page of a snapshot whose link expired or was revoked more
+// than 30 days ago is dropped.
+func (d *DB) Prune() (PruneStats, error) {
+	var ps PruneStats
+	now := d.now()
+	exec := func(n *int64, q string, args ...any) error {
+		res, err := d.db.Exec(q, args...)
+		if err != nil {
+			return err
+		}
+		*n, _ = res.RowsAffected()
+		return nil
+	}
+	if err := exec(&ps.Sessions, `DELETE FROM sessions WHERE expires_at <= ?`, now.Unix()); err != nil {
+		return ps, err
+	}
+	_, _ = d.db.Exec(`DELETE FROM invites WHERE used_at = 0 AND expires_at <= ?`, now.Add(-7*24*time.Hour).Unix())
+	cut := now.Add(-snapshotKeep).Unix()
+	if err := exec(&ps.Snapshots, `UPDATE snapshots SET html = '' WHERE html != '' AND created_at < ? AND (expires_at < ? OR revoked = 1)`, cut, cut); err != nil {
+		return ps, err
+	}
+	if err := exec(&ps.Audit, `DELETE FROM audit WHERE at < ?`, now.Add(-auditKeep).Unix()); err != nil {
+		return ps, err
+	}
+	if err := exec(&ps.Effects, `DELETE FROM effects WHERE computed < ?`, now.Add(-effectKeep).Unix()); err != nil {
+		return ps, err
+	}
+	err := exec(&ps.OAuth, `DELETE FROM oauth_states WHERE expires_at <= ?`, now.Unix())
+	return ps, err
 }

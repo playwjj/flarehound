@@ -95,6 +95,8 @@ With the write token, admins can also:
 
 Every change goes through a review page — the rule in plain words, the exact change, the quota after, warnings — and is applied with the same safeguards as blocking: a review token bound to what was reviewed *and to the ruleset version it was planned on* (if someone else changed the rules meanwhile, you are asked to review again), a fresh two-factor code for accounts with TOTP, the account audit log written before Cloudflare is touched, a phase backup, read-back verification, and the execution log. FlareHound's own block rules are shown but managed on the blocks page.
 
+The rules and the audit are kept warm in the background (rules re-read every 10 minutes, the audit re-run when 30 minutes old), so both pages open immediately; a change made in the console refreshes them, and the rules page has a refresh link. Recipes are plan-aware: a recipe whose rule type is at the plan's quota says so instead of offering a form, Free zones are not offered skip scopes they lack, and their rate-limit timing is fixed at 10 seconds.
+
 The **WAF audit** page puts **How to fix** first — each finding with what to do and a **Fix with a recipe** link (or the CLI command) — and keeps the full report below. New to this? [WAF basics](waf-guide.md) / [中文](waf-guide-zh.md).
 
 ## Read-only snapshots
@@ -171,6 +173,7 @@ The header is read only from `trusted_proxies` (the config refuses `proxy_auth.h
 
 - No JavaScript; strict Content-Security-Policy (`default-src 'none'`); no external resources.
 - Every form carries a CSRF token; cross-site POSTs are refused.
+- Retention: expired sessions and sign-in states are removed hourly; a snapshot's page is dropped 30 days after its link expired or was revoked (the record stays); account audit entries are kept for a year, cached before/after comparisons for 90 days.
 - `console.db` is created with mode 0600 and holds password hashes and TOTP secrets — back it up like a credential store.
 - `flarehound doctor` checks: console on/off, loopback-only listening, proxy settings, accounts and admins, and where the write token is: an error if the **watch** has it; for the console, whether blocking is enabled — with a warning when it is and `console.require_totp` is off.
 - With the write token in the console, turn on `console.require_totp`: then every account that can change Cloudflare signs in with two factors and confirms every change with a fresh code.

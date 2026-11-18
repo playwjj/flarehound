@@ -245,7 +245,7 @@ func serveConsole(ctx context.Context, cfg *config.Config, db *console.DB) int {
 	}
 	// Live views (read token): the last hour with the watch's own
 	// queries, and the movers' drill-down.
-	srv.Measure, srv.Analytics = runner.Measure, cfapi.New(cfg.APIToken)
+	srv.Measure, srv.Analytics, srv.Caps = runner.Measure, cfapi.New(cfg.APIToken), runner.Caps
 	// WAF rules: listed with the read token (Zone → WAF: Read), changed
 	// with the write token; backups and the change log live in the archive.
 	srv.RulesRead, srv.Store = cfapi.NewREST(cfg.APIToken), st
@@ -254,8 +254,8 @@ func serveConsole(ctx context.Context, cfg *config.Config, db *console.DB) int {
 		srv.Write, srv.Live, srv.Store = cfapi.NewREST(writeToken), cfapi.New(cfg.APIToken), st
 		srv.RulesWrite = cfapi.NewREST(writeToken)
 		mode = "blocking enabled for admins"
-		go srv.Background(ctx)
 	}
+	go srv.Background(ctx) // keeps slow pages warm (and, with the write token, blocks and effects)
 	hs := &http.Server{Addr: cs.Listen, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout: 30 * time.Second, WriteTimeout: 3 * time.Minute, IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 64 << 10}
 
@@ -301,8 +301,11 @@ func serveConsole(ctx context.Context, cfg *config.Config, db *console.DB) int {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				if err := db.PruneSessions(); err != nil {
-					log.Printf("console: prune sessions: %v", err)
+				ps, err := db.Prune()
+				if err != nil {
+					log.Printf("console: prune: %v", err)
+				} else if ps.Snapshots+ps.Audit+ps.Effects > 0 {
+					log.Printf("console: pruned %d snapshot page(s), %d audit entries, %d cached comparisons", ps.Snapshots, ps.Audit, ps.Effects)
 				}
 			}
 		}

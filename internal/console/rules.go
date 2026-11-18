@@ -60,6 +60,7 @@ type rulesView struct {
 	Version string
 	Rules   []RuleView
 	Err     string
+	At      time.Time // when read from Cloudflare
 }
 
 func (s *Server) rulesWriteOn() bool { return s.RulesWrite != nil && s.Store != nil }
@@ -106,6 +107,48 @@ func phaseOf(v string) (string, string) {
 	return "custom", cfapi.PhaseCustom
 }
 
+const rulesTTL = 5 * time.Minute
+
+type rulesEntry struct {
+	at time.Time
+	v  rulesView
+}
+
+// cachedRules returns a phase's rules from the cache (refreshed by the
+// background job and after every change) or reads them; fresh forces a read.
+func (s *Server) cachedRules(ctx context.Context, z config.Zone, short string, fresh bool) rulesView {
+	short, _ = phaseOf(short)
+	key := z.ZoneID + "|" + short
+	s.rulesMu.Lock()
+	e, ok := s.rulesCache[key]
+	s.rulesMu.Unlock()
+	if ok && !fresh && s.Now().Sub(e.at) < rulesTTL {
+		return e.v
+	}
+	v := s.loadRules(ctx, z, short)
+	v.At = s.Now()
+	if v.Err == "" {
+		s.rulesMu.Lock()
+		s.rulesCache[key] = rulesEntry{at: v.At, v: v}
+		s.rulesMu.Unlock()
+	}
+	return v
+}
+
+// forgetRules drops a zone's cached rules and audit after a change.
+func (s *Server) forgetRules(z config.Zone) {
+	s.rulesMu.Lock()
+	for k := range s.rulesCache {
+		if strings.HasPrefix(k, z.ZoneID+"|") {
+			delete(s.rulesCache, k)
+		}
+	}
+	s.rulesMu.Unlock()
+	s.auditMu.Lock()
+	delete(s.auditCache, z.ZoneID)
+	s.auditMu.Unlock()
+}
+
 func (s *Server) loadRules(ctx context.Context, z config.Zone, short string) rulesView {
 	short, phase := phaseOf(short)
 	v := rulesView{Phase: short}
@@ -134,7 +177,7 @@ func (s *Server) rulesPage(w http.ResponseWriter, r *http.Request) {
 	z := s.zone(r)
 	ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
 	defer cancel()
-	v := s.loadRules(ctx, z, r.URL.Query().Get("phase"))
+	v := s.cachedRules(ctx, z, r.URL.Query().Get("phase"), r.URL.Query().Get("fresh") == "1")
 	p := page{Title: s.lang.t("nav_rules"), Zone: z, Nav: "rules", Rules: &v, Flash: r.URL.Query().Get("ok"), CanRules: s.canEditRules(r)}
 	if p.CanRules {
 		p.Backups, _ = s.Store.RuleBackups(z.ZoneID, "", 20)
@@ -142,9 +185,34 @@ func (s *Server) rulesPage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, http.StatusOK, "rules", p)
 }
 
+// quotas returns each phase's rule count and limit (from the cache).
+func (s *Server) quotas(ctx context.Context, z config.Zone) (map[string]rulesView, string) {
+	q := map[string]rulesView{}
+	plan := ""
+	if s.RulesRead == nil && s.RulesWrite == nil {
+		return q, plan
+	}
+	for _, ph := range []string{"custom", "ratelimit"} {
+		v := s.cachedRules(ctx, z, ph, false)
+		if v.Err == "" {
+			q[cfPhase(ph)] = v
+			if v.Plan != "" {
+				plan = v.Plan
+			}
+		}
+	}
+	return q, plan
+}
+
+func cfPhase(short string) string { _, p := phaseOf(short); return p }
+
 func (s *Server) recipesPage(w http.ResponseWriter, r *http.Request) {
 	z := s.zone(r)
-	s.render(w, r, http.StatusOK, "recipes", page{Title: s.lang.t("recipes_title"), Zone: z, Nav: "rules", Recipes: wafkit.Recipes(), CanRules: s.canEditRules(r)})
+	ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
+	defer cancel()
+	q, plan := s.quotas(ctx, z)
+	s.render(w, r, http.StatusOK, "recipes", page{Title: s.lang.t("recipes_title"), Zone: z, Nav: "rules", Recipes: wafkit.Recipes(),
+		CanRules: s.canEditRules(r), Quota: q, ZonePlan: plan})
 }
 
 func (s *Server) recipeForm(w http.ResponseWriter, r *http.Request) {
@@ -160,7 +228,11 @@ func (s *Server) recipeForm(w http.ResponseWriter, r *http.Request) {
 			in[p.Name] = r.URL.Query().Get(p.Name)
 		}
 	}
-	s.render(w, r, http.StatusOK, "recipe", page{Title: rc.T(rc.Title, string(s.lang)), Zone: z, Nav: "rules", Recipe: &rc, Inputs: in})
+	ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
+	defer cancel()
+	q, plan := s.quotas(ctx, z)
+	s.render(w, r, http.StatusOK, "recipe", page{Title: rc.T(rc.Title, string(s.lang)), Zone: z, Nav: "rules", Recipe: &rc, Inputs: in,
+		Quota: q, ZonePlan: plan})
 }
 
 // ruleOp is one requested change, as posted.
@@ -342,6 +414,7 @@ func (s *Server) ruleApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := x.Apply(ctx, st, plan)
+	s.forgetRules(o.Zone) // changed (or maybe changed): read it again
 	if err != nil {
 		s.audit(r, "rule_failed", o.Op+" "+target, err.Error())
 		s.renderRuleReview(w, r, o, p, rq, s.lang.t("write_failed")+" "+err.Error())

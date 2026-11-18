@@ -2,6 +2,12 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.7.1 — 2026-11-18
+
+- **Faster on slow links.** The drill-down runs its queries four at a time (about 20 s → 3.5 s on the test zone over a slow connection; cached afterwards). The WAF rules and WAF audit pages are kept warm in the background (rules re-read every 10 minutes, the audit when 30 minutes old) and open immediately; any rule change made in the console refreshes both. The rules page shows when it was read, with a refresh link.
+- **Plan-aware.** On plans whose analytics have no ASN dimension (Free), the movers and new-faces pages say so instead of showing an empty list. Recipes that would exceed the plan's rule quota say so in the catalogue and on the form (no form to fill in vain), and `rules recipe` stops before explaining. Free zones are not offered skip scopes they do not have (Super Bot Fight Mode, managed rules) — refused if passed anyway, noted for `rules add` — and their rate-limit period and timeout are fixed at 10 seconds.
+- **Console data retention.** Hourly: expired sessions and OAuth states; the page of a snapshot whose link died more than 30 days ago (the record stays, marked); account audit entries older than a year; before/after comparisons older than 90 days.
+
 ## v1.7.0 — 2026-11-18
 
 WAF made approachable, plus the live hour and the movers drill-down (v1.6, released with this version).

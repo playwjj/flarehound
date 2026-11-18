@@ -320,6 +320,14 @@ var dict = map[string][2]string{
 	"fix_with_recipe":       {"Fix with a recipe", "用配方修复"},
 	"fix_in_rules":          {"Open rules", "打开规则"},
 	"full_report":           {"Full audit report", "完整体检报告"},
+	"no_asn_plan":           {"This zone's plan has no ASN dimension in its analytics (Free plans), so this list stays empty. User agents and paths still work; ASN rules (block / challenge by network) can still be written.", "该站点的套餐分析数据没有 ASN 维度（Free 套餐限制），所以此列表为空。UA 与路径不受影响；按网络（ASN）写的拦截 / 质询规则仍然可用。"},
+	"read_at":               {"read", "读取于"},
+	"refresh":               {"refresh", "刷新"},
+	"quota_full":            {"This kind of rule is at its plan limit (%d of %d): delete or merge a rule first.", "该类规则已达套餐上限（%d / %d）：请先删除或合并一条。"},
+	"free_plan_note":        {"Free plan: Super Bot Fight Mode and managed rules do not exist, so they are not offered; rate limits use a fixed 10-second period and timeout.", "Free 套餐：没有超级机器人对抗模式与托管规则，因此不提供相关选项；限速的周期与持续时间固定为 10 秒。"},
+	"free_rl_fixed":         {"Fixed at 10 seconds on the Free plan.", "Free 套餐固定为 10 秒。"},
+	"snap_pruned":           {"This snapshot's page was removed: its link expired or was revoked more than 30 days ago. The record stays in the list.", "该快照的页面已清理：链接过期或吊销已超过 30 天。记录仍保留在列表中。"},
+	"snap_pruned_short":     {"page removed (retention)", "页面已按保留期清理"},
 }
 
 type lang string

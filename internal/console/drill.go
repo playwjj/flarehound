@@ -26,9 +26,10 @@ type Analytics interface {
 }
 
 const (
-	drillTTL   = 10 * time.Minute
-	drillLimit = 10
-	dimStatus  = "edgeResponseStatus"
+	drillTTL      = 10 * time.Minute
+	drillLimit    = 10
+	drillParallel = 4 // concurrent queries per drill-down
+	dimStatus     = "edgeResponseStatus"
 )
 
 // DrillRow is one part of the entry: now, yesterday, change.
@@ -108,26 +109,49 @@ func buildDrill(ctx context.Context, an Analytics, zone config.Zone, dim, name s
 		return d
 	}
 	z, pf, pt := zone.ZoneID, from.Add(-24*time.Hour), to.Add(-24*time.Hour)
-	var err error
-	if d.Cur, err = an.Count(ctx, z, from, to, f); err != nil {
-		d.Err = err.Error()
+	// The queries are independent: run them a few at a time. On a slow
+	// link ten sequential round trips are the difference between a page
+	// that opens and one people give up on.
+	sem := make(chan struct{}, drillParallel)
+	var wg sync.WaitGroup
+	run := func(f func()) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			f()
+		}()
+	}
+	var curErr error
+	run(func() { d.Cur, curErr = an.Count(ctx, z, from, to, f) })
+	run(func() { d.Prev, _ = an.Count(ctx, z, pf, pt, f) })
+	bds := breakdownsFor(dim)
+	curs := make([][]cfapi.Face, len(bds))
+	prevs := make([][]cfapi.Face, len(bds))
+	errs := make([]error, len(bds))
+	for i, b := range bds {
+		i, b := i, b
+		run(func() { curs[i], errs[i] = an.Top(ctx, z, from, to, b.cfDim, drillLimit, f) })
+		run(func() { prevs[i], _ = an.Top(ctx, z, pf, pt, b.cfDim, 25, f) })
+	}
+	wg.Wait()
+	if curErr != nil {
+		d.Err = curErr.Error()
 		return d
 	}
-	d.Prev, _ = an.Count(ctx, z, pf, pt, f)
-	for _, b := range breakdownsFor(dim) {
+	for i, b := range bds {
 		sec := DrillSection{Key: b.key, Dim: b.dim}
-		cur, err := an.Top(ctx, z, from, to, b.cfDim, drillLimit, f)
-		if err != nil {
-			sec.Err = err.Error()
+		if errs[i] != nil {
+			sec.Err = errs[i].Error()
 			d.Sections = append(d.Sections, sec)
 			continue
 		}
-		prev, _ := an.Top(ctx, z, pf, pt, b.cfDim, 25, f)
 		pm := map[string]int64{}
-		for _, x := range prev {
+		for _, x := range prevs[i] {
 			pm[x.Name] += x.Count
 		}
-		for _, x := range cur {
+		for _, x := range curs[i] {
 			p, known := pm[x.Name]
 			r := DrillRow{Name: x.Name, Cur: x.Count, Prev: p, PrevKnow: known}
 			if d.Cur > 0 {

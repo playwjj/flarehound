@@ -191,6 +191,11 @@ func rulesCommand(ctx context.Context, cfg *config.Config, x *ruleexec.Executor,
 		if st, err = x.Load(ctx, phase); err != nil {
 			return err
 		}
+		if st.Plan == "free" {
+			if paid := wafkit.PaidScopes(splitScopes(f.skip)); len(paid) > 0 {
+				fmt.Fprintf(out, "NOTE: this zone is on Free, which has no %s: skipping them does nothing.\n", strings.Join(paid, " / "))
+			}
+		}
 		if phase == cfapi.PhaseRateLimit {
 			if err := ruleexec.CheckRateLimit(st.Plan, f.period, f.timeout); err != nil {
 				return err
@@ -224,6 +229,10 @@ func rulesCommand(ctx context.Context, cfg *config.Config, x *ruleexec.Executor,
 		phase = r.Phase
 		if st, err = x.Load(ctx, phase); err != nil {
 			return err
+		}
+		if n, lim := len(st.Ruleset.Rules), st.Limit(); n >= lim {
+			return fmt.Errorf("%s rules are at the %s plan's limit (%d of %d): delete or merge a rule first (`flarehound rules list --phase %s`)",
+				ruleexec.PhaseName(phase), st.Plan, n, lim, ruleexec.PhaseName(phase))
 		}
 		b, err := r.Build(in, st.Plan)
 		if err != nil {

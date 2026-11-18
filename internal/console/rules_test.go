@@ -22,6 +22,8 @@ type fakeRules struct {
 	rules   map[string][]map[string]any
 	version int
 	seq     int
+	plan    string
+	reads   int
 }
 
 func newFakeRules() *fakeRules {
@@ -47,10 +49,16 @@ func cp(rs []map[string]any) []map[string]any {
 func (f *fakeRules) raw(phase string) cfapi.RawRuleset {
 	return cfapi.RawRuleset{ID: "rs-" + phase, Version: fmt.Sprint(f.version), Rules: cp(f.rules[phase])}
 }
-func (f *fakeRules) ZonePlan(context.Context, string) (string, error) { return "pro", nil }
+func (f *fakeRules) ZonePlan(context.Context, string) (string, error) {
+	if f.plan != "" {
+		return f.plan, nil
+	}
+	return "pro", nil
+}
 func (f *fakeRules) PhaseRuleset(_ context.Context, _, phase string) (cfapi.RawRuleset, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.reads++
 	_, ok := f.rules[phase]
 	return f.raw(phase), ok, nil
 }

@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/playwjj/flarehound/internal/blockcli"
+	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/config"
 	"github.com/playwjj/flarehound/internal/report"
 	"github.com/playwjj/flarehound/internal/ruleexec"
@@ -68,6 +69,9 @@ type Server struct {
 	// (Measure) and the movers' drill-down (Analytics). Unset: archive only.
 	Measure   LiveMetrics
 	Analytics Analytics
+	// Caps reports what the zone's plan exposes (shared with the watch's
+	// probe; nil: assume everything).
+	Caps func(ctx context.Context, z config.Zone) cfapi.Caps
 
 	// WAF rules (v1.7): read with the read token, changed with the write
 	// token (unset: list only / no rules page).
@@ -94,6 +98,9 @@ type Server struct {
 	attemptsCache map[string]attemptsEntry
 	attemptsBusy  map[string]bool
 
+	rulesMu    sync.Mutex
+	rulesCache map[string]rulesEntry
+
 	liveMu     sync.Mutex
 	liveCache  map[string]*liveEntry
 	drillMu    sync.Mutex
@@ -113,7 +120,7 @@ func New(cfg *config.Config, db *DB, arch Archive, auditor Auditor, version stri
 	s := &Server{Cfg: cfg, DB: db, Archive: arch, Auditor: auditor, Version: version, Now: time.Now,
 		trusted: cfg.TrustedProxies(), lang: lang(cfg.Report.Language), limiter: newLimiter(10, time.Minute),
 		auditCache: map[string]auditEntry{}, attemptsCache: map[string]attemptsEntry{}, attemptsBusy: map[string]bool{},
-		liveCache: map[string]*liveEntry{}, drillCache: map[string]*drillEntry{}}
+		liveCache: map[string]*liveEntry{}, drillCache: map[string]*drillEntry{}, rulesCache: map[string]rulesEntry{}}
 	s.OAuth = builtinProviders(cfg.Console)
 	s.reviewKey = make([]byte, 32)
 	if _, err := rand.Read(s.reviewKey); err != nil {

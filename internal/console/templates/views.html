@@ -60,6 +60,7 @@
   <a href="/movers?z={{$z}}&amp;dim=asn"{{if eq $dim "asn"}} class="on"{{end}}>{{t "dim_asn"}}</a>
   <a href="/movers?z={{$z}}&amp;dim=path"{{if eq $dim "path"}} class="on"{{end}}>{{t "dim_path"}}</a>
 </nav>
+{{if .NoASN}}<div class="banner info">{{t "no_asn_plan"}}</div>{{end}}
 {{with .Movers}}
 {{if not .Has}}<section class="card"><p>{{t "no_data"}}</p></section>{{else}}
 {{template "windowline" .}}
@@ -83,6 +84,7 @@
 {{range .Faces.Sections}}
 <section class="card">
 <h2>{{t (print "dim_" .Dim)}}</h2>
+{{if and (eq .Dim "asn") $.NoASN}}<p class="note">{{t "no_asn_plan"}}</p>{{end}}
 {{if eq .Dim "path"}}<p class="note">{{if $pathSince.IsZero}}{{t "path_since_none"}}{{else}}{{tf "path_since" (when $pathSince)}}{{end}} {{t "path_note"}}</p>{{end}}
 {{if not .Faces}}<p class="muted">{{t "none"}}</p>{{else}}
 <table class="list">

@@ -412,6 +412,11 @@ func (r Recipe) Build(v map[string]string, plan string) (Built, error) {
 		}
 		vals[p.Name] = x
 	}
+	if freePlan(plan) {
+		if paid := PaidScopes(splitList(vals["skip"])); len(paid) > 0 {
+			return Built{}, fmt.Errorf("skipping %s needs a Pro plan or above; this zone is on Free", strings.Join(paid, ", "))
+		}
+	}
 	b, err := r.build(vals, plan)
 	if err != nil {
 		return b, err
@@ -459,5 +464,44 @@ func Names() []string {
 		out = append(out, r.Name)
 	}
 	sort.Strings(out)
+	return out
+}
+
+// paidScopes are skip scopes whose features the Free plan does not have.
+var paidScopes = []string{SkipBots, SkipManaged}
+
+func freePlan(plan string) bool { return plan == "free" }
+
+// ChoicesFor drops choices the plan cannot use (Free has no Super Bot
+// Fight Mode and no managed rules to skip).
+func (p Param) ChoicesFor(plan string) []string {
+	if !freePlan(plan) {
+		return p.Choices
+	}
+	var out []string
+	for _, c := range p.Choices {
+		paid := false
+		for _, s := range splitList(c) {
+			for _, x := range paidScopes {
+				paid = paid || s == x
+			}
+		}
+		if !paid {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// PaidScopes reports skip scopes in s that a Free zone does not have.
+func PaidScopes(scopes []string) []string {
+	var out []string
+	for _, s := range scopes {
+		for _, x := range paidScopes {
+			if strings.EqualFold(strings.TrimSpace(s), x) {
+				out = append(out, x)
+			}
+		}
+	}
 	return out
 }

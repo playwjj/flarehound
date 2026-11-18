@@ -195,7 +195,7 @@
   <td data-label="{{t "name"}}">{{.Title}}<br><small class="muted">#{{.ID}} · {{.Creator}}</small></td>
   <td data-label="{{t "created"}}" class="nowrap">{{when .CreatedAt}}</td>
   <td data-label="{{t "status"}}">{{if .Revoked}}<span class="muted">{{t "snap_revoked"}}</span>{{else if .Live $now}}{{t "snap_live_until"}} {{when .ExpiresAt}}{{else}}<span class="muted">{{t "snap_expired"}}</span>{{end}}</td>
-  <td class="acts"><a class="act" href="/snapshots/{{.ID}}/download">{{t "download"}}</a>
+  <td class="acts">{{if .Pruned}}<span class="muted">{{t "snap_pruned_short"}}</span>{{else}}<a class="act" href="/snapshots/{{.ID}}/download">{{t "download"}}</a>{{end}}
     {{if .Live $now}}<form method="post" action="/snapshots/{{.ID}}/revoke" class="op"><input type="hidden" name="csrf" value="{{$rq.CSRF}}"><button class="small">{{t "revoke"}}</button></form>{{end}}</td>
 </tr>{{end}}</tbody></table>{{end}}
 </section>

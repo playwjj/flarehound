@@ -79,7 +79,7 @@ func (s *Server) snapshotCreate(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, http.StatusOK, "snapshots", p)
 }
 
-func (s *Server) snapshotsData(r *http.Request, p *page) error {
+func (s *Server) snapshotsData(r *http.Request, p *page) error { // see DB.Snapshots for Pruned
 	rq := reqOf(r)
 	by := rq.User.ID
 	if rq.User.Admin() {
@@ -125,6 +125,10 @@ func (s *Server) ownSnapshot(w http.ResponseWriter, r *http.Request) (Snapshot, 
 func (s *Server) snapshotDownload(w http.ResponseWriter, r *http.Request) {
 	sn, ok := s.ownSnapshot(w, r)
 	if !ok {
+		return
+	}
+	if sn.HTML == "" {
+		s.render(w, r, http.StatusGone, "message", page{Title: s.lang.t("snap_title"), Msg: s.lang.t("snap_pruned")})
 		return
 	}
 	name := fmt.Sprintf("flarehound-snapshot-%d-%s.html", sn.ID, sn.CreatedAt.In(s.Cfg.Location).Format("20060102-1504"))
