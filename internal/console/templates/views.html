@@ -20,6 +20,10 @@
 {{if not .BaselineOK}}<p class="note">{{if .Samples}}{{tf "baseline_thin" .Samples 20}}{{else}}{{t "baseline_none"}}{{end}}</p>{{end}}
 {{template "tiles" .Rows}}
 <p class="note">{{t "live_note"}}</p>
+{{if or .TopUA .TopASN}}<div class="split">
+{{if .TopUA}}<div><h3>{{t "dim_ua"}}</h3><table class="list"><tbody>{{range .TopUA}}<tr><td class="name"><span class="mono" title="{{.Name}}">{{short .Name 56}}</span></td><td class="r">{{num .Count}}</td></tr>{{end}}</tbody></table></div>{{end}}
+{{if .TopASN}}<div><h3>{{t "dim_asn"}}</h3><table class="list"><tbody>{{range .TopASN}}<tr><td class="name"><span class="mono">{{.Name}}</span>{{template "asninfo" (list .Name false "")}}</td><td class="r">{{num .Count}}</td></tr>{{end}}</tbody></table></div>{{end}}
+</div>{{end}}
 {{end}}{{end}}
 {{with .Overview}}
 {{if not .Has}}<section class="card"><p>{{t "no_data"}}</p></section>{{else}}

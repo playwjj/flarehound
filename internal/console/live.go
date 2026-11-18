@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/playwjj/flarehound/internal/analyze"
+	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/config"
 )
 
@@ -32,11 +33,15 @@ const (
 type LiveView struct {
 	From, To   time.Time
 	Rows       []MetricRow
+	TopUA      []cfapi.Face // the hour's loudest faces, from the same measurement
+	TopASN     []cfapi.Face
 	Samples    int
 	BaselineOK bool
 	At         time.Time
 	Err        string
 }
+
+const liveFaces = 5 // faces shown under the live tiles
 
 type liveEntry struct {
 	mu   sync.Mutex
@@ -143,6 +148,16 @@ func (s *Server) liveView(ctx context.Context, z config.Zone) *LiveView {
 	}
 	v.Samples, v.BaselineOK = n, n >= analyze.LongBaselineMinSamples
 	v.Rows = metricRows(s.eff(), z, cur, base, has)
+	if len(cur.TopUA) > liveFaces {
+		v.TopUA = cur.TopUA[:liveFaces]
+	} else {
+		v.TopUA = cur.TopUA
+	}
+	if len(cur.TopASN) > liveFaces {
+		v.TopASN = cur.TopASN[:liveFaces]
+	} else {
+		v.TopASN = cur.TopASN
+	}
 	e.view = v
 	return v
 }
