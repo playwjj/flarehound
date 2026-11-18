@@ -341,6 +341,7 @@ var dict = map[string][2]string{
 	"reset_done":            {"Password changed. Every session of the account was signed out; sign in with the new password.", "口令已修改，该账号的所有会话均已退出，请用新口令登录。"},
 	"reset_mail_subject":    {"FlareHound console — password reset", "FlareHound 控制台——重置口令"},
 	"reset_mail_body":       {"Someone asked to reset the password of the FlareHound console account %s.\n\nTo choose a new password, open this link (single use, valid for %[3]d minutes):\n%[2]s\n\nRequested from %[4]s (%[5]s).\nIf this was not you, ignore this mail: your password stays as it is.", "有人申请重置 FlareHound 控制台账号 %s 的口令。\n\n如需设置新口令，请打开以下链接（只能使用一次，%[3]d 分钟内有效）：\n%[2]s\n\n申请来源：%[4]s（%[5]s）。\n如果不是你本人操作，请忽略本邮件，你的口令不会改变。"},
+	"lang_switch":           {"Switch the console to Chinese", "将控制台切换为英文"},
 }
 
 type lang string

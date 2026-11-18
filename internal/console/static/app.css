@@ -177,3 +177,6 @@ section.recipe h2 { margin-bottom: .3rem; }
 /* TOTP QR code: always dark on light, sized for phone cameras */
 .qrbox { margin: .6rem 0; }
 svg.qr { width: 220px; max-width: 100%; height: auto; display: block; border-radius: 6px; }
+
+form.langsw { margin: 0; }
+form.langsw button { font-weight: 600; }

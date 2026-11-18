@@ -40,6 +40,7 @@ func (s *Server) renderSnapshot(ctx context.Context, view string, q url.Values) 
 		return "", "", "", err
 	}
 	p.Snapshot, p.CSS, p.SnapAt, p.Refresh = true, s.css, s.Now(), 0
+	p.Lang = string(s.lc(ctx)) // in the language of the person who made it
 	out, err := s.renderBytes(name, p)
 	if err != nil {
 		return "", "", "", err
@@ -71,7 +72,7 @@ func (s *Server) snapshotCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "snapshot_created", title, fmt.Sprintf("#%d, link valid %s", id, ttl))
-	p := page{Title: s.lang.t("snap_title"), ShareLink: s.baseURL(r) + "/s/" + tok, Flash: s.lang.t("snap_created")}
+	p := page{Title: s.L(r).t("snap_title"), ShareLink: s.baseURL(r) + "/s/" + tok, Flash: s.L(r).t("snap_created")}
 	if err := s.snapshotsData(r, &p); err != nil {
 		s.fail(w, r, err)
 		return
@@ -94,7 +95,7 @@ func (s *Server) snapshotsData(r *http.Request, p *page) error { // see DB.Snaps
 }
 
 func (s *Server) snapshotsPage(w http.ResponseWriter, r *http.Request) {
-	p := page{Title: s.lang.t("snap_title"), Flash: r.URL.Query().Get("ok")}
+	p := page{Title: s.L(r).t("snap_title"), Flash: r.URL.Query().Get("ok")}
 	if err := s.snapshotsData(r, &p); err != nil {
 		s.fail(w, r, err)
 		return
@@ -128,7 +129,7 @@ func (s *Server) snapshotDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if sn.HTML == "" {
-		s.render(w, r, http.StatusGone, "message", page{Title: s.lang.t("snap_title"), Msg: s.lang.t("snap_pruned")})
+		s.render(w, r, http.StatusGone, "message", page{Title: s.L(r).t("snap_title"), Msg: s.L(r).t("snap_pruned")})
 		return
 	}
 	name := fmt.Sprintf("flarehound-snapshot-%d-%s.html", sn.ID, sn.CreatedAt.In(s.Cfg.Location).Format("20060102-1504"))
@@ -147,7 +148,7 @@ func (s *Server) snapshotRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "snapshot_revoked", sn.Title, fmt.Sprintf("#%d", sn.ID))
-	http.Redirect(w, r, "/snapshots?ok="+url.QueryEscape(s.lang.t("done")), http.StatusSeeOther)
+	http.Redirect(w, r, "/snapshots?ok="+url.QueryEscape(s.L(r).t("done")), http.StatusSeeOther)
 }
 
 // snapshotPublic serves a shared snapshot without sign-in.
@@ -155,7 +156,7 @@ func (s *Server) snapshotPublic(w http.ResponseWriter, r *http.Request) {
 	// Tokens are 192 random bits: guessing is not a practical attack.
 	sn, ok, err := s.DB.SnapshotByToken(r.PathValue("token"))
 	if err != nil || !ok || strings.TrimSpace(sn.HTML) == "" {
-		http.Error(w, s.lang.t("snap_gone"), http.StatusNotFound)
+		http.Error(w, s.L(r).t("snap_gone"), http.StatusNotFound)
 		return
 	}
 	h := w.Header()

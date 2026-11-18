@@ -110,7 +110,7 @@ func (s *Server) oauthStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.limiter.allow("login:"+rq.IP, s.Now()) {
-		s.render(w, r, http.StatusTooManyRequests, "login", page{Title: s.lang.t("login_title"), Err: s.lang.t("login_throttled"), Providers: s.ProviderList()})
+		s.render(w, r, http.StatusTooManyRequests, "login", page{Title: s.L(r).t("login_title"), Err: s.L(r).t("login_throttled"), Providers: s.ProviderList()})
 		return
 	}
 	st := OAuthState{Provider: p.Name, Intent: r.PostFormValue("intent"), Next: localPath(r.PostFormValue("next")),
@@ -126,7 +126,7 @@ func (s *Server) oauthStart(w http.ResponseWriter, r *http.Request) {
 		}
 		if !VerifyPassword(u.PWHash, r.PostFormValue("current")) {
 			s.audit(r, "identity_link_failed", p.Name, "wrong current password")
-			s.accountErr(w, r, s.lang.t("pw_wrong"))
+			s.accountErr(w, r, s.L(r).t("pw_wrong"))
 			return
 		}
 		st.UserID, st.Next = u.ID, "/account"
@@ -167,14 +167,14 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	fail := func(msg, detail string) {
 		s.DB.Audit("-", rq.IP, "oauth_failed", p.Name, detail)
-		s.render(w, r, http.StatusUnauthorized, "message", page{Title: s.lang.t("login_title"), Msg: msg})
+		s.render(w, r, http.StatusUnauthorized, "message", page{Title: s.L(r).t("login_title"), Msg: msg})
 	}
 	q := r.URL.Query()
 	state := q.Get("state")
 	c, err := r.Cookie(oauthCookie)
 	http.SetCookie(w, &http.Cookie{Name: oauthCookie, Value: "", Path: "/oauth/", HttpOnly: true, Secure: rq.Secure, MaxAge: -1})
 	if err != nil || state == "" || subtle.ConstantTimeCompare([]byte(c.Value), []byte(state)) != 1 {
-		fail(s.lang.t("oauth_state"), "state cookie mismatch")
+		fail(s.L(r).t("oauth_state"), "state cookie mismatch")
 		return
 	}
 	st, ok, err := s.DB.TakeOAuthState(state)
@@ -183,38 +183,38 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok || st.Provider != p.Name {
-		fail(s.lang.t("oauth_state"), "unknown or expired state")
+		fail(s.L(r).t("oauth_state"), "unknown or expired state")
 		return
 	}
 	if e := q.Get("error"); e != "" {
-		fail(s.lang.t("oauth_denied"), "provider error: "+truncate(e, 100))
+		fail(s.L(r).t("oauth_denied"), "provider error: "+truncate(e, 100))
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 	id, err := s.exchange(ctx, p, q.Get("code"), st)
 	if err != nil {
-		fail(s.lang.t("oauth_failed"), err.Error())
+		fail(s.L(r).t("oauth_failed"), err.Error())
 		return
 	}
 
 	switch st.Intent {
 	case "link":
 		if rq.Session == nil || rq.User == nil || rq.User.ID != st.UserID {
-			fail(s.lang.t("oauth_state"), "link finished in another session")
+			fail(s.L(r).t("oauth_state"), "link finished in another session")
 			return
 		}
 		if err := s.DB.LinkIdentity(p.Name, id.Subject, st.UserID, id.Display); err != nil {
 			s.audit(r, "identity_link_failed", p.Name, err.Error())
 			if errors.Is(err, ErrIdentityTaken) {
-				s.accountErr(w, r, s.lang.t("identity_taken"))
+				s.accountErr(w, r, s.L(r).t("identity_taken"))
 				return
 			}
 			s.fail(w, r, err)
 			return
 		}
 		s.audit(r, "identity_linked", p.Name, id.Display)
-		http.Redirect(w, r, "/account?ok="+url.QueryEscape(fmt.Sprintf(s.lang.t("identity_linked"), p.Label)), http.StatusSeeOther)
+		http.Redirect(w, r, "/account?ok="+url.QueryEscape(fmt.Sprintf(s.L(r).t("identity_linked"), p.Label)), http.StatusSeeOther)
 	case "login":
 		if s.Cfg.Console.ProxyAuth.DisableLogin {
 			http.NotFound(w, r)
@@ -227,8 +227,8 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		}
 		if !ok {
 			s.DB.Audit("-", rq.IP, "login_failed", p.Name, "unlinked identity "+id.Display)
-			s.render(w, r, http.StatusUnauthorized, "login", page{Title: s.lang.t("login_title"), Providers: s.ProviderList(),
-				Err: fmt.Sprintf(s.lang.t("identity_unlinked"), p.Label)})
+			s.render(w, r, http.StatusUnauthorized, "login", page{Title: s.L(r).t("login_title"), Providers: s.ProviderList(),
+				Err: fmt.Sprintf(s.L(r).t("identity_unlinked"), p.Label)})
 			return
 		}
 		u, err := s.DB.UserByID(uid)
@@ -238,7 +238,7 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		}
 		if u.Disabled {
 			s.DB.Audit(u.Username, rq.IP, "login_failed", u.Username, p.Name+": disabled")
-			s.render(w, r, http.StatusUnauthorized, "login", page{Title: s.lang.t("login_title"), Providers: s.ProviderList(), Err: s.lang.t("login_failed")})
+			s.render(w, r, http.StatusUnauthorized, "login", page{Title: s.L(r).t("login_title"), Providers: s.ProviderList(), Err: s.L(r).t("login_failed")})
 			return
 		}
 		_ = s.DB.TouchIdentity(p.Name, id.Subject, id.Display)
@@ -396,5 +396,5 @@ func (s *Server) identityUnlink(w http.ResponseWriter, r *http.Request) {
 	if removed {
 		s.audit(r, "identity_unlinked", prov, subj)
 	}
-	http.Redirect(w, r, "/account?ok="+url.QueryEscape(s.lang.t("done")), http.StatusSeeOther)
+	http.Redirect(w, r, "/account?ok="+url.QueryEscape(s.L(r).t("done")), http.StatusSeeOther)
 }

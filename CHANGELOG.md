@@ -2,6 +2,10 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.8.0 — 2026-11-18
+
+- **Console language switch (English / 中文).** A button in the header (on the sign-in page too) switches the console's language for this browser; signed-in accounts keep the choice and get it on any device. Order: this browser's choice, then the account's, then `report.language`. Rule explanations, audit fixes and recipe texts follow the viewer's language (cached rule lists are shared and explained per viewer); snapshots are rendered in their creator's language, password-reset mails in the account's. Notifications keep following `report.language`. Existing account databases gain a `lang` column automatically.
+
 ## v1.7.2 — 2026-11-18
 
 - **TOTP set-up by QR code.** The account page shows the authenticator key as a QR code (inline SVG, always dark on light) next to the key for manual entry. Generated with `rsc.io/qr` (pure Go, BSD); verified by decoding it in a browser.

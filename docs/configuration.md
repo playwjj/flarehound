@@ -92,7 +92,7 @@ Sources that never count as new faces.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `report.language` | string | `"en"` | `"en"` or `"zh"` (Chinese). |
+| `report.language` | string | `"en"` | `"en"` or `"zh"` (Chinese): reports and notifications, and the console's default language (each person can switch the console with its EN / 中文 button). |
 
 `report.visuals` (bool, default `true`): attach charts and send email as HTML — see [charts and HTML](channels.md#charts-and-html-reportvisuals-default-on).
 

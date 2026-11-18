@@ -15,12 +15,12 @@ func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, localPath(r.URL.Query().Get("next")), http.StatusSeeOther)
 		return
 	}
-	p := page{Title: s.lang.t("login_title"), Next: localPath(r.URL.Query().Get("next")), Providers: s.ProviderList(), ResetOn: s.resetOn()}
+	p := page{Title: s.L(r).t("login_title"), Next: localPath(r.URL.Query().Get("next")), Providers: s.ProviderList(), ResetOn: s.resetOn()}
 	if r.URL.Query().Get("reset") == "1" {
-		p.Flash = s.lang.t("reset_done")
+		p.Flash = s.L(r).t("reset_done")
 	}
 	if s.Cfg.Console.ProxyAuth.DisableLogin {
-		p.Msg = s.lang.t("login_disabled")
+		p.Msg = s.L(r).t("login_disabled")
 	}
 	s.render(w, r, http.StatusOK, "login", p)
 }
@@ -28,14 +28,14 @@ func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 	rq := reqOf(r)
 	next := localPath(r.PostFormValue("next"))
-	p := page{Title: s.lang.t("login_title"), Next: next, Providers: s.ProviderList(), ResetOn: s.resetOn()}
+	p := page{Title: s.L(r).t("login_title"), Next: next, Providers: s.ProviderList(), ResetOn: s.resetOn()}
 	if s.Cfg.Console.ProxyAuth.DisableLogin {
-		p.Msg = s.lang.t("login_disabled")
+		p.Msg = s.L(r).t("login_disabled")
 		s.render(w, r, http.StatusForbidden, "login", p)
 		return
 	}
 	if !s.limiter.allow("login:"+rq.IP, s.Now()) {
-		p.Err = s.lang.t("login_throttled")
+		p.Err = s.L(r).t("login_throttled")
 		s.render(w, r, http.StatusTooManyRequests, "login", p)
 		return
 	}
@@ -49,14 +49,14 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		VerifyPassword(dummyHash, pw) // same cost as a real check
 		s.DB.Audit(name, rq.IP, "login_failed", name, "unknown user")
-		p.Err = s.lang.t("login_failed")
+		p.Err = s.L(r).t("login_failed")
 		s.render(w, r, http.StatusUnauthorized, "login", p)
 		return
 	}
 	if s.Now().Before(u.LockedUntil) {
 		VerifyPassword(dummyHash, pw)
 		s.DB.Audit(u.Username, rq.IP, "login_failed", u.Username, "locked")
-		p.Err = s.lang.t("login_locked")
+		p.Err = s.L(r).t("login_locked")
 		s.render(w, r, http.StatusTooManyRequests, "login", p)
 		return
 	}
@@ -65,7 +65,7 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 			_ = s.DB.LoginFailed(u.ID)
 		}
 		s.DB.Audit(u.Username, rq.IP, "login_failed", u.Username, map[bool]string{true: "disabled", false: "bad password"}[u.Disabled])
-		p.Err = s.lang.t("login_failed")
+		p.Err = s.L(r).t("login_failed")
 		s.render(w, r, http.StatusUnauthorized, "login", p)
 		return
 	}
@@ -107,7 +107,7 @@ func (s *Server) totpPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
-	s.render(w, r, http.StatusOK, "totp", page{Title: s.lang.t("totp_title"), Next: localPath(r.URL.Query().Get("next")), Action: "/login/totp"})
+	s.render(w, r, http.StatusOK, "totp", page{Title: s.L(r).t("totp_title"), Next: localPath(r.URL.Query().Get("next")), Action: "/login/totp"})
 }
 
 func (s *Server) totpPost(w http.ResponseWriter, r *http.Request) {
@@ -117,9 +117,9 @@ func (s *Server) totpPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	next := localPath(r.PostFormValue("next"))
-	p := page{Title: s.lang.t("totp_title"), Next: next, Action: "/login/totp"}
+	p := page{Title: s.L(r).t("totp_title"), Next: next, Action: "/login/totp"}
 	if !s.limiter.allow("totp:"+rq.IP, s.Now()) {
-		p.Err = s.lang.t("login_throttled")
+		p.Err = s.L(r).t("login_throttled")
 		s.render(w, r, http.StatusTooManyRequests, "totp", p)
 		return
 	}
@@ -131,7 +131,7 @@ func (s *Server) totpPost(w http.ResponseWriter, r *http.Request) {
 			s.clearSession(w, r)
 		}
 		s.DB.Audit(u.Username, rq.IP, "login_failed", u.Username, "bad TOTP code")
-		p.Err = s.lang.t("totp_wrong")
+		p.Err = s.L(r).t("totp_wrong")
 		s.render(w, r, http.StatusUnauthorized, "totp", p)
 		return
 	}
@@ -170,7 +170,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) stepUpPage(w http.ResponseWriter, r *http.Request) {
-	s.render(w, r, http.StatusOK, "totp", page{Title: s.lang.t("stepup_title"), Msg: s.lang.t("stepup_desc"),
+	s.render(w, r, http.StatusOK, "totp", page{Title: s.L(r).t("stepup_title"), Msg: s.L(r).t("stepup_desc"),
 		Next: localPath(r.URL.Query().Get("next")), Action: "/stepup"})
 }
 
@@ -183,8 +183,8 @@ func (s *Server) stepUpPost(w http.ResponseWriter, r *http.Request) {
 	}
 	if !s.limiter.allow("totp:"+rq.IP, s.Now()) || !s.checkTOTP(rq.User, r.PostFormValue("code")) {
 		s.audit(r, "stepup_failed", rq.User.Username, "")
-		s.render(w, r, http.StatusUnauthorized, "totp", page{Title: s.lang.t("stepup_title"), Msg: s.lang.t("stepup_desc"),
-			Next: next, Action: "/stepup", Err: s.lang.t("totp_wrong")})
+		s.render(w, r, http.StatusUnauthorized, "totp", page{Title: s.L(r).t("stepup_title"), Msg: s.L(r).t("stepup_desc"),
+			Next: next, Action: "/stepup", Err: s.L(r).t("totp_wrong")})
 		return
 	}
 	if err := s.DB.MarkStepUp(rq.Session.Hash); err != nil {
@@ -213,22 +213,22 @@ func (s *Server) setupValid(token string) bool {
 func (s *Server) setupPage(w http.ResponseWriter, r *http.Request) {
 	tok := r.URL.Query().Get("token")
 	if !s.setupValid(tok) {
-		s.render(w, r, http.StatusNotFound, "message", page{Title: s.lang.t("setup_title"), Msg: s.lang.t("setup_bad")})
+		s.render(w, r, http.StatusNotFound, "message", page{Title: s.L(r).t("setup_title"), Msg: s.L(r).t("setup_bad")})
 		return
 	}
-	s.render(w, r, http.StatusOK, "setup", page{Title: s.lang.t("setup_title"), Token: tok})
+	s.render(w, r, http.StatusOK, "setup", page{Title: s.L(r).t("setup_title"), Token: tok})
 }
 
 func (s *Server) setupPost(w http.ResponseWriter, r *http.Request) {
 	tok := r.PostFormValue("token")
 	if !s.limiter.allow("login:"+reqOf(r).IP, s.Now()) || !s.setupValid(tok) {
-		s.render(w, r, http.StatusNotFound, "message", page{Title: s.lang.t("setup_title"), Msg: s.lang.t("setup_bad")})
+		s.render(w, r, http.StatusNotFound, "message", page{Title: s.L(r).t("setup_title"), Msg: s.L(r).t("setup_bad")})
 		return
 	}
-	p := page{Title: s.lang.t("setup_title"), Token: tok}
+	p := page{Title: s.L(r).t("setup_title"), Token: tok}
 	pw := r.PostFormValue("password")
 	if pw != r.PostFormValue("password2") {
-		p.Err = s.lang.t("pw_mismatch")
+		p.Err = s.L(r).t("pw_mismatch")
 		s.render(w, r, http.StatusBadRequest, "setup", p)
 		return
 	}
@@ -257,16 +257,16 @@ func (s *Server) invitePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
-		s.render(w, r, http.StatusNotFound, "message", page{Title: s.lang.t("invite_title"), Msg: s.lang.t("invite_bad")})
+		s.render(w, r, http.StatusNotFound, "message", page{Title: s.L(r).t("invite_title"), Msg: s.L(r).t("invite_bad")})
 		return
 	}
-	s.render(w, r, http.StatusOK, "invite", page{Title: s.lang.t("invite_title"), Token: tok, Role: inv.Role})
+	s.render(w, r, http.StatusOK, "invite", page{Title: s.L(r).t("invite_title"), Token: tok, Role: inv.Role})
 }
 
 func (s *Server) invitePost(w http.ResponseWriter, r *http.Request) {
 	tok := r.PathValue("token")
 	if !s.limiter.allow("login:"+reqOf(r).IP, s.Now()) {
-		s.render(w, r, http.StatusTooManyRequests, "message", page{Title: s.lang.t("invite_title"), Msg: s.lang.t("login_throttled")})
+		s.render(w, r, http.StatusTooManyRequests, "message", page{Title: s.L(r).t("invite_title"), Msg: s.L(r).t("login_throttled")})
 		return
 	}
 	inv, ok, err := s.DB.InviteByToken(tok)
@@ -275,13 +275,13 @@ func (s *Server) invitePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
-		s.render(w, r, http.StatusNotFound, "message", page{Title: s.lang.t("invite_title"), Msg: s.lang.t("invite_bad")})
+		s.render(w, r, http.StatusNotFound, "message", page{Title: s.L(r).t("invite_title"), Msg: s.L(r).t("invite_bad")})
 		return
 	}
-	p := page{Title: s.lang.t("invite_title"), Token: tok, Role: inv.Role}
+	p := page{Title: s.L(r).t("invite_title"), Token: tok, Role: inv.Role}
 	pw := r.PostFormValue("password")
 	if pw != r.PostFormValue("password2") {
-		p.Err = s.lang.t("pw_mismatch")
+		p.Err = s.L(r).t("pw_mismatch")
 		s.render(w, r, http.StatusBadRequest, "invite", p)
 		return
 	}
@@ -314,7 +314,7 @@ func (s *Server) accountData(r *http.Request, p *page) error {
 
 func (s *Server) accountPage(w http.ResponseWriter, r *http.Request) {
 	rq := reqOf(r)
-	p := page{Title: s.lang.t("acct_title")}
+	p := page{Title: s.L(r).t("acct_title")}
 	if rq.User.ID != 0 {
 		// Re-read: the account may have changed since the request began.
 		u, err := s.DB.UserByID(rq.User.ID)
@@ -325,9 +325,9 @@ func (s *Server) accountPage(w http.ResponseWriter, r *http.Request) {
 		rq.User = &u
 		switch {
 		case u.MustChange:
-			p.Msg = s.lang.t("must_change")
+			p.Msg = s.L(r).t("must_change")
 		case s.Cfg.Console.RequireTOTP && !u.TOTPEnabled:
-			p.Msg = s.lang.t("must_totp")
+			p.Msg = s.L(r).t("must_totp")
 		}
 		if u.TOTPSecret != "" && !u.TOTPEnabled {
 			p.TOTPSecret = GroupSecret(u.TOTPSecret)
@@ -346,7 +346,7 @@ func (s *Server) accountPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) accountErr(w http.ResponseWriter, r *http.Request, msg string) {
-	p := page{Title: s.lang.t("acct_title"), Err: msg}
+	p := page{Title: s.L(r).t("acct_title"), Err: msg}
 	_ = s.accountData(r, &p)
 	s.render(w, r, http.StatusBadRequest, "account", p)
 }
@@ -354,7 +354,7 @@ func (s *Server) accountErr(w http.ResponseWriter, r *http.Request, msg string) 
 func (s *Server) localUser(w http.ResponseWriter, r *http.Request) (*User, bool) {
 	rq := reqOf(r)
 	if rq.User.ID == 0 || rq.Session == nil {
-		s.render(w, r, http.StatusForbidden, "message", page{Title: s.lang.t("forbidden"), Msg: s.lang.t("forbidden")})
+		s.render(w, r, http.StatusForbidden, "message", page{Title: s.L(r).t("forbidden"), Msg: s.L(r).t("forbidden")})
 		return nil, false
 	}
 	u, err := s.DB.UserByID(rq.User.ID)
@@ -372,17 +372,17 @@ func (s *Server) accountPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	rq := reqOf(r)
 	if !s.limiter.allow("login:"+rq.IP, s.Now()) {
-		s.accountErr(w, r, s.lang.t("login_throttled"))
+		s.accountErr(w, r, s.L(r).t("login_throttled"))
 		return
 	}
 	if !VerifyPassword(u.PWHash, r.PostFormValue("current")) {
 		s.audit(r, "password_change_failed", u.Username, "wrong current password")
-		s.accountErr(w, r, s.lang.t("pw_wrong"))
+		s.accountErr(w, r, s.L(r).t("pw_wrong"))
 		return
 	}
 	pw := r.PostFormValue("password")
 	if pw != r.PostFormValue("password2") {
-		s.accountErr(w, r, s.lang.t("pw_mismatch"))
+		s.accountErr(w, r, s.L(r).t("pw_mismatch"))
 		return
 	}
 	if err := s.DB.SetPassword(u.ID, pw, false, rq.Session.Token); err != nil {
@@ -390,7 +390,7 @@ func (s *Server) accountPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "password_changed", u.Username, "")
-	http.Redirect(w, r, "/account?ok="+urlQuery(s.lang.t("pw_changed")), http.StatusSeeOther)
+	http.Redirect(w, r, "/account?ok="+urlQuery(s.L(r).t("pw_changed")), http.StatusSeeOther)
 }
 
 func (s *Server) totpStart(w http.ResponseWriter, r *http.Request) {
@@ -425,7 +425,7 @@ func (s *Server) totpConfirm(w http.ResponseWriter, r *http.Request) {
 	}
 	step, ok := VerifyTOTP(u.TOTPSecret, r.PostFormValue("code"), s.Now(), 0)
 	if !ok {
-		s.accountErr(w, r, s.lang.t("totp_wrong"))
+		s.accountErr(w, r, s.L(r).t("totp_wrong"))
 		return
 	}
 	if err := s.DB.SetTOTP(u.ID, u.TOTPSecret, true, step); err != nil {
@@ -434,7 +434,7 @@ func (s *Server) totpConfirm(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.DB.MarkStepUp(reqOf(r).Session.Hash)
 	s.audit(r, "totp_enabled", u.Username, "")
-	http.Redirect(w, r, "/account?ok="+urlQuery(s.lang.t("totp_enabled_msg")), http.StatusSeeOther)
+	http.Redirect(w, r, "/account?ok="+urlQuery(s.L(r).t("totp_enabled_msg")), http.StatusSeeOther)
 }
 
 func (s *Server) totpDisable(w http.ResponseWriter, r *http.Request) {
@@ -443,12 +443,12 @@ func (s *Server) totpDisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.Cfg.Console.RequireTOTP {
-		s.accountErr(w, r, s.lang.t("totp_required_no_off"))
+		s.accountErr(w, r, s.L(r).t("totp_required_no_off"))
 		return
 	}
 	if !s.limiter.allow("totp:"+reqOf(r).IP, s.Now()) || !VerifyPassword(u.PWHash, r.PostFormValue("current")) ||
 		(u.TOTPEnabled && !s.checkTOTP(u, r.PostFormValue("code"))) {
-		s.accountErr(w, r, s.lang.t("totp_wrong"))
+		s.accountErr(w, r, s.L(r).t("totp_wrong"))
 		return
 	}
 	if err := s.DB.SetTOTP(u.ID, "", false, 0); err != nil {
@@ -456,7 +456,7 @@ func (s *Server) totpDisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "totp_disabled", u.Username, "")
-	http.Redirect(w, r, "/account?ok="+urlQuery(s.lang.t("totp_disabled_msg")), http.StatusSeeOther)
+	http.Redirect(w, r, "/account?ok="+urlQuery(s.L(r).t("totp_disabled_msg")), http.StatusSeeOther)
 }
 
 func (s *Server) sessionEnd(w http.ResponseWriter, r *http.Request) {
@@ -483,7 +483,7 @@ func (s *Server) sessionEnd(w http.ResponseWriter, r *http.Request) {
 // --- user administration (admin) ---
 
 func (s *Server) usersPage(w http.ResponseWriter, r *http.Request) {
-	p := page{Title: s.lang.t("users_title"), Flash: r.URL.Query().Get("ok")}
+	p := page{Title: s.L(r).t("users_title"), Flash: r.URL.Query().Get("ok")}
 	if err := s.usersData(&p); err != nil {
 		s.fail(w, r, err)
 		return
@@ -512,7 +512,7 @@ func (s *Server) usersData(p *page) error {
 }
 
 func (s *Server) usersResult(w http.ResponseWriter, r *http.Request, p page, status int) {
-	p.Title = s.lang.t("users_title")
+	p.Title = s.L(r).t("users_title")
 	if err := s.usersData(&p); err != nil {
 		s.fail(w, r, err)
 		return
@@ -529,7 +529,7 @@ func (s *Server) userCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "user_created", u.Username, "role "+u.Role)
-	s.usersResult(w, r, page{Secret: temp, SecretFor: u.Username, Flash: s.lang.t("done")}, http.StatusOK)
+	s.usersResult(w, r, page{Secret: temp, SecretFor: u.Username, Flash: s.L(r).t("done")}, http.StatusOK)
 }
 
 func (s *Server) userOp(w http.ResponseWriter, r *http.Request) {
@@ -546,7 +546,7 @@ func (s *Server) userOp(w http.ResponseWriter, r *http.Request) {
 	}
 	op := r.PathValue("op")
 	if u.ID == rq.User.ID && op != "signout" {
-		s.usersResult(w, r, page{Err: s.lang.t("not_self")}, http.StatusBadRequest)
+		s.usersResult(w, r, page{Err: s.L(r).t("not_self")}, http.StatusBadRequest)
 		return
 	}
 	lastAdmin := func() bool {
@@ -557,13 +557,13 @@ func (s *Server) userOp(w http.ResponseWriter, r *http.Request) {
 	switch op {
 	case "admin", "viewer":
 		if op == RoleViewer && lastAdmin() {
-			s.usersResult(w, r, page{Err: s.lang.t("last_admin")}, http.StatusBadRequest)
+			s.usersResult(w, r, page{Err: s.L(r).t("last_admin")}, http.StatusBadRequest)
 			return
 		}
 		err = s.DB.SetRole(u.ID, op)
 	case "disable":
 		if lastAdmin() {
-			s.usersResult(w, r, page{Err: s.lang.t("last_admin")}, http.StatusBadRequest)
+			s.usersResult(w, r, page{Err: s.L(r).t("last_admin")}, http.StatusBadRequest)
 			return
 		}
 		err = s.DB.SetDisabled(u.ID, true)
@@ -597,11 +597,11 @@ func (s *Server) userOp(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r, "user_"+op, u.Username, "")
 	if p.Secret != "" {
-		p.Flash = s.lang.t("done")
+		p.Flash = s.L(r).t("done")
 		s.usersResult(w, r, p, http.StatusOK)
 		return
 	}
-	http.Redirect(w, r, "/users?ok="+urlQuery(s.lang.t("done")), http.StatusSeeOther)
+	http.Redirect(w, r, "/users?ok="+urlQuery(s.L(r).t("done")), http.StatusSeeOther)
 }
 
 const inviteTTL = 72 * time.Hour
@@ -616,7 +616,7 @@ func (s *Server) inviteCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r, "invite_created", role, "valid 72h")
 	link := s.baseURL(r) + "/invite/" + tok
-	s.usersResult(w, r, page{InviteLink: link, Flash: s.lang.t("done")}, http.StatusOK)
+	s.usersResult(w, r, page{InviteLink: link, Flash: s.L(r).t("done")}, http.StatusOK)
 }
 
 func (s *Server) inviteRevoke(w http.ResponseWriter, r *http.Request) {
@@ -625,7 +625,7 @@ func (s *Server) inviteRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "invite_revoked", "", "")
-	http.Redirect(w, r, "/users?ok="+urlQuery(s.lang.t("done")), http.StatusSeeOther)
+	http.Redirect(w, r, "/users?ok="+urlQuery(s.L(r).t("done")), http.StatusSeeOther)
 }
 
 // baseURL is console.base_url, else derived from the request.

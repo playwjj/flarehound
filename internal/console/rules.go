@@ -42,14 +42,14 @@ var rulePhases = map[string]string{"custom": cfapi.PhaseCustom, "ratelimit": cfa
 
 // RuleView is one rule for display.
 type RuleView struct {
-	Pos      int
-	ID       string
-	Action   string
-	Desc     string
-	Expr     string
-	Sentence string
-	Enabled  bool
-	Managed  bool // a FlareHound block rule (managed on the blocks page)
+	Pos     int
+	ID      string
+	Action  string
+	Desc    string
+	Expr    string
+	Raw     map[string]any // the rule as Cloudflare returned it
+	Enabled bool
+	Managed bool // a FlareHound block rule (managed on the blocks page)
 }
 
 type rulesView struct {
@@ -75,7 +75,7 @@ func (s *Server) canEditRules(r *http.Request) bool {
 func (s *Server) requireRules(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !s.rulesWriteOn() {
-			s.render(w, r, http.StatusForbidden, "message", page{Title: s.lang.t("nav_rules"), Msg: s.lang.t("write_off")})
+			s.render(w, r, http.StatusForbidden, "message", page{Title: s.L(r).t("nav_rules"), Msg: s.L(r).t("write_off")})
 			return
 		}
 		h(w, r)
@@ -153,7 +153,7 @@ func (s *Server) loadRules(ctx context.Context, z config.Zone, short string) rul
 	short, phase := phaseOf(short)
 	v := rulesView{Phase: short}
 	if s.RulesRead == nil && s.RulesWrite == nil {
-		v.Err = s.lang.t("rules_off")
+		v.Err = s.lc(ctx).t("rules_off")
 		return v
 	}
 	st, err := s.executor(z, nil, false).Load(ctx, phase)
@@ -163,7 +163,8 @@ func (s *Server) loadRules(ctx context.Context, z config.Zone, short string) rul
 	}
 	v.Plan, v.Used, v.Limit, v.Version = st.Plan, len(st.Ruleset.Rules), st.Limit(), st.Ruleset.Version
 	for i, r := range st.Ruleset.Rules {
-		rv := RuleView{Pos: i + 1, Enabled: r["enabled"] != false, Managed: ruleexec.Managed(r), Sentence: wafkit.RuleSentence(r, string(s.lang))}
+		// The explanation is rendered per viewer language (the cache is shared).
+		rv := RuleView{Pos: i + 1, Enabled: r["enabled"] != false, Managed: ruleexec.Managed(r), Raw: r}
 		rv.ID, _ = r["id"].(string)
 		rv.Action, _ = r["action"].(string)
 		rv.Desc, _ = r["description"].(string)
@@ -178,7 +179,7 @@ func (s *Server) rulesPage(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
 	defer cancel()
 	v := s.cachedRules(ctx, z, r.URL.Query().Get("phase"), r.URL.Query().Get("fresh") == "1")
-	p := page{Title: s.lang.t("nav_rules"), Zone: z, Nav: "rules", Rules: &v, Flash: r.URL.Query().Get("ok"), CanRules: s.canEditRules(r)}
+	p := page{Title: s.L(r).t("nav_rules"), Zone: z, Nav: "rules", Rules: &v, Flash: r.URL.Query().Get("ok"), CanRules: s.canEditRules(r)}
 	if p.CanRules {
 		p.Backups, _ = s.Store.RuleBackups(z.ZoneID, "", 20)
 	}
@@ -211,7 +212,7 @@ func (s *Server) recipesPage(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
 	defer cancel()
 	q, plan := s.quotas(ctx, z)
-	s.render(w, r, http.StatusOK, "recipes", page{Title: s.lang.t("recipes_title"), Zone: z, Nav: "rules", Recipes: wafkit.Recipes(),
+	s.render(w, r, http.StatusOK, "recipes", page{Title: s.L(r).t("recipes_title"), Zone: z, Nav: "rules", Recipes: wafkit.Recipes(),
 		CanRules: s.canEditRules(r), Quota: q, ZonePlan: plan})
 }
 
@@ -231,7 +232,7 @@ func (s *Server) recipeForm(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
 	defer cancel()
 	q, plan := s.quotas(ctx, z)
-	s.render(w, r, http.StatusOK, "recipe", page{Title: rc.T(rc.Title, string(s.lang)), Zone: z, Nav: "rules", Recipe: &rc, Inputs: in,
+	s.render(w, r, http.StatusOK, "recipe", page{Title: rc.T(rc.Title, string(s.L(r))), Zone: z, Nav: "rules", Recipe: &rc, Inputs: in,
 		Quota: q, ZonePlan: plan})
 }
 
@@ -319,7 +320,7 @@ func (s *Server) planRuleOp(ctx context.Context, x *ruleexec.Executor, o ruleOp)
 			return st, p, nil, ferr
 		}
 		if i == 0 {
-			return st, p, nil, errors.New(s.lang.t("rule_already_first"))
+			return st, p, nil, errors.New(s.lc(ctx).t("rule_already_first"))
 		}
 		target := 0
 		if o.Op == "up" {
@@ -334,7 +335,7 @@ func (s *Server) planRuleOp(ctx context.Context, x *ruleexec.Executor, o ruleOp)
 func (s *Server) ruleReview(w http.ResponseWriter, r *http.Request) {
 	rq := reqOf(r)
 	o, err := s.parseRuleOp(r)
-	p := page{Title: s.lang.t("rule_review"), Zone: o.Zone, Nav: "rules", RuleOp: &o}
+	p := page{Title: s.L(r).t("rule_review"), Zone: o.Zone, Nav: "rules", RuleOp: &o}
 	if err != nil {
 		p.Err = err.Error()
 		s.render(w, r, http.StatusBadRequest, "rulereview", p)
@@ -359,12 +360,12 @@ func (s *Server) renderRuleReview(w http.ResponseWriter, r *http.Request, o rule
 	}
 	p.Plan = &plan
 	if built != nil {
-		p.Sentence = wafkit.RuleSentence(built.Rule, string(s.lang))
+		p.Sentence = wafkit.RuleSentence(built.Rule, string(s.L(r)))
 		for _, n := range built.Warnings {
-			p.Notes = append(p.Notes, p.Recipe.T(n, string(s.lang)))
+			p.Notes = append(p.Notes, p.Recipe.T(n, string(s.L(r))))
 		}
 	} else if plan.Old != nil {
-		p.Sentence = wafkit.RuleSentence(plan.Old, string(s.lang))
+		p.Sentence = wafkit.RuleSentence(plan.Old, string(s.L(r)))
 	}
 	p.Token = s.reviewToken(rq, o.fields(st.Ruleset.Version)...)
 	p.RSVersion = st.Ruleset.Version
@@ -375,7 +376,7 @@ func (s *Server) renderRuleReview(w http.ResponseWriter, r *http.Request, o rule
 func (s *Server) ruleApply(w http.ResponseWriter, r *http.Request) {
 	rq := reqOf(r)
 	o, err := s.parseRuleOp(r)
-	p := page{Title: s.lang.t("rule_review"), Zone: o.Zone, Nav: "rules", RuleOp: &o}
+	p := page{Title: s.L(r).t("rule_review"), Zone: o.Zone, Nav: "rules", RuleOp: &o}
 	if err != nil {
 		p.Err = err.Error()
 		s.render(w, r, http.StatusBadRequest, "rulereview", p)
@@ -383,7 +384,7 @@ func (s *Server) ruleApply(w http.ResponseWriter, r *http.Request) {
 	}
 	version := r.PostFormValue("version")
 	if !s.reviewOK(rq, r.PostFormValue("review"), o.fields(version)...) {
-		p.Err = s.lang.t("review_expired")
+		p.Err = s.L(r).t("review_expired")
 		s.render(w, r, http.StatusBadRequest, "rulereview", p)
 		return
 	}
@@ -402,7 +403,7 @@ func (s *Server) ruleApply(w http.ResponseWriter, r *http.Request) {
 	// The plan was reviewed against one version of the ruleset; if someone
 	// changed it since, positions and neighbours may differ: review again.
 	if st.Ruleset.Version != version {
-		s.renderRuleReview(w, r, o, p, rq, s.lang.t("rules_changed"))
+		s.renderRuleReview(w, r, o, p, rq, s.L(r).t("rules_changed"))
 		return
 	}
 	target := o.Recipe
@@ -417,10 +418,10 @@ func (s *Server) ruleApply(w http.ResponseWriter, r *http.Request) {
 	s.forgetRules(o.Zone) // changed (or maybe changed): read it again
 	if err != nil {
 		s.audit(r, "rule_failed", o.Op+" "+target, err.Error())
-		s.renderRuleReview(w, r, o, p, rq, s.lang.t("write_failed")+" "+err.Error())
+		s.renderRuleReview(w, r, o, p, rq, s.L(r).t("write_failed")+" "+err.Error())
 		return
 	}
 	s.audit(r, "rule_applied", o.Op+" "+target, fmt.Sprintf("%s; backup #%d", res.Detail, res.BackupID))
-	msg := fmt.Sprintf(s.lang.t("rule_done"), res.BackupID)
+	msg := fmt.Sprintf(s.L(r).t("rule_done"), res.BackupID)
 	http.Redirect(w, r, "/rules?z="+url.QueryEscape(o.Zone.Name)+"&phase="+o.Phase+"&ok="+url.QueryEscape(msg), http.StatusSeeOther)
 }

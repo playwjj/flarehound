@@ -175,6 +175,7 @@ type User struct {
 	Failed       int
 	LockedUntil  time.Time
 	CreatedAt    time.Time
+	Lang         string // preferred UI language: "en", "zh" or "" (console default)
 }
 
 func (u User) Admin() bool { return u.Role == RoleAdmin }
@@ -189,13 +190,13 @@ func ValidRole(r string) bool { return r == RoleAdmin || r == RoleViewer }
 
 var ErrExists = errors.New("username is taken")
 
-const userCols = `id, username, email, pw_hash, role, disabled, must_change, totp_secret, totp_enabled, totp_last_step, failed, locked_until, created_at`
+const userCols = `id, username, email, pw_hash, role, disabled, must_change, totp_secret, totp_enabled, totp_last_step, failed, locked_until, created_at, lang`
 
 func scanUser(sc interface{ Scan(...any) error }) (User, error) {
 	var u User
 	var dis, mc, te int
 	var locked, created int64
-	err := sc.Scan(&u.ID, &u.Username, &u.Email, &u.PWHash, &u.Role, &dis, &mc, &u.TOTPSecret, &te, &u.TOTPLastStep, &u.Failed, &locked, &created)
+	err := sc.Scan(&u.ID, &u.Username, &u.Email, &u.PWHash, &u.Role, &dis, &mc, &u.TOTPSecret, &te, &u.TOTPLastStep, &u.Failed, &locked, &created, &u.Lang)
 	u.Disabled, u.MustChange, u.TOTPEnabled = dis == 1, mc == 1, te == 1
 	if locked > 0 {
 		u.LockedUntil = time.Unix(locked, 0)
@@ -770,8 +771,39 @@ func (d *DB) RevokeSnapshot(id int64) error {
 	return err
 }
 
+// addColumns adds missing columns to a table.
+func addColumns(db *sql.DB, table string, cols map[string]string) error {
+	have := map[string]bool{}
+	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			rows.Close()
+			return err
+		}
+		have[n] = true
+	}
+	rows.Close()
+	for col, ddl := range cols {
+		if !have[col] {
+			if _, err := db.Exec(ddl); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // migrate adds columns introduced after a table was first created.
 func migrate(db *sql.DB) error {
+	if err := addColumns(db, "users", map[string]string{
+		"lang": `ALTER TABLE users ADD COLUMN lang TEXT NOT NULL DEFAULT ''`, // v1.8: preferred UI language
+	}); err != nil {
+		return err
+	}
 	cols := map[string]bool{}
 	rows, err := db.Query(`SELECT name FROM pragma_table_info('external_identities')`)
 	if err != nil {
@@ -1041,4 +1073,13 @@ func (d *DB) UseReset(t, password string) (User, error) {
 	}
 	_, _ = d.db.Exec(`UPDATE password_resets SET used_at = ? WHERE user_id = ? AND used_at = 0`, now, u.ID)
 	return u, nil
+}
+
+// SetLang stores an account's preferred UI language ("" = console default).
+func (d *DB) SetLang(id int64, l string) error {
+	if l != "" && l != "en" && l != "zh" {
+		return fmt.Errorf("unknown language %q", l)
+	}
+	_, err := d.db.Exec(`UPDATE users SET lang = ? WHERE id = ?`, l, id)
+	return err
 }

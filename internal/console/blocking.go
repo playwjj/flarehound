@@ -149,7 +149,7 @@ func (s *Server) parseBlockForm(r *http.Request) (blockForm, block.Target, block
 func (s *Server) requireWrite(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !s.CanWrite() {
-			s.render(w, r, http.StatusForbidden, "message", page{Title: s.lang.t("nav_blocks"), Msg: s.lang.t("write_off")})
+			s.render(w, r, http.StatusForbidden, "message", page{Title: s.L(r).t("nav_blocks"), Msg: s.L(r).t("write_off")})
 			return
 		}
 		h(w, r)
@@ -162,12 +162,12 @@ func (s *Server) writeCheck(r *http.Request) string {
 	rq := reqOf(r)
 	if rq.User.TOTPEnabled {
 		if !s.limiter.allow("totp:"+rq.IP, s.Now()) {
-			return s.lang.t("login_throttled")
+			return s.L(r).t("login_throttled")
 		}
 		u, err := s.DB.UserByID(rq.User.ID)
 		if err != nil || !s.checkTOTP(&u, r.PostFormValue("code")) {
 			s.audit(r, "stepup_failed", "", "write confirmation")
-			return s.lang.t("totp_wrong")
+			return s.L(r).t("totp_wrong")
 		}
 	}
 	return ""
@@ -177,7 +177,7 @@ func (s *Server) writeCheck(r *http.Request) string {
 
 func (s *Server) blockNewPage(w http.ResponseWriter, r *http.Request) {
 	f, _, _, err := s.parseBlockForm(r)
-	p := page{Title: s.lang.t("block_new"), Zone: f.Zone, Nav: "blocks", Form: &f}
+	p := page{Title: s.L(r).t("block_new"), Zone: f.Zone, Nav: "blocks", Form: &f}
 	if err != nil && f.Value != "" {
 		p.Err = err.Error()
 	}
@@ -187,7 +187,7 @@ func (s *Server) blockNewPage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) blockReview(w http.ResponseWriter, r *http.Request) {
 	rq := reqOf(r)
 	f, t, o, err := s.parseBlockForm(r)
-	p := page{Title: s.lang.t("block_review"), Zone: f.Zone, Nav: "blocks", Form: &f}
+	p := page{Title: s.L(r).t("block_review"), Zone: f.Zone, Nav: "blocks", Form: &f}
 	if err != nil {
 		p.Err = err.Error()
 		s.render(w, r, http.StatusBadRequest, "blocknew", p)
@@ -211,14 +211,14 @@ func (s *Server) blockReview(w http.ResponseWriter, r *http.Request) {
 func (s *Server) blockApply(w http.ResponseWriter, r *http.Request) {
 	rq := reqOf(r)
 	f, t, o, err := s.parseBlockForm(r)
-	p := page{Title: s.lang.t("block_review"), Zone: f.Zone, Nav: "blocks", Form: &f}
+	p := page{Title: s.L(r).t("block_review"), Zone: f.Zone, Nav: "blocks", Form: &f}
 	if err != nil {
 		p.Err = err.Error()
 		s.render(w, r, http.StatusBadRequest, "blocknew", p)
 		return
 	}
 	if !s.reviewOK(rq, r.PostFormValue("review"), f.fields()...) {
-		p.Err = s.lang.t("review_expired")
+		p.Err = s.L(r).t("review_expired")
 		s.render(w, r, http.StatusBadRequest, "blocknew", p)
 		return
 	}
@@ -244,7 +244,7 @@ func (s *Server) blockApply(w http.ResponseWriter, r *http.Request) {
 		s.render(w, r, http.StatusBadRequest, "blockreview", p)
 	}
 	if !prep.ConfirmOK(r.PostFormValue("confirm")) {
-		retry(fmt.Sprintf(s.lang.t("strong_wrong"), prep.StrongWant))
+		retry(fmt.Sprintf(s.L(r).t("strong_wrong"), prep.StrongWant))
 		return
 	}
 	if msg := s.writeCheck(r); msg != "" {
@@ -261,11 +261,11 @@ func (s *Server) blockApply(w http.ResponseWriter, r *http.Request) {
 	entry, err := env.Execute(ctx, prep)
 	if err != nil && !errors.Is(err, blockcli.ErrAuditFailed) {
 		s.audit(r, "block_failed", t.String(), err.Error())
-		retry(s.lang.t("write_failed") + " " + err.Error())
+		retry(s.L(r).t("write_failed") + " " + err.Error())
 		return
 	}
 	s.audit(r, "block_applied", t.String(), fmt.Sprintf("%s via %s (rule %s), verified by read-back", prep.Opts.Action, entry.Mechanism, entry.RuleID))
-	msg := fmt.Sprintf(s.lang.t("block_done"), t.String(), prep.Opts.Action)
+	msg := fmt.Sprintf(s.L(r).t("block_done"), t.String(), prep.Opts.Action)
 	if err != nil {
 		msg += " — " + err.Error()
 	}
@@ -294,7 +294,7 @@ func (s *Server) unblockReview(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) renderUnblockReview(w http.ResponseWriter, r *http.Request, z config.Zone, t block.Target, reason string, err error) {
 	rq := reqOf(r)
-	p := page{Title: s.lang.t("unblock_review"), Zone: z, Nav: "blocks", Target: t, Reason: reason}
+	p := page{Title: s.L(r).t("unblock_review"), Zone: z, Nav: "blocks", Target: t, Reason: reason}
 	if err == nil {
 		ctx, cancel := context.WithTimeout(r.Context(), writeTO)
 		defer cancel()
@@ -315,7 +315,7 @@ func (s *Server) unblockApply(w http.ResponseWriter, r *http.Request) {
 	rq := reqOf(r)
 	z, t, reason, err := s.targetForm(r)
 	if err != nil || !s.reviewOK(rq, r.PostFormValue("review"), "unblock", z.ZoneID, string(t.Type), t.Value, reason) {
-		s.render(w, r, http.StatusBadRequest, "message", page{Title: s.lang.t("unblock_review"), Msg: s.lang.t("review_expired")})
+		s.render(w, r, http.StatusBadRequest, "message", page{Title: s.L(r).t("unblock_review"), Msg: s.L(r).t("review_expired")})
 		return
 	}
 	if msg := s.writeCheck(r); msg != "" {
@@ -331,11 +331,11 @@ func (s *Server) unblockApply(w http.ResponseWriter, r *http.Request) {
 	err = s.env(z, rq).Unblock(ctx, t, true, "unblock", reason)
 	if err != nil && !errors.Is(err, blockcli.ErrAuditFailed) {
 		s.audit(r, "unblock_failed", t.String(), err.Error())
-		s.renderUnblockReview(w, r, z, t, reason, fmt.Errorf("%s %v", s.lang.t("write_failed"), err))
+		s.renderUnblockReview(w, r, z, t, reason, fmt.Errorf("%s %v", s.L(r).t("write_failed"), err))
 		return
 	}
 	s.audit(r, "unblock_applied", t.String(), "verified by read-back")
-	msg := fmt.Sprintf(s.lang.t("unblock_done"), t.String())
+	msg := fmt.Sprintf(s.L(r).t("unblock_done"), t.String())
 	if err != nil {
 		msg += " — " + err.Error()
 	}
@@ -375,7 +375,7 @@ func (s *Server) renewReview(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) renderRenewReview(w http.ResponseWriter, r *http.Request, z config.Zone, t block.Target, reason string, until int64, err error) {
 	rq := reqOf(r)
-	p := page{Title: s.lang.t("renew_review"), Zone: z, Nav: "blocks", Target: t, Reason: reason, Until: until}
+	p := page{Title: s.L(r).t("renew_review"), Zone: z, Nav: "blocks", Target: t, Reason: reason, Until: until}
 	if until > 0 {
 		p.UntilTime = time.Unix(until, 0)
 	}
@@ -398,7 +398,7 @@ func (s *Server) renewApply(w http.ResponseWriter, r *http.Request) {
 	z, t, reason, err := s.targetForm(r)
 	until, err2 := strconv.ParseInt(r.PostFormValue("until"), 10, 64)
 	if err != nil || err2 != nil || !s.reviewOK(rq, r.PostFormValue("review"), "renew", z.ZoneID, string(t.Type), t.Value, strconv.FormatInt(until, 10), reason) {
-		s.render(w, r, http.StatusBadRequest, "message", page{Title: s.lang.t("renew_review"), Msg: s.lang.t("review_expired")})
+		s.render(w, r, http.StatusBadRequest, "message", page{Title: s.L(r).t("renew_review"), Msg: s.L(r).t("review_expired")})
 		return
 	}
 	if msg := s.writeCheck(r); msg != "" {
@@ -417,11 +417,11 @@ func (s *Server) renewApply(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	if _, err := s.env(z, rq).Renew(ctx, t, exp, reason); err != nil {
 		s.audit(r, "renew_failed", t.String(), err.Error())
-		s.renderRenewReview(w, r, z, t, reason, until, fmt.Errorf("%s %v", s.lang.t("write_failed"), err))
+		s.renderRenewReview(w, r, z, t, reason, until, fmt.Errorf("%s %v", s.L(r).t("write_failed"), err))
 		return
 	}
 	s.audit(r, "renew_applied", t.String(), "until "+orDash(fmtUnix(until)))
-	http.Redirect(w, r, "/blocks?z="+url.QueryEscape(z.Name)+"&ok="+url.QueryEscape(fmt.Sprintf(s.lang.t("renew_done"), t.String())), http.StatusSeeOther)
+	http.Redirect(w, r, "/blocks?z="+url.QueryEscape(z.Name)+"&ok="+url.QueryEscape(fmt.Sprintf(s.L(r).t("renew_done"), t.String())), http.StatusSeeOther)
 }
 
 func fmtUnix(n int64) string {
@@ -457,7 +457,7 @@ func (s *Server) undo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if latest.ID != ev.ID {
-		s.render(w, r, http.StatusConflict, "message", page{Title: s.lang.t("undo"), Msg: s.lang.t("undo_superseded")})
+		s.render(w, r, http.StatusConflict, "message", page{Title: s.L(r).t("undo"), Msg: s.L(r).t("undo_superseded")})
 		return
 	}
 	t := block.Target{Type: block.Type(ev.Type), Value: ev.Value}
@@ -468,7 +468,7 @@ func (s *Server) undo(w http.ResponseWriter, r *http.Request) {
 	case "renew":
 		prev, ok, err := s.Store.PrevBlockEvent(ev.Zone, ev.Type, ev.Value, ev.ID)
 		if err != nil || !ok {
-			s.render(w, r, http.StatusConflict, "message", page{Title: s.lang.t("undo"), Msg: s.lang.t("undo_superseded")})
+			s.render(w, r, http.StatusConflict, "message", page{Title: s.L(r).t("undo"), Msg: s.L(r).t("undo_superseded")})
 			return
 		}
 		var until int64
@@ -729,7 +729,7 @@ func (s *Server) effectPage(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), writeTO)
 	defer cancel()
 	e := s.effect(ctx, z, ev)
-	s.render(w, r, http.StatusOK, "effect", page{Title: s.lang.t("effect_title"), Zone: z, Nav: "blocks", Effect: &e, Event: ev})
+	s.render(w, r, http.StatusOK, "effect", page{Title: s.L(r).t("effect_title"), Zone: z, Nav: "blocks", Effect: &e, Event: ev})
 }
 
 // warmEffects computes the comparison for recent blocks once their hour

@@ -27,6 +27,7 @@ type page struct {
 	Title   string
 	Req     *Req
 	Lang    string
+	Here    string // this page, for the language switch to come back to
 	Zones   []config.Zone
 	Zone    config.Zone
 	Nav     string // active tab
@@ -126,9 +127,9 @@ type auditView struct {
 
 func urlQuery(s string) string { return url.QueryEscape(s) }
 
-func (s *Server) funcs() template.FuncMap {
+func (s *Server) funcs(l lang) template.FuncMap {
 	return template.FuncMap{
-		"t":    func(k string) string { return s.lang.t(k) },
+		"t":    func(k string) string { return l.t(k) },
 		"list": func(a ...any) []any { return a },
 		"rowsCtx": func(p page, rows []Mover) []any {
 			ctx := struct {
@@ -147,14 +148,15 @@ func (s *Server) funcs() template.FuncMap {
 		"now":  func() time.Time { return s.Now() },
 		"sub":  func(a, b int64) int64 { return a - b },
 		"tr": func(f [2]string) string {
-			if s.lang == "zh" {
+			if l == "zh" {
 				return f[1]
 			}
 			return f[0]
 		},
-		"phaseShort": func(p string) string { return ruleexec.PhaseName(p) },
-		"drillable":  func(dim, name string) bool { _, ok := drillFilter(dim, name); return ok },
-		"choicesFor": func(p wafkit.Param, plan string) []string { return p.ChoicesFor(plan) },
+		"phaseShort":   func(p string) string { return ruleexec.PhaseName(p) },
+		"ruleSentence": func(r map[string]any) string { return wafkit.RuleSentence(r, string(l)) },
+		"drillable":    func(dim, name string) bool { _, ok := drillFilter(dim, name); return ok },
+		"choicesFor":   func(p wafkit.Param, plan string) []string { return p.ChoicesFor(plan) },
 		"full": func(q map[string]rulesView, phase string) bool {
 			v, ok := q[phase]
 			return ok && v.Limit > 0 && v.Used >= v.Limit
@@ -180,7 +182,7 @@ func (s *Server) funcs() template.FuncMap {
 			}
 			return strings.Join(parts, " · ")
 		},
-		"tf":  func(k string, a ...any) string { return fmt.Sprintf(s.lang.t(k), a...) },
+		"tf":  func(k string, a ...any) string { return fmt.Sprintf(l.t(k), a...) },
 		"num": fmtNum,
 		"numf": func(v float64, unit string) string {
 			if unit == "ms" {
@@ -207,7 +209,7 @@ func (s *Server) funcs() template.FuncMap {
 			return t.In(s.Cfg.Location).Format("2006-01-02 15:04")
 		},
 		"hm":     func(t time.Time) string { return t.In(s.Cfg.Location).Format("15:04") },
-		"ago":    func(t time.Time) string { return fmtAgo(s.Now().Sub(t), string(s.lang)) },
+		"ago":    func(t time.Time) string { return fmtAgo(s.Now().Sub(t), string(l)) },
 		"tz":     func() string { return s.Cfg.Location.String() },
 		"zq":     func(z config.Zone) string { return url.QueryEscape(z.Name) },
 		"locked": func(u User) bool { return s.Now().Before(u.LockedUntil) },
@@ -217,8 +219,8 @@ func (s *Server) funcs() template.FuncMap {
 			}
 			return string([]rune(s)[:n-1]) + "…"
 		},
-		"roleName": func(r string) string { return s.lang.t("role_" + r) },
-		"evName":   func(k string) string { return s.lang.t("ev_" + k) },
+		"roleName": func(r string) string { return l.t("role_" + r) },
+		"evName":   func(k string) string { return l.t("ev_" + k) },
 		"isNow":    func(sess Session, rq *Req) bool { return rq.Session != nil && sess.Hash == rq.Session.Hash },
 	}
 }
@@ -271,7 +273,11 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, name
 	p.Req = reqOf(r)
 	p.WriteOn = s.CanWrite()
 	p.CanWrite = p.WriteOn && p.Req.User != nil && p.Req.User.Admin()
-	p.Lang = string(s.lang)
+	p.Lang = string(s.L(r))
+	p.Here = "/"
+	if r.Method == http.MethodGet {
+		p.Here = r.URL.RequestURI()
+	}
 	p.Version = s.Version
 	if p.Zones == nil {
 		p.Zones = s.Cfg.Cloudflare.Zones
@@ -291,7 +297,9 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, name
 }
 
 func (s *Server) renderBytes(name string, p page) ([]byte, error) {
-	p.Lang = string(s.lang)
+	if p.Lang != "en" && p.Lang != "zh" {
+		p.Lang = string(s.defLang)
+	}
 	p.Version = s.Version
 	if p.Zones == nil {
 		p.Zones = s.Cfg.Cloudflare.Zones
@@ -300,7 +308,7 @@ func (s *Server) renderBytes(name string, p page) ([]byte, error) {
 		p.Req = &Req{Secure: true, Loopback: true}
 	}
 	var buf bytes.Buffer
-	if err := s.tmpl.ExecuteTemplate(&buf, name, p); err != nil {
+	if err := s.tmpls[lang(p.Lang)].ExecuteTemplate(&buf, name, p); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
@@ -347,7 +355,7 @@ func (s *Server) buildView(ctx context.Context, view string, q url.Values) (stri
 		if err != nil {
 			return "", page{}, err
 		}
-		p := page{Title: s.lang.t("nav_overview"), Zone: z, Nav: "overview", Overview: &ov, Refresh: s.Cfg.Console.RefreshSeconds,
+		p := page{Title: s.lc(ctx).t("nav_overview"), Zone: z, Nav: "overview", Overview: &ov, Refresh: s.Cfg.Console.RefreshSeconds,
 			SnapView: view, SnapParams: url.Values{"z": {z.Name}}.Encode()}
 		p.Live = s.liveView(ctx, z)
 		if ov.Has {
@@ -372,7 +380,7 @@ func (s *Server) buildView(ctx context.Context, view string, q url.Values) (stri
 		if err != nil {
 			return "", page{}, err
 		}
-		return "movers", page{Title: s.lang.t("nav_movers"), Zone: z, Nav: "movers", Movers: &mv, Dim: dim, NoASN: dim == DimASN && s.noASN(ctx, z),
+		return "movers", page{Title: s.lc(ctx).t("nav_movers"), Zone: z, Nav: "movers", Movers: &mv, Dim: dim, NoASN: dim == DimASN && s.noASN(ctx, z),
 			Refresh: s.Cfg.Console.RefreshSeconds, SnapView: view, SnapParams: url.Values{"z": {z.Name}, "dim": {dim}}.Encode()}, nil
 	case viewHistory:
 		rng := q.Get("range")
@@ -400,7 +408,7 @@ func (s *Server) buildView(ctx context.Context, view string, q url.Values) (stri
 		if endParam != "" {
 			params.Set("end", endParam)
 		}
-		p := page{Title: s.lang.t("nav_history"), Zone: z, Nav: "history", History: &h, Range: rng, SnapView: view, SnapParams: params.Encode()}
+		p := page{Title: s.lc(ctx).t("nav_history"), Zone: z, Nav: "history", History: &h, Range: rng, SnapView: view, SnapParams: params.Encode()}
 		p.Chart = historyChart(h, s.Cfg.Location, 960, 280, true)
 		return "history", p, nil
 	}
@@ -432,14 +440,14 @@ func (s *Server) facesPage(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	s.render(w, r, http.StatusOK, "faces", page{Title: s.lang.t("nav_faces"), Zone: z, Nav: "faces", Faces: &nf, Days: days, NoASN: s.noASN(r.Context(), z),
+	s.render(w, r, http.StatusOK, "faces", page{Title: s.L(r).t("nav_faces"), Zone: z, Nav: "faces", Faces: &nf, Days: days, NoASN: s.noASN(r.Context(), z),
 		Refresh: s.Cfg.Console.RefreshSeconds})
 }
 
 func (s *Server) auditPage(w http.ResponseWriter, r *http.Request) {
 	z := s.zone(r)
 	e, _ := s.cachedAudit(r.Context(), z, false)
-	s.render(w, r, http.StatusOK, "audit", page{Title: s.lang.t("nav_audit"), Zone: z, Nav: "audit", Audit: s.auditView(e, false), CanRules: s.canEditRules(r)})
+	s.render(w, r, http.StatusOK, "audit", page{Title: s.L(r).t("nav_audit"), Zone: z, Nav: "audit", Audit: s.auditView(e, false, s.L(r)), CanRules: s.canEditRules(r)})
 }
 
 func (s *Server) auditRun(w http.ResponseWriter, r *http.Request) {
@@ -448,10 +456,10 @@ func (s *Server) auditRun(w http.ResponseWriter, r *http.Request) {
 	if !refused {
 		s.audit(r, "waf_audit_run", z.Name, "")
 	}
-	s.render(w, r, http.StatusOK, "audit", page{Title: s.lang.t("nav_audit"), Zone: z, Nav: "audit", Audit: s.auditView(e, refused), CanRules: s.canEditRules(r)})
+	s.render(w, r, http.StatusOK, "audit", page{Title: s.L(r).t("nav_audit"), Zone: z, Nav: "audit", Audit: s.auditView(e, refused, s.L(r)), CanRules: s.canEditRules(r)})
 }
 
-func (s *Server) auditView(e auditEntry, refused bool) *auditView {
+func (s *Server) auditView(e auditEntry, refused bool, l lang) *auditView {
 	v := &auditView{At: e.at, Refused: refused}
 	if e.err != nil {
 		log.Printf("console: WAF audit: %v", e.err)
@@ -461,9 +469,9 @@ func (s *Server) auditView(e auditEntry, refused bool) *auditView {
 	v.NA = e.data.NA
 	if v.NA == "" {
 		v.Problems = e.data.Result.Problems()
-		v.Fixes = wafkit.Fixes(e.data.Result, string(s.lang))
+		v.Fixes = wafkit.Fixes(e.data.Result, string(l))
 	}
-	v.Text = report.Audit(string(s.lang), e.data, "")
+	v.Text = report.Audit(string(l), e.data, "")
 	return v
 }
 
@@ -480,7 +488,7 @@ func (s *Server) blocksPage(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	p := page{Title: s.lang.t("nav_blocks"), Zone: z, Nav: "blocks", Active: active, Log: logs, Flash: r.URL.Query().Get("ok")}
+	p := page{Title: s.L(r).t("nav_blocks"), Zone: z, Nav: "blocks", Active: active, Log: logs, Flash: r.URL.Query().Get("ok")}
 	if s.CanWrite() {
 		ctx, cancel := context.WithTimeout(r.Context(), writeTO)
 		defer cancel()

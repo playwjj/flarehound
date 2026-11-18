@@ -4,6 +4,8 @@ The console is a second process next to the watch. It reads the archive the watc
 
 Without the write token the console is read-only. Give the write token to the **console process only** and admins can block, unblock and change expiry from it ([Blocking from the console](#blocking-from-the-console)); the watch must never hold it, and `flarehound doctor` checks both.
 
+**Language.** The console speaks English and Chinese: the **EN / 中文** button in the header (also on the sign-in page) switches it for this browser, and signed-in accounts keep the choice on every device. The default is `report.language`. Rule explanations, audit fixes and recipes follow the viewer's language; snapshots use their creator's, password-reset mails the account's. Notifications are unaffected.
+
 ## Turn it on
 
 ```json

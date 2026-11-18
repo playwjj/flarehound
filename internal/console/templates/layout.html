@@ -19,14 +19,15 @@
 {{else}}
 <header class="top">
   <a class="brand" href="/{{if .Zone.Name}}?z={{zq .Zone}}{{end}}">FlareHound</a>
-  {{if and .Req.User (or (not .Req.Session) .Req.Session.MFAOK)}}
   <nav class="user">
+  <form method="post" action="/lang" class="langsw"><input type="hidden" name="csrf" value="{{.Req.CSRF}}"><input type="hidden" name="lang" value="{{if eq .Lang "zh"}}en{{else}}zh{{end}}"><input type="hidden" name="next" value="{{.Here}}"><button class="link" title="{{t "lang_switch"}}">{{if eq .Lang "zh"}}EN{{else}}中文{{end}}</button></form>
+  {{if and .Req.User (or (not .Req.Session) .Req.Session.MFAOK)}}
     <a href="/account">{{.Req.User.Username}}</a>
     <a href="/snapshots">{{t "nav_snapshots"}}</a>
     {{if .Req.User.Admin}}<a href="/users">{{t "nav_users"}}</a>{{end}}
     {{if .Req.Session}}<form method="post" action="/logout"><input type="hidden" name="csrf" value="{{.Req.CSRF}}"><button class="link">{{t "logout"}}</button></form>{{end}}
-  </nav>
   {{end}}
+  </nav>
 </header>
 {{if and (not .Req.Secure) (not .Req.Loopback)}}<div class="banner warn">{{t "insecure"}}</div>{{end}}
 {{if and .Req.Proxy (not .Req.Session) .Req.User}}<div class="banner info">{{t "proxy_identity"}} <b>{{.Req.Proxy}}</b> ({{roleName .Req.User.Role}})</div>{{end}}

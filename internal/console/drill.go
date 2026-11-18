@@ -203,9 +203,9 @@ func (s *Server) drillPage(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	p := page{Title: s.lang.t("drill_title"), Zone: z, Nav: "movers", Dim: dim}
+	p := page{Title: s.L(r).t("drill_title"), Zone: z, Nav: "movers", Dim: dim}
 	if s.Analytics == nil {
-		p.Err = s.lang.t("drill_off")
+		p.Err = s.L(r).t("drill_off")
 		s.render(w, r, http.StatusOK, "drill", p)
 		return
 	}
@@ -216,7 +216,7 @@ func (s *Server) drillPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
-		p.Err = s.lang.t("no_data")
+		p.Err = s.L(r).t("no_data")
 		s.render(w, r, http.StatusOK, "drill", p)
 		return
 	}

@@ -15,7 +15,7 @@
 <ol class="rulelist">
 {{range .Rules}}<li class="{{if not .Enabled}}off{{end}}">
   <div class="rh"><span class="pos">#{{.Pos}}</span> <span class="act act-{{.Action}}">{{.Action}}</span>{{if not .Enabled}} <span class="tag">{{t "disabled"}}</span>{{end}}{{if .Managed}} <span class="tag">{{t "fh_block_rule"}}</span>{{end}} <b>{{.Desc}}</b></div>
-  <div class="rs">{{.Sentence}}</div>
+  <div class="rs">{{ruleSentence .Raw}}</div>
   <details><summary>{{t "expression"}}</summary><code class="wrap">{{.Expr}}</code></details>
   {{if and $can (not .Managed)}}<div class="racts">
     {{$id := .ID}}

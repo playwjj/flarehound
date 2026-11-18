@@ -45,7 +45,7 @@ func (s *Server) forgotPage(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	s.render(w, r, http.StatusOK, "forgot", page{Title: s.lang.t("forgot_title")})
+	s.render(w, r, http.StatusOK, "forgot", page{Title: s.L(r).t("forgot_title")})
 }
 
 func (s *Server) forgotPost(w http.ResponseWriter, r *http.Request) {
@@ -54,9 +54,9 @@ func (s *Server) forgotPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rq := reqOf(r)
-	p := page{Title: s.lang.t("forgot_title")}
+	p := page{Title: s.L(r).t("forgot_title")}
 	if !s.limiter.allow("reset:"+rq.IP, s.Now()) {
-		p.Err = s.lang.t("login_throttled")
+		p.Err = s.L(r).t("login_throttled")
 		s.render(w, r, http.StatusTooManyRequests, "forgot", p)
 		return
 	}
@@ -65,7 +65,7 @@ func (s *Server) forgotPost(w http.ResponseWriter, r *http.Request) {
 		s.maybeSendReset(id, rq.IP, r.UserAgent())
 	}
 	// The same answer whatever happened.
-	p.Flash = s.lang.t("forgot_sent")
+	p.Flash = s.L(r).t("forgot_sent")
 	s.render(w, r, http.StatusOK, "forgot", p)
 }
 
@@ -86,9 +86,13 @@ func (s *Server) maybeSendReset(identity, ip, ua string) {
 		log.Printf("console: password reset: %v", err)
 		return
 	}
+	ml := s.defLang // the mail goes out in the account's language
+	if u.Lang == "en" || u.Lang == "zh" {
+		ml = lang(u.Lang)
+	}
 	link := s.Cfg.Console.BaseURL + "/reset/" + tok
-	subject := s.lang.t("reset_mail_subject")
-	body := fmt.Sprintf(s.lang.t("reset_mail_body"), u.Username, link, int(resetTTL.Minutes()), ip, truncate(ua, 120))
+	subject := ml.t("reset_mail_subject")
+	body := fmt.Sprintf(ml.t("reset_mail_body"), u.Username, link, int(resetTTL.Minutes()), ip, truncate(ua, 120))
 	s.DB.Audit(u.Username, ip, "reset_requested", u.Username, "link mailed to "+maskEmail(u.Email))
 	s.resetWG.Add(1)
 	go func() {
@@ -118,10 +122,10 @@ func (s *Server) resetPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok || !s.resetOn() {
-		s.render(w, r, http.StatusNotFound, "message", page{Title: s.lang.t("reset_title"), Msg: s.lang.t("reset_bad")})
+		s.render(w, r, http.StatusNotFound, "message", page{Title: s.L(r).t("reset_title"), Msg: s.L(r).t("reset_bad")})
 		return
 	}
-	s.render(w, r, http.StatusOK, "reset", page{Title: s.lang.t("reset_title"), Token: r.PathValue("token"), Role: u.Username})
+	s.render(w, r, http.StatusOK, "reset", page{Title: s.L(r).t("reset_title"), Token: r.PathValue("token"), Role: u.Username})
 }
 
 func (s *Server) resetPost(w http.ResponseWriter, r *http.Request) {
@@ -137,13 +141,13 @@ func (s *Server) resetPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok || !s.limiter.allow("reset:"+rq.IP, s.Now()) {
-		s.render(w, r, http.StatusNotFound, "message", page{Title: s.lang.t("reset_title"), Msg: s.lang.t("reset_bad")})
+		s.render(w, r, http.StatusNotFound, "message", page{Title: s.L(r).t("reset_title"), Msg: s.L(r).t("reset_bad")})
 		return
 	}
-	p := page{Title: s.lang.t("reset_title"), Token: tok, Role: u.Username}
+	p := page{Title: s.L(r).t("reset_title"), Token: tok, Role: u.Username}
 	pw := r.PostFormValue("password")
 	if pw != r.PostFormValue("password2") {
-		p.Err = s.lang.t("pw_mismatch")
+		p.Err = s.L(r).t("pw_mismatch")
 		s.render(w, r, http.StatusBadRequest, "reset", p)
 		return
 	}

@@ -38,6 +38,7 @@ var assets embed.FS
 const (
 	sessionCookie = "fh_session"
 	preCookie     = "fh_pre" // pre-auth CSRF token (double submit)
+	langCookie    = "fh_lang"
 	preMFATTL     = 5 * time.Minute
 	stepUpTTL     = 10 * time.Minute
 )
@@ -82,9 +83,9 @@ type Server struct {
 	RulesRead  ruleexec.API
 	RulesWrite ruleexec.API
 
-	tmpl    *template.Template
+	tmpls   map[lang]*template.Template // one per UI language
 	trusted []netip.Prefix
-	lang    lang
+	defLang lang // console default (report.language)
 
 	setupMu    sync.Mutex
 	setupToken string
@@ -122,7 +123,7 @@ type auditEntry struct {
 // a one-time setup token (returned) for the first-admin page.
 func New(cfg *config.Config, db *DB, arch Archive, auditor Auditor, version string) (*Server, string, error) {
 	s := &Server{Cfg: cfg, DB: db, Archive: arch, Auditor: auditor, Version: version, Now: time.Now,
-		trusted: cfg.TrustedProxies(), lang: lang(cfg.Report.Language), limiter: newLimiter(10, time.Minute),
+		trusted: cfg.TrustedProxies(), defLang: lang(cfg.Report.Language), limiter: newLimiter(10, time.Minute),
 		auditCache: map[string]auditEntry{}, attemptsCache: map[string]attemptsEntry{}, attemptsBusy: map[string]bool{},
 		liveCache: map[string]*liveEntry{}, drillCache: map[string]*drillEntry{}, rulesCache: map[string]rulesEntry{}}
 	s.OAuth = builtinProviders(cfg.Console)
@@ -130,11 +131,14 @@ func New(cfg *config.Config, db *DB, arch Archive, auditor Auditor, version stri
 	if _, err := rand.Read(s.reviewKey); err != nil {
 		return nil, "", err
 	}
-	t, err := template.New("").Funcs(s.funcs()).ParseFS(assets, "templates/*.html")
-	if err != nil {
-		return nil, "", err
+	s.tmpls = map[lang]*template.Template{}
+	for _, l := range []lang{"en", "zh"} {
+		t, err := template.New("").Funcs(s.funcs(l)).ParseFS(assets, "templates/*.html")
+		if err != nil {
+			return nil, "", err
+		}
+		s.tmpls[l] = t
 	}
-	s.tmpl = t
 	if err := s.loadCSS(); err != nil {
 		return nil, "", err
 	}
@@ -166,6 +170,7 @@ type Req struct {
 	Pre      string // pre-auth token (anonymous forms)
 	Flash    string
 	Err      string
+	Lang     lang // UI language of this request
 }
 
 func reqOf(r *http.Request) *Req { return r.Context().Value(reqKey).(*Req) }
@@ -235,6 +240,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /login/totp", s.totpPage)
 	mux.HandleFunc("POST /login/totp", s.totpPost)
 	mux.HandleFunc("POST /logout", s.logout)
+	mux.HandleFunc("POST /lang", s.langPost)
 	mux.HandleFunc("GET /login/forgot", s.forgotPage)
 	mux.HandleFunc("POST /login/forgot", s.forgotPost)
 	mux.HandleFunc("GET /reset/{token}", s.resetPage)
@@ -345,6 +351,15 @@ func (s *Server) base(next http.Handler) http.Handler {
 				rq.User = &User{Username: rq.Proxy, Role: RoleViewer}
 			}
 		}
+		// UI language: this browser's choice, else the account's, else the
+		// console default.
+		rq.Lang = s.defLang
+		if rq.User != nil && (rq.User.Lang == "en" || rq.User.Lang == "zh") {
+			rq.Lang = lang(rq.User.Lang)
+		}
+		if c, err := r.Cookie(langCookie); err == nil && (c.Value == "en" || c.Value == "zh") {
+			rq.Lang = lang(c.Value)
+		}
 		// Anonymous and proxy-identified requests use a double-submit token.
 		if rq.CSRF == "" {
 			if c, err := r.Cookie(preCookie); err == nil && len(c.Value) >= 32 {
@@ -409,7 +424,7 @@ func (s *Server) requireUser(h http.HandlerFunc, adminOnly bool) http.Handler {
 			}
 		}
 		if adminOnly && !u.Admin() {
-			s.render(w, r, http.StatusForbidden, "message", page{Title: s.lang.t("forbidden"), Msg: s.lang.t("forbidden")})
+			s.render(w, r, http.StatusForbidden, "message", page{Title: s.L(r).t("forbidden"), Msg: s.L(r).t("forbidden")})
 			return
 		}
 		h(w, r)
@@ -470,7 +485,7 @@ func (s *Server) audit(r *http.Request, action, target, detail string) {
 
 func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
 	log.Printf("console: %s %s: %v", r.Method, r.URL.Path, err)
-	s.render(w, r, http.StatusInternalServerError, "message", page{Title: s.lang.t("error"), Msg: s.lang.t("error")})
+	s.render(w, r, http.StatusInternalServerError, "message", page{Title: s.L(r).t("error"), Msg: s.L(r).t("error")})
 }
 
 // --- login throttling ---
@@ -535,4 +550,35 @@ func (s *Server) cachedAudit(ctx context.Context, zone config.Zone, force bool) 
 	s.auditCache[zone.ZoneID] = e
 	s.auditMu.Unlock()
 	return e, false
+}
+
+// lc is the UI language of the request carried by ctx (the console
+// default outside a request).
+func (s *Server) lc(ctx context.Context) lang {
+	if rq, ok := ctx.Value(reqKey).(*Req); ok && rq.Lang != "" {
+		return rq.Lang
+	}
+	return s.defLang
+}
+
+// L is the UI language of a request.
+func (s *Server) L(r *http.Request) lang { return s.lc(r.Context()) }
+
+// langPost switches the UI language: a cookie for this browser, and the
+// account's preference when signed in with a local account.
+func (s *Server) langPost(w http.ResponseWriter, r *http.Request) {
+	l := r.PostFormValue("lang")
+	if l != "en" && l != "zh" {
+		http.Error(w, "bad language", http.StatusBadRequest)
+		return
+	}
+	rq := reqOf(r)
+	http.SetCookie(w, &http.Cookie{Name: langCookie, Value: l, Path: "/", HttpOnly: true, Secure: rq.Secure,
+		SameSite: http.SameSiteLaxMode, MaxAge: 365 * 24 * 3600})
+	if rq.User != nil && rq.User.ID != 0 && rq.Session != nil {
+		if err := s.DB.SetLang(rq.User.ID, l); err != nil {
+			log.Printf("console: language preference: %v", err)
+		}
+	}
+	http.Redirect(w, r, localPath(r.PostFormValue("next")), http.StatusSeeOther)
 }
