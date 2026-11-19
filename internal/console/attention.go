@@ -28,6 +28,7 @@ type ZoneAttention struct {
 	OpenSince time.Time
 	OpenKeys  []string
 	Origin5xx bool // origin 5xx over its line
+	OriginOut bool // edge 52x over its line: the origin is not reachable
 	OverLines int  // metrics over their line
 	Watching  int  // metrics past half their line
 	NewFaces  int  // first seen in the last 24 h, not known
@@ -57,8 +58,11 @@ func (s *Server) zoneAttention(z config.Zone) ZoneAttention {
 			switch r.Status {
 			case StatusAlert:
 				a.OverLines++
-				if r.Key == "m_origin5xx" {
+				switch r.Key {
+				case "m_origin5xx":
 					a.Origin5xx = true
+				case "m_unreachable":
+					a.OriginOut = true
 				}
 			case StatusWatch:
 				a.Watching++
@@ -88,7 +92,7 @@ func (s *Server) zoneAttention(z config.Zone) ZoneAttention {
 		}
 		return 0
 	}
-	a.Score = 10000*b(a.Open) + 5000*b(a.Origin5xx) + 1000*a.OverLines + 200*b(a.Stale || a.NoData) +
+	a.Score = 10000*b(a.Open) + 8000*b(a.OriginOut) + 5000*b(a.Origin5xx) + 1000*a.OverLines + 200*b(a.Stale || a.NoData) +
 		50*a.Watching + 10*min(a.NewFaces, 50) + a.Alerts24h
 	return a
 }

@@ -22,6 +22,8 @@ import (
 // window is the fake data for one window, keyed by its start time.
 type window struct {
 	total, dynamic, o5xx int64
+	unreach              int64
+	origin               *cfapi.OriginStats
 	calls                int64
 	cpu                  float64
 	ua, asn              []cfapi.Face
@@ -103,8 +105,25 @@ func (f *fakeAPI) Top(_ context.Context, _ string, from, _ time.Time, dim string
 			{Name: "45.13.7.7", ASN: 207990, Count: 300}, {Name: "45.13.7.9", ASN: 207990, Count: 200}}, nil
 	case cfapi.DimPath:
 		return []cfapi.Face{{Name: "/rank", Count: w.dynamic / 2}}, nil
+	case cfapi.DimOriginStatus:
+		if w.o5xx == 0 {
+			return nil, nil
+		}
+		return []cfapi.Face{{Name: "502", Count: w.o5xx}}, nil
+	case cfapi.DimEdgeStatus:
+		if w.unreach == 0 {
+			return nil, nil
+		}
+		return []cfapi.Face{{Name: "522", Count: w.unreach}}, nil
 	}
 	return nil, nil
+}
+
+func (f *fakeAPI) OriginStats(_ context.Context, _ string, from, _ time.Time) (cfapi.OriginStats, error) {
+	if o := f.w(from).origin; o != nil {
+		return *o, nil
+	}
+	return cfapi.OriginStats{}, nil
 }
 
 func (f *fakeAPI) FirewallByRule(context.Context, string, time.Time, time.Time, int) ([]cfapi.Face, error) {

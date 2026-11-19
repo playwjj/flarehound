@@ -78,6 +78,9 @@ func (l lang) tiles(cur, base analyze.Metrics) string {
 	b.WriteString(l.tile(l.t("Zone requests", "zone 总请求"), cur.Total, base.Total, false))
 	b.WriteString(l.tile(l.t("Real rendering (dynamic)", "真实渲染（dynamic）"), cur.Dynamic, base.Dynamic, true))
 	b.WriteString(l.tile(l.t("Origin 5xx", "源站 5xx"), cur.Origin5xx, base.Origin5xx, true))
+	if cur.Unreachable > 0 || base.Unreachable > 0 {
+		b.WriteString(l.tile(l.t("Origin unreachable (52x)", "源站不可达（52x）"), cur.Unreachable, base.Unreachable, true))
+	}
 	b.WriteString(`</tr></table>`)
 	if len(cur.Workers) > 0 {
 		b.WriteString(`<table role="presentation" width="100%" cellpadding="0" cellspacing="6"><tr>`)

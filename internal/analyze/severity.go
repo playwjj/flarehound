@@ -32,7 +32,7 @@ func Assess(cur, base Metrics, fs []Finding) Severity {
 		switch f.Rule {
 		case RuleTotalUp, RuleWorkerCallsUp, RuleNewFaceUA, RuleNewFaceASN:
 			volume = true
-		case RuleDynamicUp, RuleCPUUp, RuleOrigin5xx, RuleCollapseTotal, RuleCollapseWorker, RulePathUp:
+		case RuleDynamicUp, RuleCPUUp, RuleOrigin5xx, RuleCollapseTotal, RuleCollapseWorker, RulePathUp, RuleOriginSlow, RuleUnreachable:
 			return s // something expensive or broken: not "just loud"
 		}
 	}

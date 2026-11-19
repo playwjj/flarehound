@@ -83,6 +83,24 @@ type Thresholds struct {
 	MinCount           int64   `json:"min_count"`
 	EscalationPct      float64 `json:"escalation_pct"`
 	RecoveryCleanRound int     `json:"recovery_clean_rounds"`
+	// Origin health (appended: the console's settings form reads these
+	// fields by position, in thresholdKeys order).
+	OriginSlowUpPct float64 `json:"origin_slow_up_pct"`
+	OriginSlowMinMs float64 `json:"origin_slow_min_ms"`
+	UnreachableMin  int64   `json:"unreachable_min"`
+}
+
+// UnmarshalJSON starts from the defaults, so a thresholds object saved
+// before a line existed (an older settings overlay) gets that line's
+// default instead of 0.
+func (t *Thresholds) UnmarshalJSON(b []byte) error {
+	type plain Thresholds
+	p := plain(DefaultThresholds())
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	*t = Thresholds(p)
+	return nil
 }
 
 // DefaultThresholds are the 2026-11-17 battle-tested values (SPEC 7.2).
@@ -99,6 +117,12 @@ func DefaultThresholds() Thresholds {
 		MinCount:           1000,
 		EscalationPct:      25,
 		RecoveryCleanRound: 2,
+		// A slower origin worth waking someone for: its P95 doubled and is
+		// past a second — 40 ms → 80 ms is not news.
+		OriginSlowUpPct: 100,
+		OriginSlowMinMs: 1000,
+		// Edge 52x: a healthy origin is always reachable.
+		UnreachableMin: 10,
 	}
 }
 

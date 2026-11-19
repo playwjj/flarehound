@@ -241,3 +241,25 @@ func TestReadRetriesWriteDoesNot(t *testing.T) {
 		t.Fatalf("REST read not retried: %v", err)
 	}
 }
+
+func TestOriginStats(t *testing.T) {
+	var q string
+	c := server(t, `{"data":{"viewer":{"zones":[{"httpRequestsAdaptiveGroups":[{"count":1234,"quantiles":{
+		"originResponseHeaderReceiveDurationMsP95":464,"originResponseDurationMsP95":803,
+		"originTcpHandshakeDurationMsP95":12,"originTlsHandshakeDurationMsP95":30}}]}]}}}`, &q)
+	s, err := c.OriginStats(context.Background(), "zone", from, to)
+	if err != nil || s.Requests != 1234 || s.TTFBP95 != 464 || s.TotalP95 != 803 || s.TCPP95 != 12 || s.TLSP95 != 30 {
+		t.Fatalf("%+v %v", s, err)
+	}
+	// Only requests the origin answered: cache hits would pull P95 to 0.
+	if !strings.Contains(q, "originResponseStatus_geq:1") || !strings.Contains(q, "originResponseHeaderReceiveDurationMsP95") {
+		t.Fatalf("query %s", q)
+	}
+}
+
+func TestOriginUnreachableFilter(t *testing.T) {
+	got := OriginUnreachable().render(from, to)
+	if !strings.Contains(got, "edgeResponseStatus_geq:520") || !strings.Contains(got, "edgeResponseStatus_lt:531") {
+		t.Fatal(got)
+	}
+}

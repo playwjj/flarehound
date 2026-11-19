@@ -43,7 +43,8 @@ func TestI18nKeys(t *testing.T) {
 		add(k, "dynamic")
 	}
 	// Keys passed through page fields / helpers.
-	for _, k := range []string{"m_total", "m_worker_calls", "m_worker_cpu", "m_dynamic", "m_origin5xx"} {
+	for _, k := range []string{"m_total", "m_worker_calls", "m_worker_cpu", "m_dynamic", "m_origin5xx",
+		"m_unreachable", "m_origin_ttfb", "m_origin_total"} {
 		add(k, "data.go")
 	}
 	if len(used) < 100 {

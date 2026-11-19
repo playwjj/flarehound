@@ -22,6 +22,7 @@ type Attribution struct {
 	FirewallNA     bool                    `json:"firewall_na,omitempty"` // dataset unavailable (plan/permission)
 	VerifiedBots   []string                `json:"verified_bots,omitempty"`
 	Origin5xxPaths []cfapi.Face            `json:"origin_5xx_paths,omitempty"` // where origin 5xx land
+	OriginPaths    []cfapi.Face            `json:"origin_paths,omitempty"`     // where the origin's work goes (origin slow)
 	Impostors      []Impostor              `json:"impostors,omitempty"`
 	// ArchiveDays is how far back the local archive reaches; first-seen
 	// claims are only meaningful once it covers FaceHistoryMinDays.
@@ -126,6 +127,9 @@ const (
 	HypRouteBug      = "route_bug" // 5xx concentrated on one path
 	HypCollapse      = "collapse"
 	HypDiffuse       = "diffuse_growth"
+	HypOriginDown    = "origin_down"     // the edge cannot reach the origin
+	HypOriginLoad    = "origin_overload" // slower under more uncached load
+	HypOriginSlow    = "origin_slow"     // slower with load flat: the origin itself
 )
 
 // Confidence levels.
@@ -231,6 +235,21 @@ func Hypothesize(cur, base Metrics, fs []Finding, a Attribution) []Hypothesis {
 				Share: float64(a.Origin5xxPaths[0].Count) / float64(total)})
 		} else {
 			out = append(out, Hypothesis{ID: HypOriginFailure, Confidence: Medium})
+		}
+	}
+	if has(fs, RuleUnreachable) {
+		out = append(out, Hypothesis{ID: HypOriginDown, Confidence: High})
+	}
+	for _, f := range fs {
+		if f.Rule != RuleOriginSlow {
+			continue
+		}
+		// More work reaching the origin explains slowness; the same work
+		// taking longer points at the machine itself.
+		if has(fs, RuleDynamicUp) || has(fs, RuleTotalUp) || has(fs, RuleNewFaceUA) || has(fs, RuleNewFaceASN) {
+			out = append(out, Hypothesis{ID: HypOriginLoad, Confidence: Medium, Subject: f.Subject})
+		} else {
+			out = append(out, Hypothesis{ID: HypOriginSlow, Confidence: Medium, Subject: f.Subject})
 		}
 	}
 	if has(fs, RuleCollapseTotal) || has(fs, RuleCollapseWorker) {

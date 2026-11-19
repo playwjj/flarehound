@@ -108,6 +108,15 @@ func (l lang) finding(f analyze.Finding) string {
 			x = fmt.Sprintf("%.1f", f.Cur/f.Base)
 		}
 		return fmt.Sprintf(l.t("Origin 5xx %s vs %s (×%s)", "源站 5xx %s vs %s（×%s）"), n(cur), n(base), x)
+	case analyze.RuleUnreachable:
+		return fmt.Sprintf(l.t("Origin UNREACHABLE: %s edge 52x answers vs %s (Cloudflare could not reach the origin)",
+			"源站不可达：边缘 52x %s 次 vs %s（Cloudflare 连不上源站）"), n(cur), n(base))
+	case analyze.RuleOriginSlow:
+		what := l.t("Origin time-to-first-byte P95", "源站首字节 P95")
+		if f.Subject == analyze.OriginTotal {
+			what = l.t("Origin full-response P95", "源站完整响应 P95")
+		}
+		return fmt.Sprintf(l.t("%s %s vs %s (%s)", "%s %s vs %s（%s）"), what, ms(f.Cur), ms(f.Base), l.pct(f.Pct))
 	case analyze.RuleCollapseTotal:
 		return l.t("Zone requests COLLAPSED ", "zone 总请求塌量 ") + l.change(cur, base)
 	case analyze.RuleWorkerCallsUp:
@@ -139,6 +148,13 @@ func (l lang) short(f analyze.Finding) string {
 		return "dynamic " + p
 	case analyze.RuleOrigin5xx:
 		return l.t("origin 5xx ", "源站 5xx ") + n(int64(f.Cur))
+	case analyze.RuleUnreachable:
+		return l.t("origin unreachable ", "源站不可达 ") + n(int64(f.Cur))
+	case analyze.RuleOriginSlow:
+		if f.Subject == analyze.OriginTotal {
+			return l.t("origin response P95 ", "源站响应 P95 ") + ms(f.Cur)
+		}
+		return l.t("origin TTFB P95 ", "源站首字节 P95 ") + ms(f.Cur)
 	case analyze.RuleCollapseTotal:
 		return l.t("zone requests ", "zone 总量塌 ") + p
 	case analyze.RuleWorkerCallsUp:
@@ -181,7 +197,8 @@ func (l lang) findingLine(f analyze.Finding, ratio float64, names, labels map[in
 	if c, ok := covered[f.Key()+"|"+f.Subject]; ok {
 		s += l.coverNote(c)
 	}
-	if ratio > 0 && f.Rule != analyze.RuleCPUUp && f.Rule != analyze.RuleOrigin5xx && f.Cur > 0 {
+	if ratio > 0 && f.Rule != analyze.RuleCPUUp && f.Rule != analyze.RuleOrigin5xx &&
+		f.Rule != analyze.RuleOriginSlow && f.Rule != analyze.RuleUnreachable && f.Cur > 0 {
 		s += fmt.Sprintf(l.t(" (≈ %s in dashboard terms)", "（≈ 面板 %s 次）"), n(int64(f.Cur/ratio)))
 	}
 	return s
@@ -195,7 +212,7 @@ func (l lang) headline(fs []analyze.Finding) string {
 		return ""
 	}
 	order := map[string]int{
-		analyze.RuleCollapseTotal: 0, analyze.RuleCollapseWorker: 0, analyze.RuleOrigin5xx: 1,
+		analyze.RuleUnreachable: 0, analyze.RuleCollapseTotal: 0, analyze.RuleCollapseWorker: 0, analyze.RuleOrigin5xx: 1, analyze.RuleOriginSlow: 1,
 		analyze.RuleWorkerCallsUp: 2, analyze.RuleCPUUp: 3, analyze.RuleDynamicUp: 4,
 		analyze.RulePathUp: 5, analyze.RuleTotalUp: 6, analyze.RuleNewFaceASN: 7, analyze.RuleNewFaceUA: 8,
 	}
@@ -220,13 +237,82 @@ func (l lang) twoWindows(b *strings.Builder, cur, base analyze.Metrics, baseLabe
 	fmt.Fprintf(b, l.t("Numbers (%s):\n", "两窗对比（%s）：\n"), baseLabel)
 	fmt.Fprintf(b, "- %s%s\n", l.t("zone requests: ", "zone 总请求："), l.change(cur.Total, base.Total))
 	fmt.Fprintf(b, "- %s%s\n", l.t("dynamic: ", "dynamic："), l.change(cur.Dynamic, base.Dynamic))
-	fmt.Fprintf(b, "- %s%s vs %s\n", l.t("origin 5xx: ", "源站 5xx："), n(cur.Origin5xx), n(base.Origin5xx))
+	fmt.Fprintf(b, "- %s%s vs %s%s\n", l.t("origin 5xx: ", "源站 5xx："), n(cur.Origin5xx), n(base.Origin5xx), l.errDetail(cur))
+	if cur.Unreachable > 0 || base.Unreachable > 0 {
+		fmt.Fprintf(b, "- %s%s vs %s%s\n", l.t("origin unreachable (edge 52x): ", "源站不可达（边缘 52x）："),
+			n(cur.Unreachable), n(base.Unreachable), statusSplit(cur.UnreachableBy, l))
+	}
+	if o := cur.Origin; o != nil {
+		line := fmt.Sprintf(l.t("- origin P95: first byte %s, full response %s", "- 源站 P95：首字节 %s，完整响应 %s"), ms(o.TTFBP95ms), ms(o.TotalP95ms))
+		if bo := base.Origin; bo != nil {
+			line += fmt.Sprintf(l.t(" (was %s / %s)", "（基线 %s / %s）"), ms(bo.TTFBP95ms), ms(bo.TotalP95ms))
+		}
+		// Connections are mostly reused, so set-up P95s are often 0: only
+		// worth a mention when they are not.
+		if o.TCPP95ms > 0 || o.TLSP95ms > 0 {
+			line += fmt.Sprintf(l.t("; connect TCP %s, TLS %s", "；建连 TCP %s、TLS %s"), ms(o.TCPP95ms), ms(o.TLSP95ms))
+		}
+		line += fmt.Sprintf(l.t("; over %s origin-answered requests\n", "；基于 %s 个回源请求\n"), n(o.Requests))
+		b.WriteString(line)
+	}
 	for _, w := range cur.Workers {
 		bw := base.Worker(w.Name)
 		fmt.Fprintf(b, l.t("- Worker %s: %s %s; CPU P50 %.1f vs %.1f ms (%s)\n", "- Worker %s：%s %s；CPU P50 %.1f vs %.1f ms（%s）\n"), w.Name,
 			l.t("calls", "调用"), l.change(w.Calls, bw.Calls), w.CPUP50ms, bw.CPUP50ms,
 			l.pct(analyze.PctChange(w.CPUP50ms, bw.CPUP50ms)))
 	}
+}
+
+// ms renders a latency: "803 ms", "1.4 s".
+func ms(v float64) string {
+	if v >= 1000 {
+		return strconv.FormatFloat(v/1000, 'f', 1, 64) + " s"
+	}
+	return strconv.FormatFloat(v, 'f', 0, 64) + " ms"
+}
+
+// errDetail is the origin 5xx rate and status split, when known:
+// " (2.1% of origin answers; 502 ×80, 504 ×40)".
+func (l lang) errDetail(m analyze.Metrics) string {
+	var parts []string
+	if r, ok := m.Origin5xxRate(); ok && m.Origin5xx > 0 {
+		parts = append(parts, fmt.Sprintf(l.t("%s of origin answers", "占回源响应 %s"), analyze.RatePct(r)))
+	}
+	if s := statusList(m.Origin5xxBy); s != "" {
+		parts = append(parts, s)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return l.t(" (", "（") + strings.Join(parts, l.t("; ", "；")) + l.t(")", "）")
+}
+
+// statusSplit is statusList in brackets: " (522 ×40, 521 ×3)".
+func statusSplit(by map[string]int64, l lang) string {
+	if len(by) == 0 {
+		return ""
+	}
+	return l.t(" (", "（") + statusList(by) + l.t(")", "）")
+}
+
+// statusList renders a status breakdown, largest first: "522 ×40, 521 ×3".
+// A single status is still shown: which one it is is the point.
+func statusList(by map[string]int64) string {
+	keys := make([]string, 0, len(by))
+	for k := range by {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if by[keys[i]] != by[keys[j]] {
+			return by[keys[i]] > by[keys[j]]
+		}
+		return keys[i] < keys[j]
+	})
+	var ps []string
+	for _, k := range keys {
+		ps = append(ps, k+" ×"+n(by[k]))
+	}
+	return strings.Join(ps, ", ")
 }
 
 func (l lang) costLine(c analyze.Cost) string {
@@ -273,6 +359,25 @@ func (l lang) hypothesis(h analyze.Hypothesis) (claim, falsifier string) {
 		return fmt.Sprintf(l.t("Application bug on one route: %s of the origin 5xx come from %s.", "单一路由的应用缺陷：%s 的源站 5xx 来自 %s。"), share(h.Share), clip(h.Subject, 60)),
 			l.t("the same route also fails for other methods or the 5xx spread to other paths — then it is an origin-wide problem.",
 				"5xx 扩散到其他路径——那就是源站整体问题。")
+	case analyze.HypOriginDown:
+		return l.t("The origin is down or unreachable from Cloudflare: 52x means the edge never got an answer (521 refused, 522/524 timed out, 523 no route, 525/526 TLS).",
+				"源站宕机或 Cloudflare 连不上：52x 表示边缘根本没拿到源站回应（521 拒绝连接，522/524 超时，523 无路由，525/526 TLS 握手/证书）。"),
+			l.t("the origin answers direct requests normally and only some Cloudflare data centres see 52x — then it is a network path or firewall (origin blocking Cloudflare IPs) problem.",
+				"直连源站正常、且只有部分 Cloudflare 机房出现 52x——那是网络路径或防火墙（源站拦了 Cloudflare IP）问题。")
+	case analyze.HypOriginLoad:
+		return l.t("The origin is slowing under more work: more uncached requests reach it at the same time (see dynamic paths and new faces).",
+				"源站在更多负载下变慢：同时段有更多未缓存请求打到源站（见 dynamic 路径与新面孔）。"),
+			l.t("the origin stays slow after the extra traffic is blocked or cached — then the machine itself degraded.",
+				"拦截或缓存掉增量后源站仍然慢——那是机器本身出了问题。")
+	case analyze.HypOriginSlow:
+		if h.Subject == analyze.OriginTotal {
+			return l.t("Origin responses take longer to transfer while first byte is steady: large bodies or limited bandwidth (hotlinking, downloads).",
+					"首字节平稳而完整响应变慢：响应体变大或带宽受限（盗链、大文件下载）。"),
+				l.t("the slow responses are small pages — then the origin's network is congested.", "慢的都是小页面——那是源站网络拥塞。")
+		}
+		return l.t("The origin computes slower with load flat: application or database (slow query, lock, cron job, plugin update, exhausted PHP workers).",
+				"负载平稳而源站计算变慢：应用或数据库问题（慢查询、锁、定时任务、插件更新、PHP 进程池耗尽）。"),
+			l.t("the origin's work shifted to a heavier path (see origin work by path) — then it is that route, not the machine.", "回源请求转向了更重的路径（见回源请求按路径）——那是该路由的问题，而非整机。")
 	case analyze.HypCollapse:
 		return l.t("Traffic drop: upstream outage, DNS/routing change, or a blocking rule hitting real visitors.",
 				"流量塌陷：上游故障、DNS/路由变更，或拦截规则误伤真实访客。"),
@@ -400,6 +505,9 @@ func Intraday(language string, d IntradayData) string {
 	}
 	if len(a.Origin5xxPaths) > 0 {
 		attr = append(attr, l.t("origin 5xx by path: ", "源站 5xx 按路径：")+faceList(a.Origin5xxPaths, 5))
+	}
+	if len(a.OriginPaths) > 0 {
+		attr = append(attr, l.t("origin work by path: ", "回源请求按路径：")+faceList(a.OriginPaths, 5))
 	}
 	if len(a.TopIPs) > 0 {
 		attr = append(attr, l.t("top client IPs: ", "客户端 IP Top：")+faceList(a.TopIPs, 5))

@@ -46,6 +46,7 @@ type API interface {
 	Hourly(ctx context.Context, zoneID string, from, to time.Time, f cfapi.Filter) (map[time.Time]int64, error)
 	Sampling(ctx context.Context, zoneID string, from, to time.Time) (int64, float64, error)
 	WorkerStats(ctx context.Context, accountID, script string, from, to time.Time) (int64, float64, error)
+	OriginStats(ctx context.Context, zoneID string, from, to time.Time) (cfapi.OriginStats, error)
 }
 
 // RulesAPI is the read-only REST surface of the WAF audit (read token:
@@ -169,6 +170,9 @@ func Thresholds(cfg *config.Config) analyze.Thresholds {
 		MinCount:           t.MinCount,
 		EscalationPct:      t.EscalationPct,
 		RecoveryCleanRound: t.RecoveryCleanRound,
+		OriginSlowUpPct:    t.OriginSlowUpPct,
+		OriginSlowMinMs:    t.OriginSlowMinMs,
+		UnreachableMin:     t.UnreachableMin,
 	}
 	for _, p := range cfg.PathRules {
 		up, mc := p.UpPct, p.MinCount
@@ -222,8 +226,25 @@ func (r *Runner) fetch(ctx context.Context, zone config.Zone, w schedule.Window,
 	if m.Dynamic, err = r.API.Count(ctx, z, from, to, cfapi.Filter{CacheStatus: "dynamic"}); err != nil {
 		return m, fmt.Errorf("dynamic: %w", err)
 	}
-	if m.Origin5xx, err = r.API.Count(ctx, z, from, to, cfapi.Filter{OriginStatusFrom: 500, OriginStatusTo: 600}); err != nil {
+	// One status breakdown serves both the count and the 502/503/504 split.
+	o5, err := r.API.Top(ctx, z, from, to, cfapi.DimOriginStatus, 50, cfapi.Filter{OriginStatusFrom: 500, OriginStatusTo: 600})
+	if err != nil {
 		return m, fmt.Errorf("origin 5xx: %w", err)
+	}
+	m.Origin5xx, m.Origin5xxBy = byStatus(o5)
+	un, err := r.API.Top(ctx, z, from, to, cfapi.DimEdgeStatus, 20, cfapi.OriginUnreachable())
+	if err != nil {
+		return m, fmt.Errorf("origin unreachable: %w", err)
+	}
+	m.Unreachable, m.UnreachableBy = byStatus(un)
+	// Origin latency is an addition, not a pillar: a plan or an API that
+	// does not answer it degrades the zone to "not measured", never fails
+	// the round.
+	if st, err := r.API.OriginStats(ctx, z, from, to); err != nil {
+		log.Printf("zone %s: origin latency not measured: %v", zone.Name, err)
+	} else if st.Requests > 0 {
+		m.Origin = &analyze.OriginMetrics{Requests: st.Requests, TTFBP95ms: st.TTFBP95, TotalP95ms: st.TotalP95,
+			TCPP95ms: st.TCPP95, TLSP95ms: st.TLSP95}
 	}
 	if m.TopUA, err = r.API.Top(ctx, z, from, to, cfapi.DimUserAgent, top, cfapi.Filter{}); err != nil {
 		return m, fmt.Errorf("top UA: %w", err)
@@ -255,6 +276,20 @@ func (r *Runner) fetch(ctx context.Context, zone config.Zone, w schedule.Window,
 		m.Paths[p.Name] = n
 	}
 	return m, nil
+}
+
+// byStatus sums a status breakdown and keys it by status ("502").
+func byStatus(fs []cfapi.Face) (int64, map[string]int64) {
+	if len(fs) == 0 {
+		return 0, nil
+	}
+	var n int64
+	by := make(map[string]int64, len(fs))
+	for _, f := range fs {
+		n += f.Count
+		by[f.Name] += f.Count
+	}
+	return n, by
 }
 
 // verifyBots drops new-face UA findings whose crawler claim is backed by
@@ -376,6 +411,13 @@ func (r *Runner) attribute(ctx context.Context, zone config.Zone, w, bw schedule
 		if f.Rule == analyze.RuleOrigin5xx {
 			a.Origin5xxPaths, err = r.API.Top(ctx, z, w.From, w.To, cfapi.DimPath, 5, cfapi.Filter{OriginStatusFrom: 500, OriginStatusTo: 600})
 			logErr("origin 5xx paths", err)
+			break
+		}
+	}
+	for _, f := range fs {
+		if f.Rule == analyze.RuleOriginSlow {
+			a.OriginPaths, err = r.API.Top(ctx, z, w.From, w.To, cfapi.DimPath, 5, cfapi.OriginAnswered())
+			logErr("origin paths", err)
 			break
 		}
 	}

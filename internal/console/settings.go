@@ -269,7 +269,8 @@ func (c settingsChange) tokenFields() []string {
 }
 
 var thresholdKeys = []string{"total_up_pct", "worker_calls_up_pct", "cpu_p50_up_pct", "dynamic_up_pct", "origin_5xx_multiplier",
-	"origin_5xx_min", "new_face_min_count", "collapse_down_pct", "min_count", "escalation_pct", "recovery_clean_rounds"}
+	"origin_5xx_min", "new_face_min_count", "collapse_down_pct", "min_count", "escalation_pct", "recovery_clean_rounds",
+	"origin_slow_up_pct", "origin_slow_min_ms", "unreachable_min"}
 
 func (s *Server) parseChange(r *http.Request) (settingsChange, error) {
 	c := settingsChange{Kind: r.PostFormValue("kind"), Fields: map[string]string{}}
@@ -355,6 +356,9 @@ func parseThresholds(f map[string]string) (config.Thresholds, error) {
 	var rc int64
 	seti(&rc, "recovery_clean_rounds")
 	t.RecoveryCleanRound = int(rc)
+	set(&t.OriginSlowUpPct, "origin_slow_up_pct")
+	set(&t.OriginSlowMinMs, "origin_slow_min_ms")
+	seti(&t.UnreachableMin, "unreachable_min")
 	if err != nil {
 		return t, err
 	}

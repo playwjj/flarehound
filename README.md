@@ -10,7 +10,7 @@ English | [中文](README.zh.md)
 
 Cloudflare gives you data. FlareHound gives you the conclusion.
 
-> Status: **v1.14.2** — IP board (who keeps hitting, last hour and 24 h; verified bots folded, ranges summed), client IPs in the drill-down; "what is rising now": blocked board, trend strip vs yesterday, live faces; e-mail over HTTPS (Resend) where SMTP is blocked; per-zone WAF audit coverage; cross-zone home, block verdicts in the daily report, rule-covered faces marked, audit/rule snapshots; settings in the console (notifications with test sends, alert lines with a replay preview, known faces, network names); console in English or Chinese; WAF basics, rule recipes and plain-words rules; live hour and movers drill-down; web console with in-console blocking, undo, before/after, read-only snapshots and Google / GitHub sign-in; mark-as-known as a compact link. Documentation: **https://playwjj.github.io/flarehound/** · Changelog: [CHANGELOG.md](CHANGELOG.md)
+> Status: **v1.15.0** — origin view for VPS sites behind the proxy (origin unreachable 52x, origin latency P95, 5xx rate and status split); IP board (who keeps hitting, last hour and 24 h; verified bots folded, ranges summed), client IPs in the drill-down; "what is rising now": blocked board, trend strip vs yesterday, live faces; e-mail over HTTPS (Resend) where SMTP is blocked; per-zone WAF audit coverage; cross-zone home, block verdicts in the daily report, rule-covered faces marked, audit/rule snapshots; settings in the console (notifications with test sends, alert lines with a replay preview, known faces, network names); console in English or Chinese; WAF basics, rule recipes and plain-words rules; live hour and movers drill-down; web console with in-console blocking, undo, before/after, read-only snapshots and Google / GitHub sign-in; mark-as-known as a compact link. Documentation: **https://playwjj.github.io/flarehound/** · Changelog: [CHANGELOG.md](CHANGELOG.md)
 >
 > **Direction:** the built-in web console (since v1.3) is the centre of the product — live movers, new faces, history against the long-term baseline, the WAF audit and rules, settings, and in-console blocking with per-account audit. Notifications are the alerting layer that brings you to the console. See the [web console revision note](docs/web-console-revision.md).
 >
@@ -24,7 +24,7 @@ Cloudflare gives you data. FlareHound gives you the conclusion.
 
 FlareHound watches the traffic itself:
 
-- **Hourly anomaly watch** — the last full clock hour vs. the same hour yesterday: zone requests, uncached (`dynamic`) responses, origin 5xx, Worker invocations and CPU P50.
+- **Hourly anomaly watch** — the last full clock hour vs. the same hour yesterday: zone requests, uncached (`dynamic`) responses, origin 5xx, origin reachability and latency (for sites on a VPS behind the proxy), Worker invocations and CPU P50.
 - **Attribution before conclusions** — every spike is split by path, ASN, user agent and cache status first, and "expensive" traffic (Worker renders, origin hits) is reported separately from cheap edge volume.
 - **New-face detection** — user agents and ASNs that suddenly enter your Top 10 and weren't in yesterday's Top 25.
 - **Alive, provably** — every round writes a heartbeat (file, JSONL, optional healthchecks.io-style ping) and the container has a `HEALTHCHECK`, so a dead watchdog never looks like a quiet site.
@@ -209,6 +209,8 @@ Default alert lines (all configurable — these are the battle-tested values fro
 | Worker CPU P50 vs. yesterday | +25% |
 | Dynamic (uncached) responses vs. yesterday | +50% |
 | Origin 5xx | 3× baseline **and** > 50 |
+| Origin unreachable (edge 52x) | ≥ 10 per hour (a healthy origin has none) |
+| Origin latency P95 (first byte) | +100% **and** ≥ 1 s |
 | New face in Top 10 (UA or ASN) | > 5,000 requests/hour |
 | Collapse in requests or invocations | −50% (re-read after 3 min; still-arriving data is never called a collapse) |
 | Volume floor for percentage rules | 1,000 requests per window |

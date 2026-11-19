@@ -386,6 +386,7 @@
   <h2><a href="/?z={{zq .Zone}}">{{.Zone.Name}}</a>{{if .HasBase}} <small class="muted">{{t "m_total"}} {{pct .TotalPct}}</small>{{end}}</h2>
   <p class="chips">
     {{if .Open}}<span class="chip c-alert">{{tf "att_open" (when .OpenSince)}}</span>{{end}}
+    {{if .OriginOut}}<span class="chip c-alert">{{t "att_unreach"}}</span>{{end}}
     {{if .Origin5xx}}<span class="chip c-alert">{{t "att_5xx"}}</span>{{end}}
     {{if .OverLines}}<span class="chip c-alert">{{tf "att_over" .OverLines}}</span>{{end}}
     {{if .Watching}}<span class="chip c-watch">{{tf "att_watch" .Watching}}</span>{{end}}
@@ -393,7 +394,7 @@
     {{if .Alerts24h}}<span class="chip">{{tf "att_alerts" .Alerts24h}}</span>{{end}}
     {{if .Blocks}}<a class="chip" href="/blocks?z={{zq .Zone}}">{{tf "att_blocks" .Blocks}}</a>{{end}}
     {{if .NoData}}<span class="chip c-watch">{{t "att_nodata"}}</span>{{else if .Stale}}<span class="chip c-watch">{{t "att_stale"}}</span>{{end}}
-    {{if not (or .Open .Origin5xx .OverLines .Watching .NewFaces .Alerts24h .NoData .Stale)}}<span class="chip c-ok">{{t "att_quiet"}}</span>{{end}}
+    {{if not (or .Open .OriginOut .Origin5xx .OverLines .Watching .NewFaces .Alerts24h .NoData .Stale)}}<span class="chip c-ok">{{t "att_quiet"}}</span>{{end}}
   </p>
   {{if .OpenKeys}}<p class="meta mono">{{join .OpenKeys}}</p>{{end}}
   {{if not .Window.IsZero}}<p class="meta">{{t "window"}} → {{when .Window}}</p>{{end}}

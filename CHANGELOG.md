@@ -2,6 +2,15 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.15.0 — 2026-11-19
+
+- **Origin view for sites on a VPS behind the proxy.** A flood costs a Worker site money; it costs a site on one small VPS its availability. FlareHound now watches the origin itself, not just its 5xx count. No new permission or token: the fields are in the same adaptive dataset, on every plan including Free.
+  - **Origin unreachable** (new line `origin_unreachable`): the edge's own 52x answers (520–526, 530) mean Cloudflare could not reach the origin at all. These were never counted before: the origin answered nothing, so they are not origin 5xx. ≥ 10 per hour (`thresholds.unreachable_min`) from a normally-zero baseline pages at once, at high severity, with the status split (522 ×340) and an "origin down" hypothesis.
+  - **Origin slow** (new line `origin_slow`): P95 time to first byte (the application computing) and of the full response (plus transfer), over the requests the origin actually answered. Fires at +100% **and** ≥ 1 s (`origin_slow_up_pct`, `origin_slow_min_ms`), against yesterday and the 4-week median like every volume line. The hypothesis says whether it slowed under more uncached load or with load flat (the machine itself), and first byte vs transfer; the attribution lists where the origin's work goes by path.
+  - **Origin 5xx in detail**: as a share of origin answers next to the count (a falling-traffic origin cannot hide behind a small count) and split 502 / 503 / 504.
+  - Reports and alerts show the origin's P95s (and TCP/TLS connect when non-zero). The console overview gets *Origin unreachable*, *Origin first byte P95* and *Origin full response P95* tiles; they fold away on zones the edge serves (fewer than 100 origin-answered requests an hour), so Worker sites see no clutter. A zone with 52x over the line tops the cross-zone home. `flarehound doctor` shows whether origin latency is readable per zone.
+  - Archived hours from before the upgrade have no origin latency: they read "n/a" and the origin-slow line waits for the baseline to fill. Older settings overlays get the new lines' defaults.
+
 ## v1.14.2 — 2026-11-19
 
 - **Console:** "mark as known" is a compact link now, not a button — the same action with less visual weight in the face lists.

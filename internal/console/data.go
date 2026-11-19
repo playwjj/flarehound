@@ -129,8 +129,69 @@ func metricRows(cfg *config.Config, zone config.Zone, cur, base analyze.Metrics,
 	default:
 		o5.Status = StatusOK
 	}
+	if r, ok := cur.Origin5xxRate(); ok && cur.Origin5xx > 0 {
+		o5.Subject = analyze.RatePct(r)
+	}
 	add(o5)
+	rows = append(rows, originRows(th, cur, base, has)...)
 	return rows
+}
+
+// originRows are the origin's own lines: reachability and latency. They
+// fold away where the origin barely works — a zone served from the edge
+// or a Worker has no origin worth a tile (FlareHound's "missing →
+// degrade, never clutter").
+func originRows(th config.Thresholds, cur, base analyze.Metrics, has bool) []MetricRow {
+	co, bo := cur.Origin, base.Origin
+	shown := co != nil && co.Requests >= analyze.OriginMinRequests
+	var rows []MetricRow
+	if shown || cur.Unreachable > 0 {
+		u := MetricRow{Key: "m_unreachable", Cur: float64(cur.Unreachable), Base: float64(base.Unreachable), HasBase: has,
+			LineDesc: "≥" + strconv.FormatInt(th.UnreachableMin, 10)}
+		if has {
+			u.Pct = pct(u.Cur, u.Base)
+		}
+		switch {
+		case cur.Unreachable > 0 && cur.Unreachable >= th.UnreachableMin && u.Cur >= 2*u.Base:
+			u.Status = StatusAlert
+		case cur.Unreachable > 0:
+			u.Status = StatusWatch
+		default:
+			u.Status = StatusOK
+		}
+		rows = append(rows, u)
+	}
+	if !shown {
+		return rows
+	}
+	hasBase := has && bo != nil && bo.Requests >= analyze.OriginMinRequests
+	line := plusPct(th.OriginSlowUpPct) + " & ≥" + strconv.FormatFloat(th.OriginSlowMinMs, 'f', -1, 64) + " ms"
+	lat := func(key string, c, b float64) MetricRow {
+		r := MetricRow{Key: key, Cur: c, Unit: "ms", HasBase: hasBase && b > 0, LineDesc: line, Status: StatusNA}
+		if r.HasBase {
+			r.Base, r.Pct = b, pct(c, b)
+			switch {
+			case r.Pct >= th.OriginSlowUpPct && c >= th.OriginSlowMinMs:
+				r.Status = StatusAlert
+			case r.Pct >= th.OriginSlowUpPct/2 && c >= th.OriginSlowMinMs/2:
+				r.Status = StatusWatch
+			default:
+				r.Status = StatusOK
+			}
+		}
+		return r
+	}
+	var bt, bf float64
+	if bo != nil {
+		bt, bf = bo.TTFBP95ms, bo.TotalP95ms
+	}
+	ttfb := lat("m_origin_ttfb", co.TTFBP95ms, bt)
+	// Connection set-up rides along as detail, not its own alert line
+	// (mostly 0: connections are reused).
+	if co.TCPP95ms > 0 || co.TLSP95ms > 0 {
+		ttfb.Subject = "TCP " + strconv.FormatFloat(co.TCPP95ms, 'f', 0, 64) + " · TLS " + strconv.FormatFloat(co.TLSP95ms, 'f', 0, 64) + " ms"
+	}
+	return append(rows, ttfb, lat("m_origin_total", co.TotalP95ms, bf))
 }
 
 // BuildOverview computes the overview from the newest archived hour.

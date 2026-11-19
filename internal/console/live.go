@@ -66,6 +66,19 @@ func blend(a, b analyze.Metrics, w float64) analyze.Metrics {
 		wa, wb := a.Worker(n), b.Worker(n)
 		m.Workers = append(m.Workers, analyze.WorkerMetrics{Name: n, Calls: mix(wa.Calls, wb.Calls), CPUP50ms: w*wa.CPUP50ms + (1-w)*wb.CPUP50ms})
 	}
+	m.Unreachable = mix(a.Unreachable, b.Unreachable)
+	// Latency quantiles do not add up; a weighted mean of the two hours'
+	// P95s is the approximation a live, unsettled view can afford.
+	switch ao, bo := a.Origin, b.Origin; {
+	case ao != nil && bo != nil:
+		f := func(x, y float64) float64 { return w*x + (1-w)*y }
+		m.Origin = &analyze.OriginMetrics{Requests: mix(ao.Requests, bo.Requests), TTFBP95ms: f(ao.TTFBP95ms, bo.TTFBP95ms),
+			TotalP95ms: f(ao.TotalP95ms, bo.TotalP95ms), TCPP95ms: f(ao.TCPP95ms, bo.TCPP95ms), TLSP95ms: f(ao.TLSP95ms, bo.TLSP95ms)}
+	case ao != nil:
+		m.Origin = ao
+	case bo != nil:
+		m.Origin = bo
+	}
 	if len(a.Paths) > 0 || len(b.Paths) > 0 {
 		m.Paths = map[string]int64{}
 		for k := range a.Paths {

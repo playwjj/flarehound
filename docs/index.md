@@ -8,7 +8,7 @@ Cloudflare gives you data. FlareHound gives you the conclusion.
 
 | Feature | Summary | Page |
 |---|---|---|
-| Hourly watch | Zone requests, uncached (`dynamic`) responses, origin 5xx, Worker invocations and CPU P50, new user agents / ASNs, per-path lines | [Detection](detection.md) |
+| Hourly watch | Zone requests, uncached (`dynamic`) responses, origin 5xx, origin unreachable (52x) and latency, Worker invocations and CPU P50, new user agents / ASNs, per-path lines | [Detection](detection.md) |
 | Quiet alerting | One alert per anomaly; another only on a new signal or +25% growth; one "recovered" line after two clean rounds | [Detection](detection.md#alert-discipline) |
 | Attribution and suggestions | Expensive vs. cheap traffic, hypotheses with confidence and falsifiers, block / challenge / rate-limit / cache suggestions with paste-ready expressions | [Reports](reports.md) |
 | Daily report | Last 24 h vs. the 24 h before, fixed checkpoints, firewall events, block attempts, WAF audit summary, calibration line | [Reports](reports.md#daily-report) |

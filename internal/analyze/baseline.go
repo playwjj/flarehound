@@ -41,7 +41,8 @@ func medianFloat(v []float64) float64 {
 // against yesterday's Top 25 and the archive's face history instead).
 func Median(samples []Metrics) Metrics {
 	var m Metrics
-	var total, dyn, o5 []int64
+	var total, dyn, o5, unreach, oreq []int64
+	var ttfb, otot, tcp, tls []float64
 	calls := map[string][]int64{}
 	cpu := map[string][]float64{}
 	paths := map[string][]int64{}
@@ -50,6 +51,12 @@ func Median(samples []Metrics) Metrics {
 		total = append(total, s.Total)
 		dyn = append(dyn, s.Dynamic)
 		o5 = append(o5, s.Origin5xx)
+		unreach = append(unreach, s.Unreachable)
+		if o := s.Origin; o != nil && o.Requests > 0 {
+			oreq = append(oreq, o.Requests)
+			ttfb, otot = append(ttfb, o.TTFBP95ms), append(otot, o.TotalP95ms)
+			tcp, tls = append(tcp, o.TCPP95ms), append(tls, o.TLSP95ms)
+		}
 		for _, w := range s.Workers {
 			if _, seen := calls[w.Name]; !seen {
 				workerOrder = append(workerOrder, w.Name)
@@ -62,6 +69,13 @@ func Median(samples []Metrics) Metrics {
 		}
 	}
 	m.Total, m.Dynamic, m.Origin5xx = medianInt(total), medianInt(dyn), medianInt(o5)
+	m.Unreachable = medianInt(unreach)
+	// Only hours that measured the origin count (older archived hours
+	// predate the measurement).
+	if len(oreq) > 0 {
+		m.Origin = &OriginMetrics{Requests: medianInt(oreq), TTFBP95ms: medianFloat(ttfb), TotalP95ms: medianFloat(otot),
+			TCPP95ms: medianFloat(tcp), TLSP95ms: medianFloat(tls)}
+	}
 	for _, name := range workerOrder {
 		m.Workers = append(m.Workers, WorkerMetrics{Name: name, Calls: medianInt(calls[name]), CPUP50ms: medianFloat(cpu[name])})
 	}

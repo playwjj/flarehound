@@ -304,7 +304,8 @@ func (c *Config) apply(o *Overlay) error {
 // CheckThresholds validates alert lines (also used before saving them).
 func CheckThresholds(t Thresholds) error {
 	for name, v := range map[string]float64{"total_up_pct": t.TotalUpPct, "worker_calls_up_pct": t.WorkerCallsUpPct,
-		"cpu_p50_up_pct": t.CPUP50UpPct, "dynamic_up_pct": t.DynamicUpPct, "escalation_pct": t.EscalationPct} {
+		"cpu_p50_up_pct": t.CPUP50UpPct, "dynamic_up_pct": t.DynamicUpPct, "escalation_pct": t.EscalationPct,
+		"origin_slow_up_pct": t.OriginSlowUpPct} {
 		if v < 1 || v > 10000 {
 			return fmt.Errorf("thresholds.%s must be within 1..10000 (%%)", name)
 		}
@@ -315,7 +316,11 @@ func CheckThresholds(t Thresholds) error {
 	if t.Origin5xxMultiple < 1 || t.Origin5xxMultiple > 1000 {
 		return fmt.Errorf("thresholds.origin_5xx_multiplier must be within 1..1000")
 	}
-	for name, v := range map[string]int64{"origin_5xx_min": t.Origin5xxMin, "new_face_min_count": t.NewFaceMinCount, "min_count": t.MinCount} {
+	if t.OriginSlowMinMs < 0 || t.OriginSlowMinMs > 600_000 {
+		return fmt.Errorf("thresholds.origin_slow_min_ms must be within 0..600000 (ms)")
+	}
+	for name, v := range map[string]int64{"origin_5xx_min": t.Origin5xxMin, "new_face_min_count": t.NewFaceMinCount, "min_count": t.MinCount,
+		"unreachable_min": t.UnreachableMin} {
 		if v < 0 || v > 1_000_000_000 {
 			return fmt.Errorf("thresholds.%s must be within 0..1e9", name)
 		}

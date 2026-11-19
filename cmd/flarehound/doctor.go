@@ -133,6 +133,16 @@ func runDoctor(ctx context.Context, cfg *config.Config, cfgPath string, out io.W
 			}
 			d.ok("plan capabilities: ASN breakdown %s; firewall events %s", asn, fw)
 		}
+		if watch == "✓" {
+			switch st, err := read.OriginStats(ctx, z.ZoneID, w.From, w.To); {
+			case err != nil:
+				d.warn("origin latency: not readable (%v) — origin-slow alerts are off for this zone", err)
+			case st.Requests == 0:
+				d.ok("origin latency: no origin-answered requests in %s (served from cache/edge — origin tiles stay folded)", w)
+			default:
+				d.ok("origin latency: first byte P95 %.0f ms, full response P95 %.0f ms over %s origin-answered requests", st.TTFBP95, st.TotalP95, fmtInt(st.Requests))
+			}
+		}
 		for _, wk := range z.Workers {
 			if _, _, err := read.WorkerStats(ctx, cfg.Cloudflare.AccountID, wk, w.From, w.To); err != nil {
 				d.bad("worker %s: %v — grant Account → Account Analytics: Read", wk, err)

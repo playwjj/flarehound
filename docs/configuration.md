@@ -47,6 +47,9 @@ Detection lines; see [Detection](detection.md) for how each is applied.
 | `thresholds.min_count` | int | `1000` | Volume floor for percentage rules: the current window (rises) or baseline (drops) must reach it; CPU P50 needs both windows' invocations ≥ it. |
 | `thresholds.escalation_pct` | number | `25` | An already reported signal re-alerts only after growing this % past its reported peak. |
 | `thresholds.recovery_clean_rounds` | int | `2` | Consecutive clean rounds before the "recovered" message. |
+| `thresholds.origin_slow_up_pct` | number | `100` | Origin latency P95 (first byte, else full response) vs. baseline, % increase … |
+| `thresholds.origin_slow_min_ms` | number | `1000` | … and the current P95 at least this many ms (40 → 80 ms is not news). |
+| `thresholds.unreachable_min` | int | `10` | Edge 52x (origin unreachable) per window before it alerts. |
 
 ## path_rules
 

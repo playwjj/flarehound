@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -104,5 +105,24 @@ func TestOverlay(t *testing.T) {
 	}
 	if raw, _ := os.ReadFile(ovPath); strings.Contains(string(raw), "bot2") || strings.Contains(string(raw), "hooks.slack") {
 		t.Fatal("a secret value ended up in the overlay file")
+	}
+}
+
+// An overlay saved before the origin lines existed must load with their
+// defaults, not 0 (which would fail validation or switch them off).
+func TestOldOverlayGetsNewThresholdDefaults(t *testing.T) {
+	var o Overlay
+	if err := json.Unmarshal([]byte(`{"thresholds":{"total_up_pct":80,"worker_calls_up_pct":35,"cpu_p50_up_pct":25,"dynamic_up_pct":50,
+		"origin_5xx_multiplier":3,"origin_5xx_min":50,"new_face_min_count":5000,"collapse_down_pct":50,"min_count":1000,
+		"escalation_pct":25,"recovery_clean_rounds":2}}`), &o); err != nil {
+		t.Fatal(err)
+	}
+	d := DefaultThresholds()
+	th := *o.Thresholds
+	if th.TotalUpPct != 80 || th.OriginSlowUpPct != d.OriginSlowUpPct || th.OriginSlowMinMs != d.OriginSlowMinMs || th.UnreachableMin != d.UnreachableMin {
+		t.Fatalf("%+v", th)
+	}
+	if err := CheckThresholds(th); err != nil {
+		t.Fatal(err)
 	}
 }
