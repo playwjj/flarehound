@@ -14,7 +14,7 @@ All notable changes to FlareHound. Versions follow [semantic versioning](https:/
 ## v1.14.2 — 2026-11-19
 
 - **Console:** "mark as known" is a compact link now, not a button — the same action with less visual weight in the face lists.
-- **Docs:** Chinese README ([README.zh.md](README.zh.md)); SPEC.md is frozen — it keeps the design rationale, while the README and the docs site describe the product as it stands.
+- **Docs:** Chinese README ([README.zh.md](https://github.com/playwjj/flarehound/blob/main/README.zh.md)); SPEC.md is frozen — it keeps the design rationale, while the README and the docs site describe the product as it stands.
 
 ## v1.14.1 — 2026-11-19
 
