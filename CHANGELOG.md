@@ -2,6 +2,11 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.14.2 — 2026-11-19
+
+- **Console:** "mark as known" is a compact link now, not a button — the same action with less visual weight in the face lists.
+- **Docs:** Chinese README ([README.zh.md](README.zh.md)); SPEC.md is frozen — it keeps the design rationale, while the README and the docs site describe the product as it stands.
+
 ## v1.14.1 — 2026-11-19
 
 - **IP board: crawlers no longer fill it.** On a busy site each real Googlebot address does thousands of requests an hour, so a run of `66.249.66.x` took the top places.
