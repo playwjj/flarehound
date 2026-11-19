@@ -945,3 +945,63 @@ func TestAuditScopePerZone(t *testing.T) {
 		t.Errorf("single zone: %+v", d)
 	}
 }
+
+// skoolopedia, 2026-11-19: 52x became a metric at 12:36 (v1.15); its
+// usual 530/522 trickle (12–48 an hour) then cleared "≥ 10 and ≥ 2×
+// baseline" against a baseline that had no measured hours behind it.
+// With an immature baseline the line stays quiet; once three earlier days
+// measured the hour, a real departure fires as before.
+func TestImmatureBaselineHoldsUnreachable(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Cloudflare.Zones[0].Workers = nil
+	api := &fakeAPI{windows: map[time.Time]*window{}, reads: map[time.Time]int{}}
+	out := &sink{}
+	h14 := time.Date(2026, 11, 19, 14, 0, 0, 0, time.UTC)
+	now := h14.Add(67 * time.Minute)
+	r := &Runner{API: api, Cfg: cfg, Sender: out, Now: func() time.Time { return now }}
+	zone := cfg.Cloudflare.Zones[0]
+	st := withStore(t, r) // empty archive
+
+	at := func(from time.Time, unreach int64) {
+		w := normal()
+		w.unreach = unreach
+		api.windows[from] = w
+	}
+	at(h14.Add(-24*time.Hour), 0)
+	at(h14, 26)
+	at(h14.Add(time.Hour-24*time.Hour), 3)
+	at(h14.Add(time.Hour), 48)
+	for _, step := range []time.Time{h14, h14.Add(time.Hour)} {
+		now = step.Add(67 * time.Minute)
+		if err := r.Intraday(context.Background(), zone); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(out.msgs) != 0 {
+		t.Fatalf("immature 52x baseline alerted:\n%s", out.msgs[0])
+	}
+	// The rounds archived the hours as measured: a measured 0 is a sample.
+	if snap, ok, _ := st.Snapshot(zone.ZoneID, store.Hour, h14.Add(-24*time.Hour)); !ok || !analyze.MeasuredUnreachable(snap.Metrics) {
+		t.Fatalf("yesterday's hour not archived as measured: %+v", snap.Metrics)
+	}
+
+	// Three earlier days measured 16:00: mature. A real departure fires.
+	h16 := h14.Add(2 * time.Hour)
+	for k := 2; k <= 4; k++ {
+		d := h16.Add(-time.Duration(k) * 24 * time.Hour)
+		m := analyzeMetrics(normal())
+		m.Measured = []string{analyze.MetricUnreachable}
+		if err := st.PutSnapshot(zone.ZoneID, store.Hour, d, d.Add(time.Hour), store.Snapshot{Metrics: m}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	at(h16.Add(-24*time.Hour), 0)
+	at(h16, 400)
+	now = h16.Add(67 * time.Minute)
+	if err := r.Intraday(context.Background(), zone); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.msgs) != 1 || !strings.Contains(out.msgs[0], "unreachable") {
+		t.Fatalf("mature baseline: expected an origin_unreachable alert, got %d msgs %+v", len(out.msgs), out.msgs)
+	}
+}

@@ -270,7 +270,7 @@ func (c settingsChange) tokenFields() []string {
 
 var thresholdKeys = []string{"total_up_pct", "worker_calls_up_pct", "cpu_p50_up_pct", "dynamic_up_pct", "origin_5xx_multiplier",
 	"origin_5xx_min", "new_face_min_count", "collapse_down_pct", "min_count", "escalation_pct", "recovery_clean_rounds",
-	"origin_slow_up_pct", "origin_slow_min_ms", "unreachable_min"}
+	"origin_slow_up_pct", "origin_slow_min_ms", "unreachable_min", "baseline_min_samples"}
 
 func (s *Server) parseChange(r *http.Request) (settingsChange, error) {
 	c := settingsChange{Kind: r.PostFormValue("kind"), Fields: map[string]string{}}
@@ -359,6 +359,9 @@ func parseThresholds(f map[string]string) (config.Thresholds, error) {
 	set(&t.OriginSlowUpPct, "origin_slow_up_pct")
 	set(&t.OriginSlowMinMs, "origin_slow_min_ms")
 	seti(&t.UnreachableMin, "unreachable_min")
+	var bm int64
+	seti(&bm, "baseline_min_samples")
+	t.BaselineMinSamples = int(bm)
 	if err != nil {
 		return t, err
 	}
@@ -808,19 +811,27 @@ func ReplayThresholds(a Archive, z config.Zone, before, after *config.Config, no
 		}
 		rp.Hours++
 		var long *analyze.Metrics
-		if ss, err := a.SameHourSnapshots(z.ZoneID, cur.From, cur.To, analyze.LongBaselineDays); err == nil && len(ss) >= analyze.LongBaselineMinSamples {
+		var cnt *analyze.BaselineSamples
+		if ss, err := a.SameHourSnapshots(z.ZoneID, cur.From, cur.To, analyze.LongBaselineDays); err == nil {
 			var ms []analyze.Metrics
 			for _, s := range ss {
 				ms = append(ms, s.Metrics)
 			}
-			m := analyze.Median(ms)
-			long = &m
-			rp.LongBaselineSamples = len(ss)
+			c := analyze.CountSamples(ms)
+			cnt = &c
+			if len(ss) >= analyze.LongBaselineMinSamples {
+				m := analyze.Median(ms)
+				long = &m
+				rp.LongBaselineSamples = len(ss)
+			}
 		}
 		eval := func(th analyze.Thresholds, k analyze.Known) []string {
 			fs := analyze.Evaluate(cur.Metrics, prev.Metrics, th, k)
 			if long != nil {
-				fs = analyze.CrossCheck(fs, analyze.Evaluate(cur.Metrics, *long, th, k))
+				fs = analyze.CrossCheck(fs, analyze.Evaluate(cur.Metrics, analyze.Ripen(*long, th.BaselineMinSamples), th, k))
+			}
+			if cnt != nil { // the watch holds lines whose baseline is still accumulating
+				fs, _ = analyze.HoldImmature(fs, *cnt, th.BaselineMinSamples)
 			}
 			return findingKeys(fs)
 		}

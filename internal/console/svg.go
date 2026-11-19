@@ -206,7 +206,7 @@ func historyChart(h History, loc *time.Location, w, ht int, withDynamic bool) te
 		// Points sit at their hour's start; an alert's At is its window's
 		// end, so it is drawn on the hour it is about.
 		xi := e.At.Sub(h.From).Hours()
-		if e.Kind == "alert" || e.Kind == "recovered" {
+		if e.Kind == "alert" || e.Kind == "recovered" || e.Kind == "held" {
 			xi--
 		}
 		c.Ticks = append(c.Ticks, svgTick{X: xi, Class: "ev-" + e.Kind, Title: e.At.In(loc).Format("01-02 15:04") + " " + e.Label})

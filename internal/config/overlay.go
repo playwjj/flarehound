@@ -328,6 +328,9 @@ func CheckThresholds(t Thresholds) error {
 	if t.RecoveryCleanRound < 1 || t.RecoveryCleanRound > 24 {
 		return fmt.Errorf("thresholds.recovery_clean_rounds must be within 1..24")
 	}
+	if t.BaselineMinSamples < 0 || t.BaselineMinSamples > 28 {
+		return fmt.Errorf("thresholds.baseline_min_samples must be within 0..28 (days of the same hour)")
+	}
 	return nil
 }
 

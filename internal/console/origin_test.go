@@ -2,9 +2,11 @@ package console
 
 import (
 	"testing"
+	"time"
 
 	"github.com/playwjj/flarehound/internal/analyze"
 	"github.com/playwjj/flarehound/internal/config"
+	"github.com/playwjj/flarehound/internal/store"
 )
 
 func rowKeys(rs []MetricRow) map[string]MetricRow {
@@ -67,5 +69,69 @@ func TestUnreachableTileBookkeeping(t *testing.T) {
 	skBase := analyze.Metrics{Unreachable: 15, UnreachableBy: map[string]int64{"530": 15}, Origin: &analyze.OriginMetrics{Requests: 500}}
 	if rs := rowKeys(metricRows(cfg, zone, sk, skBase, true)); rs["m_unreachable"].Status != StatusWatch {
 		t.Fatalf("530 trickle: %+v", rs)
+	}
+}
+
+// A 52x baseline with too few measured hours behind it is "accumulating":
+// no red, no green. Once enough days measured the hour, starngage's tile
+// turns into the bookkeeping state on its own, and the latency tiles
+// follow the same rule.
+func TestUnreachableTileWarming(t *testing.T) {
+	cfg := &config.Config{Thresholds: config.DefaultThresholds()}
+	zone := config.Zone{Name: "starngage.com"}
+	cur := analyze.Metrics{Unreachable: 700, UnreachableBy: map[string]int64{"522": 330, "524": 370},
+		Measured: []string{analyze.MetricUnreachable}, Origin: &analyze.OriginMetrics{Requests: 17_000, TTFBP95ms: 800, TotalP95ms: 1100}}
+	old := analyze.Metrics{Origin: nil} // archived before v1.15: nothing measured
+	hour := func(n int64) analyze.Metrics {
+		return analyze.Metrics{Unreachable: n, UnreachableBy: map[string]int64{"522": n / 2, "524": n - n/2},
+			Measured: []string{analyze.MetricUnreachable}, Origin: &analyze.OriginMetrics{Requests: 17_000, TTFBP95ms: 790, TotalP95ms: 1080}}
+	}
+	young := analyze.Median([]analyze.Metrics{hour(680), old, old, old})
+	rs := rowKeys(metricRows(cfg, zone, cur, young, true))
+	if r := rs["m_unreachable"]; r.Status != StatusWarming || r.Samples != 1 || r.Need != 3 {
+		t.Fatalf("young baseline tile: %+v", r)
+	}
+	if r := rs["m_origin_ttfb"]; r.Status != StatusWarming {
+		t.Fatalf("young latency tile: %+v", r)
+	}
+	ripe := analyze.Median([]analyze.Metrics{hour(680), hour(660), hour(720), old})
+	if r := rowKeys(metricRows(cfg, zone, cur, ripe, true))["m_unreachable_book"]; r.Status != StatusBook {
+		t.Fatalf("mature baseline tile: %+v", rowKeys(metricRows(cfg, zone, cur, ripe, true)))
+	}
+	// A baseline not from the archive (no Samples) is judged as before.
+	if r := rowKeys(metricRows(cfg, zone, cur, hour(680), true))["m_unreachable_book"]; r.Status != StatusBook {
+		t.Fatalf("plain baseline tile: %+v", r)
+	}
+}
+
+// Alerts sent before baseline maturity existed, on a 52x line whose
+// baseline had no measured hours, are not anomalies: the overview does
+// not count them and the timeline shows them as such.
+func TestHeldAlertNotCounted(t *testing.T) {
+	cfg := testConfig(t)
+	st := openArchive(t, cfg)
+	zone := cfg.Cloudflare.Zones[0]
+	now := time.Now().UTC()
+	h := now.Truncate(time.Hour).Add(-time.Hour)
+	if err := st.PutSnapshot(zone.ZoneID, store.Hour, h, h.Add(time.Hour), store.Snapshot{Metrics: analyze.Metrics{Total: 7638, Unreachable: 26,
+		Measured: []string{analyze.MetricUnreachable}}}); err != nil {
+		t.Fatal(err)
+	}
+	_ = st.RecordAlert(zone.ZoneID, h.Add(time.Hour), "alert", "origin_unreachable", []analyze.Finding{{Rule: analyze.RuleUnreachable, Cur: 26, Pct: 999}})
+	ov, err := BuildOverview(st, cfg, zone, now)
+	if err != nil || ov.AlertsToday != 0 {
+		t.Fatalf("held alert counted: %d (%v)", ov.AlertsToday, err)
+	}
+	hist, err := BuildHistory(st, zone, h.Add(-time.Hour), h.Add(time.Hour), 3)
+	if err != nil || len(hist.Events) != 1 || hist.Events[0].Kind != "held" {
+		t.Fatalf("timeline: %+v (%v)", hist.Events, err)
+	}
+	// The same alert once the hour had three measured days behind it counts.
+	for k := 1; k <= 3; k++ {
+		d := h.Add(-time.Duration(k) * 24 * time.Hour)
+		_ = st.PutSnapshot(zone.ZoneID, store.Hour, d, d.Add(time.Hour), store.Snapshot{Metrics: analyze.Metrics{Total: 7000, Measured: []string{analyze.MetricUnreachable}}})
+	}
+	if ov, _ := BuildOverview(st, cfg, zone, now); ov.AlertsToday != 1 {
+		t.Fatalf("mature alert not counted: %d", ov.AlertsToday)
 	}
 }

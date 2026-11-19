@@ -56,6 +56,16 @@ On Worker zones the adaptive dataset files Cache API entries with edge statuses;
 
 Hours archived before v1.15 did not measure 52x; the long baseline skips them rather than reading them as zero.
 
+### New metrics: baseline maturity
+
+A line read against the archive's same-hour median is only as good as the measured hours behind it. When a metric is new (52x and origin latency since v1.15, the CPU P99 since v1.16), the archive holds weeks of hours that never measured it: the median rests on one or two hours, or on none, and any ordinary hour clears the line. So each such line counts the **measured** same-hour samples behind its baseline (the same hour on earlier days; a measured 0 counts, an hour that did not measure the metric does not):
+
+- Fewer than `thresholds.baseline_min_samples` (default 3): **immature**. `origin_unreachable` (plain and bookkeeping rule) and `origin_slow` do not fire, even when only yesterday's hour would decide; the watch logs the finding as held. The CPU check treats an immature P99 as not measured. The console tile reads *baseline accumulating (N/3 days of this hour measured)*, neutral; the first daily report after the metric started says so once; `doctor` lists the counts per zone.
+- From then on the line is judged by the rules above, with no manual step.
+- Alerts archived while their only lines were immature (sent by older versions) are not counted as anomalies in the console and are marked as such on the timeline.
+
+Comparisons of two live windows (yesterday's same hour, the daily report's two days) do not depend on the archive and are not gated — except that the gated lines above need a mature archive baseline before they fire at all. `0` turns the gate off.
+
 ### Worker CPU: more expensive, or a different mix?
 
 A median can rise without any call getting slower: when a flood of cheap calls recedes, the calls left are the heavier ones. Every CPU line therefore carries **P50, P99 and calls** and reads them:

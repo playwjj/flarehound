@@ -32,7 +32,8 @@
     "recovery_clean_rounds": 2,
     "origin_slow_up_pct": 100,
     "origin_slow_min_ms": 1000,
-    "unreachable_min": 10
+    "unreachable_min": 10,
+    "baseline_min_samples": 3
   },
   "path_rules": [
     { "name": "login", "path": "/login*", "up_pct": 100, "min_count": 20, "dynamic_only": false }

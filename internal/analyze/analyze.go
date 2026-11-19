@@ -69,6 +69,9 @@ type Thresholds struct {
 	OriginSlowUpPct    float64 // origin P95 rise vs baseline
 	OriginSlowMinMs    float64 // … and the current P95 at least this slow
 	UnreachableMin     int64   // edge 52x per window before it alerts
+	// BaselineMinSamples: measured same-hour samples an archive baseline
+	// needs before its lines may fire (baseline maturity).
+	BaselineMinSamples int
 }
 
 // PathRule is a path-level threshold override (SPEC 7.2).
@@ -125,6 +128,13 @@ type Metrics struct {
 	// Origin is the origin's answered requests and latency; nil when not
 	// measured (older archived hours, a plan without the quantiles).
 	Origin *OriginMetrics `json:"origin,omitempty"`
+	// Measured lists the tracked metrics this window measured
+	// (MetricUnreachable), so an archived hour tells "measured, and 0"
+	// from "not measured yet" (hours archived before the metric existed).
+	Measured []string `json:"measured,omitempty"`
+	// Samples is set on a baseline built by Median: the measured samples
+	// behind each tracked metric (baseline maturity). nil otherwise.
+	Samples *BaselineSamples `json:"-"`
 }
 
 // OriginMetrics is the origin's side of a window (answered requests only).

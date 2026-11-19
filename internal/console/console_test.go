@@ -260,7 +260,7 @@ func TestReadModel(t *testing.T) {
 	}
 
 	end := now.Truncate(time.Hour).Add(time.Hour)
-	h, err := BuildHistory(st, zone, end.Add(-48*time.Hour), end)
+	h, err := BuildHistory(st, zone, end.Add(-48*time.Hour), end, 3)
 	if err != nil {
 		t.Fatal(err)
 	}

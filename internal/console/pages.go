@@ -393,7 +393,7 @@ func (s *Server) buildView(ctx context.Context, view string, q url.Values) (stri
 			// Up to the end of the hour in progress, so a fresh block or
 			// alert is on the chart (its traffic point is simply not there yet).
 			to := s.Now().Truncate(time.Hour).Add(time.Hour)
-			if h, err := BuildHistory(s.Archive, z, to.Add(-48*time.Hour), to); err == nil {
+			if h, err := BuildHistory(s.Archive, z, to.Add(-48*time.Hour), to, s.eff().Thresholds.BaselineMinSamples); err == nil {
 				p.Chart = historyChart(h, s.Cfg.Location, 720, 200, false)
 			} else {
 				log.Printf("console: overview chart: %v", err)
@@ -435,7 +435,7 @@ func (s *Server) buildView(ctx context.Context, view string, q url.Values) (stri
 				end, endParam = t.Add(24*time.Hour), e
 			}
 		}
-		h, err := BuildHistory(s.Archive, z, end.Add(-span), end)
+		h, err := BuildHistory(s.Archive, z, end.Add(-span), end, s.eff().Thresholds.BaselineMinSamples)
 		if err != nil {
 			return "", page{}, err
 		}

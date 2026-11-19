@@ -37,7 +37,8 @@ func medianFloat(v []float64) float64 {
 }
 
 // Median builds a baseline whose every metric is the per-metric median
-// of the samples. Top lists are not medianed (new faces are judged
+// of the samples, with the measured samples behind each tracked metric
+// (Samples: baseline maturity). Top lists are not medianed (new faces are judged
 // against yesterday's Top 25 and the archive's face history instead).
 func Median(samples []Metrics) Metrics {
 	var m Metrics
@@ -55,7 +56,7 @@ func Median(samples []Metrics) Metrics {
 		o5 = append(o5, s.Origin5xx)
 		// Hours archived before v1.15 never measured 52x (nor the origin):
 		// they are unknown, not zero, and must not drag the median to 0.
-		if s.Unreachable > 0 || s.Origin != nil {
+		if MeasuredUnreachable(s) {
 			unreach = append(unreach, s.Unreachable)
 			unreachBy = append(unreachBy, s.UnreachableBy)
 		}
@@ -78,6 +79,8 @@ func Median(samples []Metrics) Metrics {
 			paths[k] = append(paths[k], v)
 		}
 	}
+	cnt := CountSamples(samples)
+	m.Samples = &cnt
 	m.Total, m.Dynamic, m.Origin5xx = medianInt(total), medianInt(dyn), medianInt(o5)
 	m.Unreachable = medianInt(unreach)
 	// Per-status medians, so the baseline's mix (522/524 or not) is known.

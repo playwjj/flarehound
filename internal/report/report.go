@@ -271,6 +271,19 @@ func (l lang) twoWindows(b *strings.Builder, cur, base analyze.Metrics, baseLabe
 	}
 }
 
+// metricName names a tracked metric (baseline maturity) for the reader.
+func (l lang) metricName(im analyze.Maturity) string {
+	switch im.Metric {
+	case analyze.MetricUnreachable:
+		return l.t("edge 52x (origin unreachable)", "边缘 52x（源站不可达）")
+	case analyze.MetricOrigin:
+		return l.t("origin latency", "源站延迟")
+	case analyze.MetricCPUP99:
+		return l.t("CPU P99 check of Worker ", "Worker CPU P99 辨伪 ") + im.Subject
+	}
+	return im.Metric
+}
+
 // unreachableCheck is the reading of the edge 52x (analyze.JudgeUnreachable,
 // the same judgement as the alert line and the console tile): a
 // bookkeeping background, or a departure from it and why. "" on a
@@ -714,6 +727,9 @@ type ArchiveInfo struct {
 	Hours, Days int64
 	Oldest      time.Time
 	LongSamples int
+	// Warming: lines whose archive baseline started accumulating in this
+	// window; they stay quiet until enough days measured the same hour.
+	Warming []analyze.Maturity
 }
 
 // DailyData is everything the daily report shows.
@@ -887,6 +903,16 @@ func Daily(language string, d DailyData) string {
 		}
 		fmt.Fprintf(&b, "\n"+l.t("Archive: %s hourly + %s daily snapshots since %s; %s\n", "归档：%s 个小时快照 + %s 个日快照，始于 %s；%s\n"),
 			n(a.Hours), n(a.Days), oldest, long)
+		if len(a.Warming) > 0 {
+			var ms []string
+			for _, im := range a.Warming {
+				ms = append(ms, l.metricName(im))
+			}
+			need := a.Warming[0].Need
+			fmt.Fprintf(&b, l.t("Baseline accumulating: %s — newly measured; these lines stay quiet until %d days of the same hour are measured (from about %s), then take over on their own.\n",
+				"基线积累中：%s——新近开始采集；同时段实测满 %d 天前这些线不报警（约 %s 起），之后自动按基线判别。\n"),
+				strings.Join(ms, l.t(", ", "、")), need, d.Window.To.Add(time.Duration(need)*24*time.Hour).In(locOr(d.Loc)).Format("01-02"))
+		}
 	}
 	if d.Calibration != nil {
 		fmt.Fprintf(&b, "\n%s\n", l.calibrationLine(*d.Calibration))

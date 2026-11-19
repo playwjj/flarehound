@@ -88,6 +88,10 @@ type Thresholds struct {
 	OriginSlowUpPct float64 `json:"origin_slow_up_pct"`
 	OriginSlowMinMs float64 `json:"origin_slow_min_ms"`
 	UnreachableMin  int64   `json:"unreachable_min"`
+	// Baseline maturity: a line read against the archive's same-hour
+	// median (52x, origin latency, the CPU P99 check) stays quiet until
+	// that many earlier days measured the same hour.
+	BaselineMinSamples int `json:"baseline_min_samples"`
 }
 
 // UnmarshalJSON starts from the defaults, so a thresholds object saved
@@ -123,6 +127,9 @@ func DefaultThresholds() Thresholds {
 		OriginSlowMinMs: 1000,
 		// Edge 52x: a healthy origin is always reachable.
 		UnreachableMin: 10,
+		// A new metric's baseline needs three measured days of the same
+		// hour before its lines may fire.
+		BaselineMinSamples: 3,
 	}
 }
 

@@ -173,6 +173,7 @@ func Thresholds(cfg *config.Config) analyze.Thresholds {
 		OriginSlowUpPct:    t.OriginSlowUpPct,
 		OriginSlowMinMs:    t.OriginSlowMinMs,
 		UnreachableMin:     t.UnreachableMin,
+		BaselineMinSamples: t.BaselineMinSamples,
 	}
 	for _, p := range cfg.PathRules {
 		up, mc := p.UpPct, p.MinCount
@@ -237,6 +238,7 @@ func (r *Runner) fetch(ctx context.Context, zone config.Zone, w schedule.Window,
 		return m, fmt.Errorf("origin unreachable: %w", err)
 	}
 	m.Unreachable, m.UnreachableBy = byStatus(un)
+	m.Measured = []string{analyze.MetricUnreachable} // a measured 0 is a baseline sample
 	// Origin latency is an addition, not a pillar: a plan or an API that
 	// does not answer it degrades the zone to "not measured", never fails
 	// the round.
@@ -581,9 +583,19 @@ func (r *Runner) Intraday(ctx context.Context, zone config.Zone) error {
 
 	th := Thresholds(cfg)
 	findings := analyze.Evaluate(cur, base, th, known(cfg))
-	long, longN := r.longBaseline(zone, w)
+	long, longN, samples := r.longBaseline(zone, w)
 	if long != nil {
 		findings = analyze.CrossCheck(findings, analyze.Evaluate(cur, *long, th, known(cfg)))
+	}
+	// Lines whose archive baseline is still accumulating (a metric added
+	// days ago) do not fire, whatever yesterday's single hour says.
+	if samples != nil {
+		var held []analyze.Finding
+		findings, held = analyze.HoldImmature(findings, *samples, th.BaselineMinSamples)
+		for _, f := range held {
+			log.Printf("zone %s: %s held: baseline accumulating (%d/%d measured same-hour samples)", zone.Name, f,
+				samples.Of(analyze.RuleMetric(f.Rule), f.Subject), th.BaselineMinSamples)
+		}
 	}
 	var attr analyze.Attribution
 	findings, attr.VerifiedBots, attr.Impostors = r.verifyBots(ctx, zone, w, findings)
@@ -827,6 +839,14 @@ func (r *Runner) Daily(ctx context.Context, zone config.Zone) error {
 			d.Archive = &report.ArchiveInfo{Hours: st.Hours, Days: st.Days, Oldest: st.Oldest}
 			if samples, err := r.Store.SameHour(z, w.To.Add(-time.Hour), w.To, analyze.LongBaselineDays); err == nil {
 				d.Archive.LongSamples = len(samples)
+				// Lines whose baseline just started accumulating: said once,
+				// in the first report after the metric began to be measured
+				// (no earlier day measured this hour yet), not every day.
+				for _, im := range analyze.ImmatureMetrics(cur, analyze.CountSamples(samples), th.BaselineMinSamples) {
+					if im.Samples == 0 {
+						d.Archive.Warming = append(d.Archive.Warming, im)
+					}
+				}
 			}
 		}
 	}
@@ -905,21 +925,24 @@ func IsAccessError(err error) bool { return errors.Is(err, cfapi.ErrNoAccess) }
 // ---- archive (SPEC 6 "本地数据归档") ----
 
 // longBaseline returns the median of the last 28 days' same-hour
-// snapshots once the archive has enough of them, else nil.
-func (r *Runner) longBaseline(zone config.Zone, w schedule.Window) (*analyze.Metrics, int) {
+// snapshots once the archive has enough of them, else nil, and — with
+// any archive at all, however young — the measured samples behind each
+// tracked metric (baseline maturity; nil without an archive).
+func (r *Runner) longBaseline(zone config.Zone, w schedule.Window) (*analyze.Metrics, int, *analyze.BaselineSamples) {
 	if r.Store == nil {
-		return nil, 0
+		return nil, 0, nil
 	}
 	samples, err := r.Store.SameHour(zone.ZoneID, w.From, w.To, analyze.LongBaselineDays)
 	if err != nil {
 		log.Printf("zone %s: long baseline: %v", zone.Name, err)
-		return nil, 0
+		return nil, 0, nil
 	}
+	cnt := analyze.CountSamples(samples)
 	if len(samples) < analyze.LongBaselineMinSamples {
-		return nil, len(samples)
+		return nil, len(samples), &cnt
 	}
-	m := analyze.Median(samples)
-	return &m, len(samples)
+	m := analyze.Ripen(analyze.Median(samples), r.Cfg.Thresholds.BaselineMinSamples)
+	return &m, len(samples), &cnt
 }
 
 // faceHistory looks up each new face in the archive, before this round

@@ -50,6 +50,7 @@ Detection lines; see [Detection](detection.md) for how each is applied.
 | `thresholds.origin_slow_up_pct` | number | `100` | Origin latency P95 (first byte, else full response) vs. baseline, % increase … |
 | `thresholds.origin_slow_min_ms` | number | `1000` | … and the current P95 at least this many ms (40 → 80 ms is not news). |
 | `thresholds.unreachable_min` | int | `10` | Edge 52x (origin unreachable) per window before it alerts. |
+| `thresholds.baseline_min_samples` | int | `3` | Measured days of the same hour a new metric's archive baseline needs before its lines (`origin_unreachable`, `origin_slow`, the CPU P99 check) may fire — see [baseline maturity](detection.md#new-metrics-baseline-maturity). `0` turns the gate off. |
 
 ## path_rules
 

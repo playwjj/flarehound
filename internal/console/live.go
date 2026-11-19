@@ -68,6 +68,18 @@ func blend(a, b analyze.Metrics, w float64) analyze.Metrics {
 			CPUP99ms: w*wa.CPUP99ms + (1-w)*wb.CPUP99ms})
 	}
 	m.Unreachable = mix(a.Unreachable, b.Unreachable)
+	// A blend is as mature as its younger half.
+	if a.Samples != nil && b.Samples != nil {
+		sa, sb := *a.Samples, *b.Samples
+		s := analyze.BaselineSamples{Hours: min(sa.Hours, sb.Hours), Unreachable: min(sa.Unreachable, sb.Unreachable), Origin: min(sa.Origin, sb.Origin)}
+		for k, v := range sa.CPUP99 {
+			if s.CPUP99 == nil {
+				s.CPUP99 = map[string]int{}
+			}
+			s.CPUP99[k] = min(v, sb.CPUP99[k])
+		}
+		m.Samples = &s
+	}
 	if len(a.UnreachableBy) > 0 || len(b.UnreachableBy) > 0 {
 		m.UnreachableBy = map[string]int64{}
 		for _, by := range []map[string]int64{a.UnreachableBy, b.UnreachableBy} {

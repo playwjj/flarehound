@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/playwjj/flarehound/internal/analyze"
 	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/check"
 	"github.com/playwjj/flarehound/internal/config"
@@ -262,6 +263,7 @@ func runDoctor(ctx context.Context, cfg *config.Config, cfgPath string, out io.W
 					span = fmt.Sprintf("since %s (%.0f days)", s.Oldest.In(cfg.Location).Format("2006-01-02"), now.Sub(s.Oldest).Hours()/24)
 				}
 				d.ok("archive %s: %d hourly + %d daily snapshots, %s; %d alerts recorded", z.Name, s.Hours, s.Days, span, s.Alerts)
+				doctorMaturity(d, st, cfg, z)
 			}
 			st.Close()
 		}
@@ -281,6 +283,45 @@ func runDoctor(ctx context.Context, cfg *config.Config, cfgPath string, out io.W
 	}
 	fmt.Fprintf(out, "\n%d problem(s) found.\n", d.problems)
 	return 1
+}
+
+// doctorMaturity shows, per zone, how many measured same-hour samples
+// stand behind each newer metric's baseline (the newest archived hour's
+// slot), and how long a line still accumulating has to go.
+func doctorMaturity(d *doctorOut, st *store.Store, cfg *config.Config, z config.Zone) {
+	w, ok, err := st.LatestHour(z.ZoneID)
+	if err != nil || !ok {
+		return
+	}
+	ss, err := st.SameHour(z.ZoneID, w.From, w.To, analyze.LongBaselineDays)
+	if err != nil {
+		d.bad("baseline %s: %v", z.Name, err)
+		return
+	}
+	min := cfg.Thresholds.BaselineMinSamples
+	ms := analyze.BaselineMaturity(w.Metrics, analyze.CountSamples(ss), min)
+	if len(ms) == 0 || min <= 0 {
+		return
+	}
+	var ripe, young []string
+	for _, m := range ms {
+		name := m.Metric
+		if m.Subject != "" {
+			name += "[" + m.Subject + "]"
+		}
+		if m.Ripe() {
+			ripe = append(ripe, fmt.Sprintf("%s %d/%d", name, m.Samples, m.Need))
+		} else {
+			young = append(young, fmt.Sprintf("%s %d/%d (~%d more day(s))", name, m.Samples, m.Need, m.Need-m.Samples))
+		}
+	}
+	slot := w.From.In(cfg.Location).Format("15:04")
+	if len(young) > 0 {
+		d.warn("baseline %s @%s: accumulating, these lines stay quiet: %s", z.Name, slot, strings.Join(young, ", "))
+	}
+	if len(ripe) > 0 {
+		d.ok("baseline %s @%s: mature: %s", z.Name, slot, strings.Join(ripe, ", "))
+	}
 }
 
 // heartbeatLimit is how old the watch heartbeat may get: two rounds plus

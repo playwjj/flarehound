@@ -41,6 +41,9 @@ const (
 	StatusAlert = "alert" // past the alert line
 	StatusNA    = "na"    // no baseline
 	StatusBook  = "book"  // edge 52x that are bookkeeping (analyze.JudgeUnreachable): neutral
+	// StatusWarming: the line's archive baseline is still accumulating
+	// (a metric added days ago): no verdict either way, never "needs attention".
+	StatusWarming = "warming"
 )
 
 // MetricRow is one line of the overview.
@@ -54,6 +57,9 @@ type MetricRow struct {
 	Unit     string  // "" or "ms"
 	Status   string
 	LineDesc string // the alert line, e.g. "+35%"
+	// Samples/Need: measured same-hour samples behind the baseline, and
+	// how many it needs (StatusWarming).
+	Samples, Need int
 }
 
 // Overview is the home page of one zone.
@@ -155,6 +161,8 @@ func originRows(th config.Thresholds, cur, base analyze.Metrics, has bool) []Met
 		// The same judgement as the alert line and the reports.
 		fire, c := analyze.UnreachableFires(cur, base, th.UnreachableMin)
 		switch {
+		case has && warming(&u, base, analyze.MetricUnreachable, th.BaselineMinSamples):
+			// Too few measured hours behind the baseline: no verdict.
 		case has && fire:
 			u.Status = StatusAlert
 		case has && c.Verdict == analyze.UnreachBook:
@@ -176,7 +184,9 @@ func originRows(th config.Thresholds, cur, base analyze.Metrics, has bool) []Met
 	line := plusPct(th.OriginSlowUpPct) + " & ≥" + strconv.FormatFloat(th.OriginSlowMinMs, 'f', -1, 64) + " ms"
 	lat := func(key string, c, b float64) MetricRow {
 		r := MetricRow{Key: key, Cur: c, Unit: "ms", HasBase: hasBase && b > 0, LineDesc: line, Status: StatusNA}
-		if r.HasBase {
+		if r.HasBase && warming(&r, base, analyze.MetricOrigin, th.BaselineMinSamples) {
+			r.Base, r.Pct = b, pct(c, b)
+		} else if r.HasBase {
 			r.Base, r.Pct = b, pct(c, b)
 			switch {
 			case r.Pct >= th.OriginSlowUpPct && c >= th.OriginSlowMinMs:
@@ -200,6 +210,48 @@ func originRows(th config.Thresholds, cur, base analyze.Metrics, has bool) []Met
 		ttfb.Subject = "TCP " + strconv.FormatFloat(co.TCPP95ms, 'f', 0, 64) + " · TLS " + strconv.FormatFloat(co.TLSP95ms, 'f', 0, 64) + " ms"
 	}
 	return append(rows, ttfb, lat("m_origin_total", co.TotalP95ms, bf))
+}
+
+// warming marks a row whose archive baseline is still accumulating for
+// metric (fewer than min measured same-hour samples): neutral, with the
+// count so far. A baseline that is not from the archive (Samples nil) is
+// never warming.
+func warming(r *MetricRow, base analyze.Metrics, metric string, min int) bool {
+	if base.Samples == nil || min <= 0 {
+		return false
+	}
+	n := base.Samples.Of(metric, r.Subject)
+	if n >= min {
+		return false
+	}
+	r.Status, r.Samples, r.Need = StatusWarming, n, min
+	return true
+}
+
+// heldAlert reports whether an archived alert rested only on lines whose
+// baseline was still accumulating when it was sent (alerts from before
+// baseline maturity existed — v1.16.1 and older): read today, the watch
+// would have held it, so it is not part of the anomaly history.
+func heldAlert(a Archive, zone config.Zone, x store.AlertRecord, min int) bool {
+	if min <= 0 || len(x.Findings) == 0 {
+		return false
+	}
+	for _, f := range x.Findings {
+		if analyze.RuleMetric(f.Rule) == "" {
+			return false
+		}
+	}
+	from := x.WindowTo.Add(-time.Hour)
+	ss, err := a.SameHourSnapshots(zone.ZoneID, from, x.WindowTo, analyze.LongBaselineDays)
+	if err != nil {
+		return false
+	}
+	ms := make([]analyze.Metrics, 0, len(ss))
+	for _, s := range ss {
+		ms = append(ms, s.Metrics)
+	}
+	_, held := analyze.HoldImmature(x.Findings, analyze.CountSamples(ms), min)
+	return len(held) == len(x.Findings)
 }
 
 // BuildOverview computes the overview from the newest archived hour.
@@ -226,7 +278,7 @@ func BuildOverview(a Archive, cfg *config.Config, zone config.Zone, now time.Tim
 	day := w.To.Add(-24 * time.Hour)
 	if as, err := a.AlertsDetailed(zone.ZoneID, day, w.To.Add(time.Second), 100); err == nil {
 		for _, x := range as {
-			if x.Decision != "recovered" {
+			if x.Decision != "recovered" && !heldAlert(a, zone, x, cfg.Thresholds.BaselineMinSamples) {
 				ov.AlertsToday++
 			}
 		}
@@ -543,7 +595,9 @@ func quantile(sorted []int64, q float64) float64 {
 
 // BuildHistory loads [from, to) hourly, with each hour's same-hour
 // baseline from the 28 days before it, and the timeline events.
-func BuildHistory(a Archive, zone config.Zone, from, to time.Time) (History, error) {
+// minSamples is thresholds.baseline_min_samples: alerts sent while their
+// baseline was still accumulating are shown as such (heldAlert).
+func BuildHistory(a Archive, zone config.Zone, from, to time.Time, minSamples int) (History, error) {
 	h := History{From: from, To: to}
 	series, err := a.HourSeries(zone.ZoneID, from.Add(-time.Duration(analyze.LongBaselineDays)*24*time.Hour), to)
 	if err != nil {
@@ -573,15 +627,18 @@ func BuildHistory(a Archive, zone config.Zone, from, to time.Time) (History, err
 
 	if as, err := a.AlertsDetailed(zone.ZoneID, from, to.Add(time.Hour), 500); err == nil {
 		for _, x := range as {
-			kind := "alert"
-			if x.Decision == "recovered" {
+			kind, label := "alert", x.Decision
+			switch {
+			case x.Decision == "recovered":
 				kind = "recovered"
+			case heldAlert(a, zone, x, minSamples):
+				kind = "held" // sent before the fix, on a baseline still accumulating: not an anomaly
 			}
 			var rules []string
 			for _, f := range x.Findings {
 				rules = append(rules, f.Key())
 			}
-			h.Events = append(h.Events, Event{At: x.WindowTo, Kind: kind, Label: x.Decision, Detail: strings.Join(rules, ", ")})
+			h.Events = append(h.Events, Event{At: x.WindowTo, Kind: kind, Label: label, Detail: strings.Join(rules, ", ")})
 		}
 	} else {
 		return h, err

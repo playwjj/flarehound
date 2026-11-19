@@ -150,3 +150,17 @@ func TestUnreachableAlertCarriesCheck(t *testing.T) {
 		}
 	}
 }
+
+func TestDailyBaselineAccumulating(t *testing.T) {
+	day := schedule.Window{From: w.From.Add(-23 * time.Hour), To: w.To}
+	d := DailyData{Zone: "z", Window: day, Loc: time.UTC, Archive: &ArchiveInfo{Hours: 600, Days: 25, LongSamples: 25,
+		Warming: []analyze.Maturity{{Metric: analyze.MetricUnreachable, Need: 3}}}}
+	msg := Daily("zh", d)
+	if want := "基线积累中：边缘 52x（源站不可达）——新近开始采集；同时段实测满 3 天前这些线不报警（约 " + day.To.Add(72*time.Hour).Format("01-02") + " 起）"; !strings.Contains(msg, want) {
+		t.Fatalf("missing %q in:\n%s", want, msg)
+	}
+	d.Archive.Warming = nil
+	if strings.Contains(Daily("zh", d), "基线积累中") {
+		t.Fatal("note repeated without a newly accumulating line")
+	}
+}

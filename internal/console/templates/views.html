@@ -7,8 +7,8 @@
 <div class="tile st-{{.Status}}">
   <div class="tl">{{t .Key}}{{if .Subject}} · <span class="mono">{{.Subject}}</span>{{end}}</div>
   <div class="tv">{{numf .Cur .Unit}}</div>
-  <div class="td">{{if .HasBase}}<span class="chg">{{pct .Pct}}</span> <span class="muted">{{t "baseline"}} {{numf .Base .Unit}}</span>{{else}}<span class="muted">{{t "st_na"}}</span>{{end}}</div>
-  <div class="ts"><span class="dot"></span>{{t (print "st_" .Status)}} <span class="muted">· {{t "alert_line"}} {{.LineDesc}}</span></div>
+  <div class="td">{{if eq .Status "warming"}}<span class="muted">{{t "baseline"}} {{numf .Base .Unit}}</span>{{else if .HasBase}}<span class="chg">{{pct .Pct}}</span> <span class="muted">{{t "baseline"}} {{numf .Base .Unit}}</span>{{else}}<span class="muted">{{t "st_na"}}</span>{{end}}</div>
+  <div class="ts"><span class="dot"></span>{{if eq .Status "warming"}}{{tf "st_warming_n" .Samples .Need}}{{else}}{{t (print "st_" .Status)}}{{end}} <span class="muted">· {{t "alert_line"}} {{.LineDesc}}</span></div>
 </div>
 {{end}}
 </section>{{end}}
