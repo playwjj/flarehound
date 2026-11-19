@@ -39,3 +39,33 @@ func TestOriginRowsFoldAndAlert(t *testing.T) {
 		t.Fatalf("no baseline latency must read n/a: %+v", r)
 	}
 }
+
+// starngage, 2026-11-19 13:37: 83 edge 52x in the live hour, all 522/524,
+// against a ~460/h background — the tile read red. It is bookkeeping.
+func TestUnreachableTileBookkeeping(t *testing.T) {
+	cfg := &config.Config{Thresholds: config.DefaultThresholds()}
+	zone := config.Zone{Name: "starngage.com"}
+	base := analyze.Metrics{Origin5xx: 3, Unreachable: 460, UnreachableBy: map[string]int64{"522": 220, "524": 240},
+		Origin: &analyze.OriginMetrics{Requests: 17_000, TTFBP95ms: 800, TotalP95ms: 1100}}
+	cur := analyze.Metrics{Origin5xx: 2, Unreachable: 83, UnreachableBy: map[string]int64{"522": 40, "524": 43},
+		Origin: &analyze.OriginMetrics{Requests: 3_000, TTFBP95ms: 818, TotalP95ms: 1145}}
+	// cur is a partial (live) hour: compare like the live view does, with
+	// origin requests in proportion.
+	cur.Origin.Requests = 16_000
+	r := rowKeys(metricRows(cfg, zone, cur, base, true))["m_unreachable_book"]
+	if r.Status != StatusBook || r.Cur != 83 {
+		t.Fatalf("bookkeeping tile: %+v", r)
+	}
+	// A real outage on the same zone: 521 appears, the origin stops answering.
+	down := analyze.Metrics{Unreachable: 1_900, UnreachableBy: map[string]int64{"522": 300, "524": 200, "521": 1_400},
+		Origin: &analyze.OriginMetrics{Requests: 4_000, TTFBP95ms: 900, TotalP95ms: 1200}}
+	if r := rowKeys(metricRows(cfg, zone, down, base, true))["m_unreachable"]; r.Status != StatusAlert {
+		t.Fatalf("outage tile: %+v", r)
+	}
+	// skoolopedia: 530-led trickle keeps the plain reading (not bookkeeping).
+	sk := analyze.Metrics{Unreachable: 18, UnreachableBy: map[string]int64{"530": 18}, Origin: &analyze.OriginMetrics{Requests: 500}}
+	skBase := analyze.Metrics{Unreachable: 15, UnreachableBy: map[string]int64{"530": 15}, Origin: &analyze.OriginMetrics{Requests: 500}}
+	if rs := rowKeys(metricRows(cfg, zone, sk, skBase, true)); rs["m_unreachable"].Status != StatusWatch {
+		t.Fatalf("530 trickle: %+v", rs)
+	}
+}

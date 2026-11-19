@@ -68,6 +68,14 @@ func blend(a, b analyze.Metrics, w float64) analyze.Metrics {
 			CPUP99ms: w*wa.CPUP99ms + (1-w)*wb.CPUP99ms})
 	}
 	m.Unreachable = mix(a.Unreachable, b.Unreachable)
+	if len(a.UnreachableBy) > 0 || len(b.UnreachableBy) > 0 {
+		m.UnreachableBy = map[string]int64{}
+		for _, by := range []map[string]int64{a.UnreachableBy, b.UnreachableBy} {
+			for k := range by {
+				m.UnreachableBy[k] = mix(a.UnreachableBy[k], b.UnreachableBy[k])
+			}
+		}
+	}
 	// Latency quantiles do not add up; a weighted mean of the two hours'
 	// P95s is the approximation a live, unsettled view can afford.
 	switch ao, bo := a.Origin, b.Origin; {

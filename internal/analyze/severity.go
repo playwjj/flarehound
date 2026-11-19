@@ -94,23 +94,90 @@ func JudgeCPU(cur, base WorkerMetrics) CPUShift {
 	return s
 }
 
-// UnreachableArtifact reports a 52x count that is bookkeeping rather than
-// an origin outage: present in both windows and not rising (cur at most
-// twice the baseline — a persistent background, not an incident), mostly
-// 522/524, while the origin keeps answering (its answered requests held,
-// or — unmeasured — its 5xx did not rise). Worker zones show this: edge
-// entries for subrequests and cached responses are filed as 52x while
-// the site is fine. The alert line is unaffected (it needs a doubling);
-// this only keeps the bare number from misleading a reader.
-func UnreachableArtifact(cur, base Metrics) bool {
-	if cur.Unreachable <= 0 || base.Unreachable <= 0 || cur.Unreachable > 2*base.Unreachable {
-		return false
+// ---- edge 52x: origin down, or bookkeeping? ----
+//
+// The origin_unreachable line assumes a normally-zero baseline: a healthy
+// origin is always reachable. On Worker zones that never holds — Cache
+// API entries are filed in the adaptive dataset with edge statuses, and
+// an edge timeout on such an entry reads 522/524 — so hundreds of 52x an
+// hour are background, while the site is fine. JudgeUnreachable is the
+// one place that tells them apart; the alert evaluation, the console
+// tile and the reports all use it, so they cannot disagree.
+
+// Unreachable verdicts.
+const (
+	UnreachPlain    = ""            // normally-zero baseline: the plain line (≥ min and ≥ 2× baseline) decides
+	UnreachBook     = "bookkeeping" // a steady 522/524 background, the origin answering: not an outage
+	UnreachIncident = "incident"    // a departure from a bookkeeping background
+)
+
+const (
+	bookShareMin     = 0.9 // 522+524 share of the 52x for a bookkeeping background
+	bookJump         = 3.0 // × the background: a jump in volume
+	bookMixShare     = 0.1 // other 52x statuses' share that counts as a change of mix…
+	originCollapseAt = 0.5 // origin-answered requests below this × baseline: collapsed
+)
+
+// UnreachableCheck is the reading of a window's edge 52x against its baseline.
+type UnreachableCheck struct {
+	Verdict     string
+	BookShare   float64 // 522+524 share of the current 52x
+	BaseShare   float64 // the same in the baseline
+	Jump        float64 // current ÷ baseline (0 when the baseline is 0)
+	JumpHit     bool    // ≥ 3× the background, by at least the line's minimum
+	Others      int64   // current 52x that are not 522/524
+	MixHit      bool    // those rose to a share of their own
+	Collapse    float64 // change of origin-answered requests, % (0 when unmeasured)
+	CollapseHit bool    // the origin stopped answering
+}
+
+func bookCount(m Metrics) int64 { return m.UnreachableBy["522"] + m.UnreachableBy["524"] }
+
+func bookShare(m Metrics) float64 {
+	if m.Unreachable <= 0 {
+		return 0
 	}
-	if float64(cur.UnreachableBy["522"]+cur.UnreachableBy["524"]) < 0.8*float64(cur.Unreachable) {
-		return false
+	return float64(bookCount(m)) / float64(m.Unreachable)
+}
+
+// JudgeUnreachable reads a window's edge 52x. min is the line's floor
+// (thresholds.unreachable_min): a jump must add at least that much, and
+// other statuses must reach it, to count.
+func JudgeUnreachable(cur, base Metrics, min int64) UnreachableCheck {
+	c := UnreachableCheck{BookShare: bookShare(cur), BaseShare: bookShare(base), Others: cur.Unreachable - bookCount(cur)}
+	if base.Unreachable > 0 {
+		c.Jump = float64(cur.Unreachable) / float64(base.Unreachable)
 	}
-	if co, bo := cur.Origin, base.Origin; co != nil && bo != nil && bo.Requests > 0 {
-		return float64(co.Requests) >= 0.8*float64(bo.Requests)
+	if co, bo := cur.Origin, base.Origin; co != nil && bo != nil && bo.Requests >= OriginMinRequests {
+		c.Collapse = PctChange(float64(co.Requests), float64(bo.Requests))
+		c.CollapseHit = float64(co.Requests) < originCollapseAt*float64(bo.Requests)
 	}
-	return cur.Origin5xx <= 2*base.Origin5xx
+	// Only a baseline that is itself a 522/524 background makes 52x
+	// bookkeeping; anything else keeps the normally-zero reading.
+	if base.Unreachable <= 0 || c.BaseShare < bookShareMin || cur.Unreachable <= 0 {
+		return c
+	}
+	c.JumpHit = c.Jump >= bookJump && cur.Unreachable-base.Unreachable >= min
+	baseOthers := base.Unreachable - bookCount(base)
+	c.MixHit = c.Others >= min && 1-c.BookShare >= bookMixShare && c.Others >= 2*baseOthers
+	if c.JumpHit || c.MixHit || c.CollapseHit {
+		c.Verdict = UnreachIncident
+	} else {
+		c.Verdict = UnreachBook
+	}
+	return c
+}
+
+// UnreachableFires is the origin_unreachable line: a departure from a
+// bookkeeping background, or — on a normally-zero baseline — at least min
+// 52x and at least twice the baseline.
+func UnreachableFires(cur, base Metrics, min int64) (bool, UnreachableCheck) {
+	c := JudgeUnreachable(cur, base, min)
+	switch c.Verdict {
+	case UnreachIncident:
+		return true, c
+	case UnreachBook:
+		return false, c
+	}
+	return cur.Unreachable > 0 && cur.Unreachable >= min && float64(cur.Unreachable) >= unreachableMultiple*float64(base.Unreachable), c
 }

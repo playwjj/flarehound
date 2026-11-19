@@ -34,7 +34,7 @@ Suggestions (read-only — FlareHound never applies them; do it in the Cloudflar
 The parts, in order:
 
 1. **Headline** — which lines were crossed and by how much (up to four; collapse, 5xx, expensive, total and new faces first).
-2. **Two-window comparison** — total, Worker invocations and CPU P50 / P99, dynamic, origin 5xx (with its share of origin answers and the 502/503/504 split), origin unreachable (52x, when any; a steady 522/524 background in both windows with the origin answering is footnoted as edge bookkeeping), origin latency P95 (first byte / full response); plus the long baseline when it is active.
+2. **Two-window comparison** — total, Worker invocations and CPU P50 / P99, dynamic, origin 5xx (with its share of origin answers and the 502/503/504 split), origin unreachable (52x, when any, with its status split and — against a 522/524 background — a one-line judgement: bookkeeping, or a departure and why), origin latency P95 (first byte / full response); plus the long baseline when it is active.
 3. **Attribution** — collected only when a message is going out (quiet rounds cost no extra queries). A failed attribution query never blocks the alert.
 4. **Hypotheses** — each with confidence and a falsifier. With no supported hypothesis the message says it reports numbers only.
 5. **Block candidates** — see below.

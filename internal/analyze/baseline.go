@@ -43,6 +43,7 @@ func Median(samples []Metrics) Metrics {
 	var m Metrics
 	var total, dyn, o5, unreach, oreq []int64
 	var ttfb, otot, tcp, tls []float64
+	var unreachBy []map[string]int64
 	calls := map[string][]int64{}
 	cpu := map[string][]float64{}
 	cpu99 := map[string][]float64{}
@@ -52,7 +53,12 @@ func Median(samples []Metrics) Metrics {
 		total = append(total, s.Total)
 		dyn = append(dyn, s.Dynamic)
 		o5 = append(o5, s.Origin5xx)
-		unreach = append(unreach, s.Unreachable)
+		// Hours archived before v1.15 never measured 52x (nor the origin):
+		// they are unknown, not zero, and must not drag the median to 0.
+		if s.Unreachable > 0 || s.Origin != nil {
+			unreach = append(unreach, s.Unreachable)
+			unreachBy = append(unreachBy, s.UnreachableBy)
+		}
 		if o := s.Origin; o != nil && o.Requests > 0 {
 			oreq = append(oreq, o.Requests)
 			ttfb, otot = append(ttfb, o.TTFBP95ms), append(otot, o.TotalP95ms)
@@ -74,6 +80,25 @@ func Median(samples []Metrics) Metrics {
 	}
 	m.Total, m.Dynamic, m.Origin5xx = medianInt(total), medianInt(dyn), medianInt(o5)
 	m.Unreachable = medianInt(unreach)
+	// Per-status medians, so the baseline's mix (522/524 or not) is known.
+	keys := map[string]bool{}
+	for _, by := range unreachBy {
+		for k := range by {
+			keys[k] = true
+		}
+	}
+	for k := range keys {
+		vs := make([]int64, 0, len(unreachBy))
+		for _, by := range unreachBy {
+			vs = append(vs, by[k])
+		}
+		if v := medianInt(vs); v > 0 {
+			if m.UnreachableBy == nil {
+				m.UnreachableBy = map[string]int64{}
+			}
+			m.UnreachableBy[k] = v
+		}
+	}
 	// Only hours that measured the origin count (older archived hours
 	// predate the measurement).
 	if len(oreq) > 0 {

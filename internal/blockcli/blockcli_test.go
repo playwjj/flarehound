@@ -193,7 +193,7 @@ func TestListShowsAttemptsAndDrift(t *testing.T) {
 	}
 	s := out.String()
 	for _, want := range []string{"AS24940", "challenge", "30", "flood", "MISSING in Cloudflare", "attempts cover only 3 day(s)",
-		"LIVE 15m", "4 (last 09:07)"} {
+		"LIVE 1h", "4 (last 09:07), data to 09:07"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("list lacks %q:\n%s", want, s)
 		}
@@ -222,5 +222,23 @@ func TestApproxAttempts(t *testing.T) {
 	}
 	if _, ok, _ := e.ApproxAttempts(target(t, "asn", "24940"), h.Add(-24*time.Hour), h); ok {
 		t.Fatal("the IP board cannot see ASNs")
+	}
+}
+
+// Firewall events land 30–60 minutes late: an empty hour must not read
+// as a bare 0, and a block that stopped must read differently.
+func TestLiveText(t *testing.T) {
+	loc := time.UTC
+	n := time.Date(2026, 11, 19, 13, 31, 0, 0, loc)
+	knocking := block.Live{Count: 0, Last: time.Date(2026, 11, 19, 12, 58, 0, 0, loc), Frontier: time.Date(2026, 11, 19, 12, 59, 0, 0, loc)}
+	if got := LiveText(knocking, n, loc); got != "none landed yet; last 12:58 (33m0s ago), data to 12:59" {
+		t.Fatal(got)
+	}
+	stopped := block.Live{Frontier: time.Date(2026, 11, 19, 12, 59, 0, 0, loc)}
+	if got := LiveText(stopped, n, loc); got != "none in 3h0m0s, data to 12:59" {
+		t.Fatal(got)
+	}
+	if got := LiveText(block.Live{Count: 493, Last: time.Date(2026, 11, 19, 13, 2, 0, 0, loc)}, n, loc); got != "493 (last 13:02)" {
+		t.Fatal(got)
 	}
 }

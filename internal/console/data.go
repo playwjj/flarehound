@@ -40,6 +40,7 @@ const (
 	StatusWatch = "watch" // past half of the alert line
 	StatusAlert = "alert" // past the alert line
 	StatusNA    = "na"    // no baseline
+	StatusBook  = "book"  // edge 52x that are bookkeeping (analyze.JudgeUnreachable): neutral
 )
 
 // MetricRow is one line of the overview.
@@ -151,13 +152,16 @@ func originRows(th config.Thresholds, cur, base analyze.Metrics, has bool) []Met
 		if has {
 			u.Pct = pct(u.Cur, u.Base)
 		}
+		// The same judgement as the alert line and the reports.
+		fire, c := analyze.UnreachableFires(cur, base, th.UnreachableMin)
 		switch {
-		case cur.Unreachable > 0 && cur.Unreachable >= th.UnreachableMin && u.Cur >= 2*u.Base:
+		case has && fire:
 			u.Status = StatusAlert
-		case has && analyze.UnreachableArtifact(cur, base):
+		case has && c.Verdict == analyze.UnreachBook:
 			// A steady 522/524 background with the origin answering:
-			// bookkeeping (Worker zones), labelled as such, not "watch".
-			u.Status, u.Key = StatusOK, "m_unreachable_book"
+			// bookkeeping (Worker zones) — neutral, never "needs attention".
+			u.Status, u.Key = StatusBook, "m_unreachable_book"
+			u.LineDesc = "×3"
 		case cur.Unreachable > 0:
 			u.Status = StatusWatch
 		default:

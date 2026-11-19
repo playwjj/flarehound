@@ -317,36 +317,79 @@ func TestMedianP99(t *testing.T) {
 	}
 }
 
-// starngage, v1.15 field data: 10,377 edge 52x a day (522 ×7,007, 524
-// ×3,341) while real origin 5xx were 213 and the site was fine.
-func TestUnreachableArtifact(t *testing.T) {
-	base := Metrics{Origin5xx: 220, Unreachable: 9_800, UnreachableBy: map[string]int64{"522": 6_600, "524": 3_100, "502": 100},
-		Origin: &OriginMetrics{Requests: 400_000}}
-	cur := Metrics{Origin5xx: 213, Unreachable: 10_377, UnreachableBy: map[string]int64{"522": 7_007, "524": 3_341, "520": 29},
-		Origin: &OriginMetrics{Requests: 410_000}}
-	if !UnreachableArtifact(cur, base) {
-		t.Fatal("steady 522/524 background with a healthy origin is bookkeeping")
+// starngage, v1.15/v1.16 field data: ~10,000 edge 52x a day, 522/524
+// only, while real origin 5xx were 213 and the site was fine; skoolopedia
+// (Free) has a thin 530-led trickle that must keep the plain reading.
+func TestJudgeUnreachable(t *testing.T) {
+	const min = 10
+	bg := func(n522, n524, other int64, origin int64) Metrics {
+		m := Metrics{Unreachable: n522 + n524 + other, UnreachableBy: map[string]int64{}, Origin: &OriginMetrics{Requests: origin}}
+		for k, v := range map[string]int64{"522": n522, "524": n524, "521": other} {
+			if v > 0 {
+				m.UnreachableBy[k] = v
+			}
+		}
+		return m
 	}
-	// The origin stops answering: not bookkeeping.
-	down := cur
-	down.Origin = &OriginMetrics{Requests: 50_000}
-	if UnreachableArtifact(down, base) {
-		t.Fatal("origin answered requests collapsed")
+	base := bg(220, 240, 0, 17_000)
+
+	// Steady state (the 13:37 tile: 83 in the hour against a ~460 background).
+	for _, cur := range []Metrics{bg(40, 43, 0, 16_000), bg(222, 240, 0, 17_500), bg(500, 420, 0, 16_000)} {
+		fire, c := UnreachableFires(cur, base, min)
+		if fire || c.Verdict != UnreachBook {
+			t.Fatalf("background read as %+v (fire %v) for %+v", c, fire, cur.UnreachableBy)
+		}
 	}
-	// A doubling is an incident (and the alert line's business).
-	spike := cur
-	spike.Unreachable = 25_000
-	if UnreachableArtifact(spike, base) {
-		t.Fatal("spike")
+	// Volume jump ≥ 3×.
+	if fire, c := UnreachableFires(bg(900, 600, 0, 16_000), base, min); !fire || c.Verdict != UnreachIncident || !c.JumpHit {
+		t.Fatalf("jump: %+v", c)
 	}
-	// Normally-zero baseline (a VPS origin): never a footnote.
-	if UnreachableArtifact(cur, Metrics{Origin: base.Origin}) {
-		t.Fatal("zero baseline")
+	// Mix change: 521 (connection refused) appears.
+	if fire, c := UnreachableFires(bg(220, 240, 120, 16_000), base, min); !fire || !c.MixHit || c.Others != 120 {
+		t.Fatalf("mix: %+v", c)
 	}
-	// Mostly 502-like statuses: not this pattern.
-	mixed := cur
-	mixed.UnreachableBy = map[string]int64{"521": 9_000, "522": 1_377}
-	if UnreachableArtifact(mixed, base) {
-		t.Fatal("521 is a refused connection, not bookkeeping")
+	// Origin stops answering, even with the background flat.
+	if fire, c := UnreachableFires(bg(220, 240, 0, 3_000), base, min); !fire || !c.CollapseHit {
+		t.Fatalf("collapse: %+v", c)
+	}
+	// skoolopedia: 530-led trickle — never bookkeeping, the plain line rules.
+	sk := Metrics{Unreachable: 18, UnreachableBy: map[string]int64{"530": 16, "522": 2}}
+	skBase := Metrics{Unreachable: 15, UnreachableBy: map[string]int64{"530": 14, "522": 1}}
+	if _, c := UnreachableFires(sk, skBase, min); c.Verdict != UnreachPlain {
+		t.Fatalf("530 trickle judged %+v", c)
+	}
+	if fire, _ := UnreachableFires(Metrics{Unreachable: 40, UnreachableBy: map[string]int64{"530": 40}}, skBase, min); !fire {
+		t.Fatal("plain line: 40 ≥ 10 and ≥ 2× 15 must fire")
+	}
+	// A normally-zero VPS origin: 522 from zero is an outage.
+	if fire, c := UnreachableFires(bg(30, 0, 0, 0), Metrics{Origin: &OriginMetrics{Requests: 5_000}}, min); !fire || c.Verdict != UnreachPlain {
+		t.Fatalf("VPS outage: %+v", c)
+	}
+	// Evaluate uses the same judgement.
+	th := Thresholds{UnreachableMin: min, CollapseDownPct: 90}
+	if fs := Evaluate(bg(222, 240, 0, 17_500), base, th, Known{}); has(fs, RuleUnreachable) {
+		t.Fatalf("evaluate fired on the background: %v", fs)
+	}
+	if fs := Evaluate(bg(900, 600, 0, 16_000), base, th, Known{}); !has(fs, RuleUnreachable) {
+		t.Fatal("evaluate missed the jump")
+	}
+}
+
+// Hours archived before v1.15 did not measure 52x: the median must not
+// read them as zero (the tile showed "baseline 0" for that reason).
+func TestMedianSkipsUnmeasured52x(t *testing.T) {
+	old := Metrics{Total: 1000} // pre-v1.15: no Unreachable, no Origin
+	measured := func(n522, n524 int64) Metrics {
+		return Metrics{Total: 1000, Unreachable: n522 + n524, UnreachableBy: map[string]int64{"522": n522, "524": n524},
+			Origin: &OriginMetrics{Requests: 17_000}}
+	}
+	m := Median([]Metrics{old, old, old, old, measured(200, 240), measured(240, 260), measured(220, 230)})
+	if m.Unreachable != 450 || m.UnreachableBy["522"] != 220 || m.UnreachableBy["524"] != 240 {
+		t.Fatalf("%d %v", m.Unreachable, m.UnreachableBy)
+	}
+	// A measured hour with no 52x is a real zero.
+	z := Median([]Metrics{{Origin: &OriginMetrics{Requests: 1}}, {Origin: &OriginMetrics{Requests: 1}}, measured(10, 0)})
+	if z.Unreachable != 0 {
+		t.Fatalf("%d", z.Unreachable)
 	}
 }

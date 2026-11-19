@@ -256,7 +256,7 @@ func Evaluate(cur, base Metrics, th Thresholds, known Known) []Finding {
 			Pct: PctChange(float64(cur.Origin5xx), float64(base.Origin5xx))})
 	}
 	add(downRule(RuleCollapseTotal, "", float64(cur.Total), float64(base.Total), th.CollapseDownPct, th.MinCount))
-	if cur.Unreachable > 0 && cur.Unreachable >= th.UnreachableMin && float64(cur.Unreachable) >= unreachableMultiple*float64(base.Unreachable) {
+	if fire, _ := UnreachableFires(cur, base, th.UnreachableMin); fire {
 		out = append(out, Finding{Rule: RuleUnreachable, Cur: float64(cur.Unreachable), Base: float64(base.Unreachable),
 			Pct: PctChange(float64(cur.Unreachable), float64(base.Unreachable))})
 	}

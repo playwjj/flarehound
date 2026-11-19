@@ -82,14 +82,23 @@ const (
 	LiveEdge     = "edge"     // the target's requests stopped at the edge (any rule): plans without firewall events
 )
 
-// LiveWindow is how far back the live check looks.
-const LiveWindow = 15 * time.Minute
+// LiveWindow is the live check's count window; LiveLookback how far it
+// looks for the last attempt. Firewall events reach the dataset 30–60
+// minutes late on busy zones, so a 15-minute window read a structural 0
+// exactly when "did the block take?" mattered: the hour aligns with the
+// archived attempts, and the look-back finds the last attempt even when
+// the hour is still empty.
+const (
+	LiveWindow   = time.Hour
+	LiveLookback = 3 * time.Hour
+)
 
-// Live is "is this block catching anything right now": the attempts of
-// the last minutes, read live (not the archive), and the last one seen.
+// Live is "is this block catching anything right now", read live (not
+// the archive).
 type Live struct {
-	Count    int64
-	Last     time.Time // zero: nothing in the window
+	Count    int64     // attempts in [To-LiveWindow, To)
+	Last     time.Time // the target's latest attempt in the look-back (zero: none)
+	Frontier time.Time // firewall source: the newest event of the rule, any target — how far the data reaches
 	From, To time.Time
 	Source   string
 }
@@ -115,20 +124,27 @@ func AnalyticsFilter(t Target) (cfapi.Filter, bool) {
 	return f, true
 }
 
-// LiveCheck counts a block's attempts in [to-LiveWindow, to). With
-// firewall events (paid plans) it reads the block's own rule; without
-// them it counts the target's requests the edge stopped (403, never sent
-// to the origin) — any rule's, which after a block is mostly this one.
-// ok is false when the target cannot be selected that way.
+// LiveCheck reads a block's recent attempts. With firewall events (paid
+// plans) it reads the block's own rule and also reports how far that
+// data reaches; without them it counts the target's requests the edge
+// stopped (403, never sent to the origin) — any rule's, which after a
+// block is mostly this one. ok is false when the target cannot be
+// selected that way.
 func LiveCheck(ctx context.Context, api MinutesAPI, zoneID, ruleID string, t Target, firewall bool, to time.Time) (Live, bool, error) {
 	l := Live{From: to.Add(-LiveWindow), To: to}
+	from := to.Add(-LiveLookback)
 	var rows []cfapi.MinuteCount
 	var err error
 	if firewall {
 		l.Source = LiveFirewall
-		rows, err = api.Minutes(ctx, zoneID, true, l.From, l.To, dimFor(t.Type), cfapi.Filter{FirewallRuleID: ruleID}, 1000)
+		rows, err = api.Minutes(ctx, zoneID, true, from, to, dimFor(t.Type), cfapi.Filter{FirewallRuleID: ruleID}, 5000)
 		if err != nil {
 			return l, true, err
+		}
+		for _, m := range rows {
+			if m.At.After(l.Frontier) {
+				l.Frontier = m.At
+			}
 		}
 		rows = slices.DeleteFunc(rows, func(m cfapi.MinuteCount) bool { return !Matches(t, m.Face) })
 	} else {
@@ -139,12 +155,14 @@ func LiveCheck(ctx context.Context, api MinutesAPI, zoneID, ruleID string, t Tar
 		}
 		eb := cfapi.EdgeBlocked()
 		f.EdgeStatus, f.OriginStatusTo = eb.EdgeStatus, eb.OriginStatusTo
-		if rows, err = api.Minutes(ctx, zoneID, false, l.From, l.To, "", f, 100); err != nil {
+		if rows, err = api.Minutes(ctx, zoneID, false, from, to, "", f, 500); err != nil {
 			return l, true, err
 		}
 	}
 	for _, m := range rows {
-		l.Count += m.Count
+		if !m.At.Before(l.From) {
+			l.Count += m.Count
+		}
 		if m.At.After(l.Last) {
 			l.Last = m.At
 		}

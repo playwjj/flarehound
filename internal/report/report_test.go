@@ -128,11 +128,25 @@ func TestUnreachableFootnote(t *testing.T) {
 	base := analyze.Metrics{Origin5xx: 220, Unreachable: 9_800, UnreachableBy: map[string]int64{"522": 6_600, "524": 3_200}, Origin: &analyze.OriginMetrics{Requests: 400_000}}
 	cur := analyze.Metrics{Origin5xx: 213, Unreachable: 10_377, UnreachableBy: map[string]int64{"522": 7_007, "524": 3_341, "520": 29}, Origin: &analyze.OriginMetrics{Requests: 410_000}}
 	msg := Daily("zh", DailyData{Zone: "z", Window: w, Cur: cur, Base: base})
-	if !strings.Contains(msg, "主要为边缘记账条目，非源站故障") {
+	if !strings.Contains(msg, "判别：记账底量，非源站故障——522/524 占 99.7%，与基线同量级（×1.1），源站照常回源") {
 		t.Fatalf("got:\n%s", msg)
 	}
 	cur.Origin = &analyze.OriginMetrics{Requests: 10_000}
-	if msg := Daily("zh", DailyData{Zone: "z", Window: w, Cur: cur, Base: base}); strings.Contains(msg, "记账条目") {
+	if msg := Daily("zh", DailyData{Zone: "z", Window: w, Cur: cur, Base: base}); strings.Contains(msg, "判别：记账底量") || !strings.Contains(msg, "源站回源量 -97.5%") {
 		t.Fatalf("no footnote when the origin stopped answering:\n%s", msg)
+	}
+}
+
+// An origin_unreachable alert against a bookkeeping background says what
+// changed, with the status split.
+func TestUnreachableAlertCarriesCheck(t *testing.T) {
+	base := analyze.Metrics{Unreachable: 460, UnreachableBy: map[string]int64{"522": 220, "524": 240}, Origin: &analyze.OriginMetrics{Requests: 17_000}}
+	cur := analyze.Metrics{Unreachable: 1_900, UnreachableBy: map[string]int64{"522": 300, "524": 200, "521": 1_400}, Origin: &analyze.OriginMetrics{Requests: 4_000}}
+	fs := analyze.Evaluate(cur, base, analyze.Thresholds{UnreachableMin: 10, CollapseDownPct: 90}, analyze.Known{})
+	msg := Intraday("zh", IntradayData{Zone: "z", Window: w, Decision: state.DecAlert, Cur: cur, Base: base, Findings: fs, UnreachableMin: 10})
+	for _, want := range []string{"源站不可达：边缘 52x 1,900 次 vs 460", "构成：521 ×1,400, 522 ×300, 524 ×200；判别：偏离 522/524 记账底量——量级为底量的 ×4.1；非 522/524 状态 1,400 次（占 74%）；源站回源量 -76.5%"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("missing %q in:\n%s", want, msg)
+		}
 	}
 }

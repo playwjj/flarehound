@@ -625,7 +625,7 @@ func (r *Runner) Intraday(ctx context.Context, zone config.Zone) error {
 		}
 		sev = analyze.Assess(cur, base, findings)
 		data := report.IntradayData{
-			Severity: sev, DashRatio: r.dashRatio(zone),
+			Severity: sev, DashRatio: r.dashRatio(zone), UnreachableMin: th.UnreachableMin,
 			Zone: zone.Name, Window: w, Loc: cfg.Location, Decision: decision,
 			Cur: cur, Base: base, Findings: findings, Attr: attr,
 			Hypotheses: hyps, Block: advice, Suggestions: sugs,
@@ -716,7 +716,7 @@ func (r *Runner) Daily(ctx context.Context, zone config.Zone) error {
 		return err
 	}
 	th := Thresholds(cfg)
-	d := report.DailyData{Zone: zone.Name, Window: w, Loc: cfg.Location, Cur: cur, Base: base}
+	d := report.DailyData{Zone: zone.Name, Window: w, Loc: cfg.Location, Cur: cur, Base: base, UnreachableMin: th.UnreachableMin}
 	d.Findings = analyze.Evaluate(cur, base, th, known(cfg))
 	d.Findings, d.VerifiedBots, d.Impostors = r.verifyBots(ctx, zone, w, d.Findings)
 	// A full day is settled data; collapse needs no settle re-read here.

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/playwjj/flarehound/internal/block"
 	"github.com/playwjj/flarehound/internal/block/fakecf"
@@ -399,5 +400,30 @@ func TestBypassWarning(t *testing.T) {
 	// An ordinary crawler is not.
 	if bs := st.Bypasses(ip, p.RuleRef, p.Place.Pos, []cfapi.Face{{Name: "curl/8", Count: 1}}); len(bs) != 0 {
 		t.Fatalf("%+v", bs)
+	}
+}
+
+type fakeMinutes struct{ rows []cfapi.MinuteCount }
+
+func (f fakeMinutes) Minutes(_ context.Context, _ string, _ bool, _, _ time.Time, _ string, _ cfapi.Filter, _ int) ([]cfapi.MinuteCount, error) {
+	return f.rows, nil
+}
+
+func TestLiveCheckWindowAndFrontier(t *testing.T) {
+	to := time.Date(2026, 11, 19, 13, 31, 0, 0, time.UTC)
+	ip := mustT(t, "ip", "106.201.104.211")
+	at := func(h, m int) time.Time { return time.Date(2026, 11, 19, h, m, 0, 0, time.UTC) }
+	api := fakeMinutes{rows: []cfapi.MinuteCount{
+		{At: at(12, 59), Face: cfapi.Face{Name: "68.166.168.36", Count: 2}}, // another member: frontier only
+		{At: at(12, 20), Face: cfapi.Face{Name: "106.201.104.211", Count: 9}},
+		{At: at(11, 5), Face: cfapi.Face{Name: "106.201.104.211", Count: 40}},
+	}}
+	l, ok, err := block.LiveCheck(context.Background(), api, "z", "r", ip, true, to)
+	if err != nil || !ok || l.Count != 0 || !l.Last.Equal(at(12, 20)) || !l.Frontier.Equal(at(12, 59)) {
+		t.Fatalf("%+v", l)
+	}
+	api.rows = append(api.rows, cfapi.MinuteCount{At: at(12, 45), Face: cfapi.Face{Name: "106.201.104.211", Count: 7}})
+	if l, _, _ := block.LiveCheck(context.Background(), api, "z", "r", ip, true, to); l.Count != 7 || !l.Last.Equal(at(12, 45)) {
+		t.Fatalf("%+v", l)
 	}
 }

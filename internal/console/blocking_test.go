@@ -492,7 +492,7 @@ func TestBlocksPageLiveCheck(t *testing.T) {
 	e.admin.do("GET", "/blocks", nil, nil)
 	e.srv.attemptsWG.Wait()
 	_, body, _ := e.admin.do("GET", "/blocks", nil, nil)
-	if !strings.Contains(body, "last 15 min: 6 stopped") || !strings.Contains(body, "last knock") {
+	if !strings.Contains(body, "last hour: 6 stopped") || !strings.Contains(body, "last knock") {
 		t.Fatalf("live check missing:\n%s", body)
 	}
 }

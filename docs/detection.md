@@ -32,7 +32,7 @@ Any line crossed puts the zone into an anomaly. Defaults (all configurable under
 | `worker_calls_up` | A Worker's invocations rise ≥ `worker_calls_up_pct`, current ≥ `min_count` | +35% |
 | `cpu_p50_up` | A Worker's CPU P50 rises ≥ `cpu_p50_up_pct`; both windows' invocations ≥ `min_count`. The line carries P50, P99 and calls changes and their reading (see below) | +25% |
 | `origin_5xx` | Origin 5xx > `origin_5xx_min` **and** ≥ `origin_5xx_multiplier` × baseline | 3× and > 50 |
-| `origin_unreachable` | Edge 52x ≥ `unreachable_min` **and** ≥ 2× baseline (normally 0) | ≥ 10 |
+| `origin_unreachable` | Edge 52x ≥ `unreachable_min` **and** ≥ 2× baseline (normally 0). Against a 522/524 bookkeeping background (Worker zones): ≥ 3× the background, other 52x statuses rising, or the origin no longer answering — see below | ≥ 10 |
 | `origin_slow` | The origin's first-byte P95 rises ≥ `origin_slow_up_pct` **and** reaches `origin_slow_min_ms`; both windows ≥ 100 origin-answered requests. Reported as `ttfb` — or as `total` when only the full response slowed (transfer: large bodies, bandwidth) | +100% and ≥ 1 s |
 | `collapse_total` / `collapse_worker` | Requests / invocations drop ≥ `collapse_down_pct`, baseline ≥ `min_count` | −50% |
 | `new_face_ua` / `new_face_asn` | A UA / ASN in the current Top 10, absent from the baseline Top 25, with more than `new_face_min_count` requests | > 5,000 |
@@ -45,6 +45,16 @@ The same flood costs a Worker site money (the platform absorbs it; the bill come
 FlareHound only sees the edge: database locks, a full disk or memory pressure on the VPS are visible only as their effect on these numbers. Adaptive data is sampled — fit for trends and alerts, not SLA accounting.
 
 `min_count` (default 1,000) exists because on a small site 10 → 40 requests is +300%; without a floor, quiet alerting is impossible.
+
+### Edge 52x: outage or bookkeeping?
+
+On Worker zones the adaptive dataset files Cache API entries with edge statuses; an edge timeout on such an entry reads 522/524. Hundreds an hour are then background while the site is fine. One judgement, shared by the alert line, the console tile and the reports:
+
+- **Bookkeeping background** — the baseline's 52x are ≥ 90% 522/524 and the window does not depart from it: no alert, a neutral tile (*Edge 52x (bookkeeping background)*), and a "check: bookkeeping background" line in reports.
+- **Departure** from such a background — ≥ 3× its volume (by at least `unreachable_min`), other statuses (521, 523, 530 …) at ≥ 10% and ≥ `unreachable_min`, or origin-answered requests below half the baseline: the line fires, with the status split and the reason.
+- Any other baseline (normally zero, or led by other statuses) keeps the plain rule.
+
+Hours archived before v1.15 did not measure 52x; the long baseline skips them rather than reading them as zero.
 
 ### Worker CPU: more expensive, or a different mix?
 

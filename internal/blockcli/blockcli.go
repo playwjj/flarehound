@@ -315,6 +315,25 @@ func (e *Env) LiveCheck(ctx context.Context, x block.Entry, caps cfapi.Caps) (bl
 	return block.LiveCheck(ctx, e.Read, e.Zone.ZoneID, x.RuleID, x.Target, firewall, e.now())
 }
 
+// LiveText renders a live check for the CLI: a count with the last
+// attempt, an empty hour with the last attempt before it, or nothing in
+// the look-back — never a bare 0 — plus how far firewall data reaches.
+func LiveText(l block.Live, now time.Time, loc *time.Location) string {
+	var s string
+	switch {
+	case l.Count > 0:
+		s = fmt.Sprintf("%d (last %s)", l.Count, l.Last.In(loc).Format("15:04"))
+	case !l.Last.IsZero():
+		s = fmt.Sprintf("none landed yet; last %s (%s ago)", l.Last.In(loc).Format("15:04"), now.Sub(l.Last).Round(time.Minute))
+	default:
+		s = fmt.Sprintf("none in %s", block.LiveLookback)
+	}
+	if !l.Frontier.IsZero() {
+		s += ", data to " + l.Frontier.In(loc).Format("15:04")
+	}
+	return s
+}
+
 // Live loads the zone's FlareHound blocks as Cloudflare holds them.
 func (e *Env) Live(ctx context.Context) (block.State, []block.Entry, error) {
 	st, err := e.manager().Load(ctx)
@@ -511,9 +530,10 @@ func (e *Env) List(ctx context.Context, days int) error {
 	if attemptsNA {
 		e.printf("note: no firewall events on this plan — IP attempts are approximated from the archived IP board (~: Top 50 per hour, so low-volume knocking may read 0; \"last\" is the last hour the IP made the list)\n")
 	}
-	e.printf("LIVE = the last %d minutes, queried now (%s)\n", int(block.LiveWindow/time.Minute), map[bool]string{true: "requests stopped at the edge, any rule", false: "firewall events on the block's rule"}[attemptsNA])
+	e.printf("LIVE = the last hour, queried now (%s); \"last\" looks back %s\n", map[bool]string{true: "requests stopped at the edge, any rule",
+		false: "firewall events on the block's rule — they can reach the dataset 30–60 min late, \"data to\" says how far they go"}[attemptsNA], block.LiveLookback)
 	tw := tabwriter.NewWriter(e.Out, 0, 2, 2, ' ', 0)
-	fmt.Fprintf(tw, "TARGET\tACTION\tMECHANISM\tATTEMPTS %dd\tLIVE %dm\tSINCE\tEXPIRES\tREASON\n", days, int(block.LiveWindow/time.Minute))
+	fmt.Fprintf(tw, "TARGET\tACTION\tMECHANISM\tATTEMPTS %dd\tLIVE 1h\tSINCE\tEXPIRES\tREASON\n", days)
 	seen := map[block.Target]bool{}
 	for _, x := range block.Sorted(entries) {
 		seen[x.Target] = true
@@ -532,10 +552,7 @@ func (e *Env) List(ctx context.Context, days int) error {
 		if l, ok, err := e.LiveCheck(ctx, x, caps); err != nil {
 			live = "error"
 		} else if ok {
-			live = fmt.Sprint(l.Count)
-			if !l.Last.IsZero() {
-				live += " (last " + l.Last.In(e.loc()).Format("15:04") + ")"
-			}
+			live = LiveText(l, e.now(), e.loc())
 		}
 		since, expires, reason := "-", "never", "(no audit record: created by hand or elsewhere)"
 		if ev, ok := audit[x.Target]; ok {

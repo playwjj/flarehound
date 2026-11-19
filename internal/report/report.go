@@ -233,19 +233,17 @@ func (l lang) headline(fs []analyze.Finding) string {
 	return head
 }
 
-func (l lang) twoWindows(b *strings.Builder, cur, base analyze.Metrics, baseLabel string) {
+func (l lang) twoWindows(b *strings.Builder, cur, base analyze.Metrics, baseLabel string, unreachMin int64) {
 	fmt.Fprintf(b, l.t("Numbers (%s):\n", "两窗对比（%s）：\n"), baseLabel)
 	fmt.Fprintf(b, "- %s%s\n", l.t("zone requests: ", "zone 总请求："), l.change(cur.Total, base.Total))
 	fmt.Fprintf(b, "- %s%s\n", l.t("dynamic: ", "dynamic："), l.change(cur.Dynamic, base.Dynamic))
 	fmt.Fprintf(b, "- %s%s vs %s%s\n", l.t("origin 5xx: ", "源站 5xx："), n(cur.Origin5xx), n(base.Origin5xx), l.errDetail(cur))
 	if cur.Unreachable > 0 || base.Unreachable > 0 {
-		note := ""
-		if analyze.UnreachableArtifact(cur, base) {
-			note = l.t(" — mostly edge bookkeeping entries, not an outage: a steady 522/524 background in both windows while the origin keeps answering",
-				"——主要为边缘记账条目，非源站故障：两窗均有、以 522/524 为主的稳定底量，且源站照常回源")
+		fmt.Fprintf(b, "- %s%s vs %s%s\n", l.t("origin unreachable (edge 52x): ", "源站不可达（边缘 52x）："),
+			n(cur.Unreachable), n(base.Unreachable), statusSplit(cur.UnreachableBy, l))
+		if c := l.unreachableCheck(cur, base, unreachMin); c != "" {
+			fmt.Fprintf(b, "  %s\n", c)
 		}
-		fmt.Fprintf(b, "- %s%s vs %s%s%s\n", l.t("origin unreachable (edge 52x): ", "源站不可达（边缘 52x）："),
-			n(cur.Unreachable), n(base.Unreachable), statusSplit(cur.UnreachableBy, l), note)
 	}
 	if o := cur.Origin; o != nil {
 		line := fmt.Sprintf(l.t("- origin P95: first byte %s, full response %s", "- 源站 P95：首字节 %s，完整响应 %s"), ms(o.TTFBP95ms), ms(o.TotalP95ms))
@@ -271,6 +269,48 @@ func (l lang) twoWindows(b *strings.Builder, cur, base analyze.Metrics, baseLabe
 		}
 		b.WriteString(line + "\n")
 	}
+}
+
+// unreachableCheck is the reading of the edge 52x (analyze.JudgeUnreachable,
+// the same judgement as the alert line and the console tile): a
+// bookkeeping background, or a departure from it and why. "" on a
+// normally-zero baseline, where the bare numbers say it all.
+func (l lang) unreachableCheck(cur, base analyze.Metrics, min int64) string {
+	c := analyze.JudgeUnreachable(cur, base, min)
+	switch c.Verdict {
+	case analyze.UnreachBook:
+		return fmt.Sprintf(l.t("check: bookkeeping background, not an outage — 522/524 are %.1f%% of it, the same order as the baseline (×%.1f), the origin keeps answering",
+			"判别：记账底量，非源站故障——522/524 占 %.1f%%，与基线同量级（×%.1f），源站照常回源"), c.BookShare*100, c.Jump)
+	case analyze.UnreachIncident:
+		var why []string
+		if c.JumpHit {
+			why = append(why, fmt.Sprintf(l.t("volume ×%.1f the background", "量级为底量的 ×%.1f"), c.Jump))
+		}
+		if c.MixHit {
+			why = append(why, fmt.Sprintf(l.t("statuses other than 522/524: %s (%.0f%%)", "非 522/524 状态 %s 次（占 %.0f%%）"), n(c.Others), (1-c.BookShare)*100))
+		}
+		if c.CollapseHit {
+			why = append(why, fmt.Sprintf(l.t("origin-answered requests %s", "源站回源量 %s"), l.pct(c.Collapse)))
+		}
+		return l.t("check: departs from the 522/524 bookkeeping background — ", "判别：偏离 522/524 记账底量——") + strings.Join(why, l.t("; ", "；"))
+	}
+	return ""
+}
+
+// unreachableAlert is the sub-line of an origin_unreachable alert: the
+// status split (what the 52x are) and the judgement.
+func (l lang) unreachableAlert(cur, base analyze.Metrics, min int64) string {
+	s := ""
+	if len(cur.UnreachableBy) > 0 {
+		s = l.t("statuses: ", "构成：") + statusList(cur.UnreachableBy)
+	}
+	if c := l.unreachableCheck(cur, base, min); c != "" {
+		if s != "" {
+			s += l.t("; ", "；")
+		}
+		s += c
+	}
+	return s
 }
 
 // cpuCheck is the three-number check every CPU line carries: the median,
@@ -462,6 +502,8 @@ type IntradayData struct {
 	LongN       int              // samples behind Long (or collected so far)
 	Severity    analyze.Severity
 	DashRatio   float64 // FlareHound/dashboard request ratio from calibration; 0 = unknown
+	// UnreachableMin is thresholds.unreachable_min (the 52x judgement's floor).
+	UnreachableMin int64
 }
 
 // Intraday renders an intraday alert / escalation / recovery message.
@@ -501,9 +543,14 @@ func Intraday(language string, d IntradayData) string {
 		if c := l.cpuCheck(f, d.Cur, d.Base); c != "" {
 			fmt.Fprintf(&b, "  %s\n", c)
 		}
+		if f.Rule == analyze.RuleUnreachable {
+			if c := l.unreachableAlert(d.Cur, d.Base, d.UnreachableMin); c != "" {
+				fmt.Fprintf(&b, "  %s\n", c)
+			}
+		}
 	}
 	b.WriteString("\n")
-	l.twoWindows(&b, d.Cur, d.Base, l.t("vs same hour yesterday", "对比昨日同时段"))
+	l.twoWindows(&b, d.Cur, d.Base, l.t("vs same hour yesterday", "对比昨日同时段"), d.UnreachableMin)
 	if d.Long != nil {
 		fmt.Fprintf(&b, l.t("- 4-week same-hour median (%d samples): requests %s, dynamic %s, origin 5xx %s — every volume line above also crossed this baseline\n",
 			"- 近 4 周同时段中位数（%d 个样本）：总请求 %s，dynamic %s，源站 5xx %s——上述量类越线均已对此基线复核\n"),
@@ -698,6 +745,7 @@ type DailyData struct {
 	ActiveSince       time.Time
 	ActiveFingerprint string
 	Gaps              []string
+	UnreachableMin    int64 // thresholds.unreachable_min (the 52x judgement's floor)
 }
 
 // Daily renders the daily report.
@@ -729,7 +777,7 @@ func Daily(language string, d DailyData) string {
 	}
 	fmt.Fprintf(&b, "%s %s\n\n", l.t("Window", "窗口"), l.window(d.Window, d.Loc))
 
-	l.twoWindows(&b, d.Cur, d.Base, l.t("vs previous 24h", "对比前 24 小时"))
+	l.twoWindows(&b, d.Cur, d.Base, l.t("vs previous 24h", "对比前 24 小时"), d.UnreachableMin)
 	if d.Cost != nil {
 		fmt.Fprintf(&b, "- %s\n", l.costLine(*d.Cost))
 	}
@@ -744,6 +792,11 @@ func Daily(language string, d DailyData) string {
 			fmt.Fprintf(&b, "- %s\n", l.findingLine(f, ratio, d.ASNNames, d.ASNLabels, d.Covered))
 			if c := l.cpuCheck(f, d.Cur, d.Base); c != "" {
 				fmt.Fprintf(&b, "  %s\n", c)
+			}
+			if f.Rule == analyze.RuleUnreachable {
+				if c := l.unreachableAlert(d.Cur, d.Base, d.UnreachableMin); c != "" {
+					fmt.Fprintf(&b, "  %s\n", c)
+				}
 			}
 		}
 	}
