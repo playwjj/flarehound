@@ -14,8 +14,9 @@ services:
       - ./data:/app/data
 
   # Optional (v0.5 one-click blocking). Holds the separate WRITE token; the
-  # watchdog above never sees it. Runs the TTL enforcer, and is the
-  # container to run block commands in:
+  # watchdog above never sees it. Runs the TTL enforcer — not needed when
+  # the console below holds the write token (it lifts expired blocks
+  # itself since v1.16) — and is the container to run block commands in:
   #   docker compose --profile admin up -d
   #   docker compose run --rm flarehound-admin block asn 207990 --for 24h
   flarehound-admin:

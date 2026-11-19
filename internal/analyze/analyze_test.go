@@ -260,3 +260,93 @@ func TestAssessEdgeAbsorbedFlood(t *testing.T) {
 		t.Fatal("no findings, no severity")
 	}
 }
+
+// The 2026-11-19 01:07 field case: CPU P50 +50.5% after a flood receded,
+// P99 +12%, calls −18% — a mix change, not a cost rise.
+func TestCPUMixChange(t *testing.T) {
+	base := Metrics{Dynamic: 30_000, Workers: []WorkerMetrics{{Name: "web", Calls: 100_000, CPUP50ms: 2.0, CPUP99ms: 25.0}}}
+	cur := Metrics{Dynamic: 30_000, Workers: []WorkerMetrics{{Name: "web", Calls: 82_000, CPUP50ms: 3.01, CPUP99ms: 28.0}}}
+	j := JudgeCPU(cur.Worker("web"), base.Worker("web"))
+	if j.Verdict != CPUMix || !j.P99Known || j.P99Pct < 11.9 || j.P99Pct > 12.1 || j.CallsPct != -18 {
+		t.Fatalf("%+v", j)
+	}
+	fs := []Finding{{Rule: RuleCPUUp, Subject: "web", Cur: 3.01, Base: 2, Pct: 50.5}}
+	if s := Assess(cur, base, fs); s.Level != SevLow || s.Kind != CPUMixKind {
+		t.Fatalf("mix must be reported one level down: %+v", s)
+	}
+	hs := Hypothesize(cur, base, fs, Attribution{})
+	if len(hs) != 1 || hs[0].ID != HypCPUMix {
+		t.Fatalf("%+v", hs)
+	}
+	// Another expensive line keeps the round high.
+	if s := Assess(cur, base, append(fs, Finding{Rule: RuleOrigin5xx})); s.Level != SevHigh {
+		t.Fatalf("%+v", s)
+	}
+
+	// Tail up with the median, calls held: really more expensive.
+	cur2 := Metrics{Dynamic: 30_000, Workers: []WorkerMetrics{{Name: "web", Calls: 98_000, CPUP50ms: 3.0, CPUP99ms: 40.0}}}
+	if j := JudgeCPU(cur2.Worker("web"), base.Worker("web")); j.Verdict != CPUCostly {
+		t.Fatalf("%+v", j)
+	}
+	if s := Assess(cur2, base, fs); s.Level != SevHigh {
+		t.Fatalf("%+v", s)
+	}
+	if hs := Hypothesize(cur2, base, fs, Attribution{}); len(hs) != 1 || hs[0].ID != HypCPUCostly {
+		t.Fatalf("%+v", hs)
+	}
+
+	// No P99 on one side (an hour archived before v1.16): undecided, the
+	// old reading stays.
+	old := Metrics{Dynamic: 30_000, Workers: []WorkerMetrics{{Name: "web", Calls: 100_000, CPUP50ms: 2.0}}}
+	if j := JudgeCPU(cur.Worker("web"), old.Worker("web")); j.Verdict != "" || j.P99Known {
+		t.Fatalf("%+v", j)
+	}
+	if s := Assess(cur, old, fs); s.Level != SevHigh {
+		t.Fatalf("%+v", s)
+	}
+}
+
+func TestMedianP99(t *testing.T) {
+	m := Median([]Metrics{
+		{Workers: []WorkerMetrics{{Name: "web", Calls: 1, CPUP50ms: 1, CPUP99ms: 10}}},
+		{Workers: []WorkerMetrics{{Name: "web", Calls: 1, CPUP50ms: 1}}}, // pre-v1.16 hour
+		{Workers: []WorkerMetrics{{Name: "web", Calls: 1, CPUP50ms: 1, CPUP99ms: 20}}},
+	})
+	if got := m.Worker("web").CPUP99ms; got != 15 {
+		t.Fatalf("P99 median over measured hours only: %v", got)
+	}
+}
+
+// starngage, v1.15 field data: 10,377 edge 52x a day (522 ×7,007, 524
+// ×3,341) while real origin 5xx were 213 and the site was fine.
+func TestUnreachableArtifact(t *testing.T) {
+	base := Metrics{Origin5xx: 220, Unreachable: 9_800, UnreachableBy: map[string]int64{"522": 6_600, "524": 3_100, "502": 100},
+		Origin: &OriginMetrics{Requests: 400_000}}
+	cur := Metrics{Origin5xx: 213, Unreachable: 10_377, UnreachableBy: map[string]int64{"522": 7_007, "524": 3_341, "520": 29},
+		Origin: &OriginMetrics{Requests: 410_000}}
+	if !UnreachableArtifact(cur, base) {
+		t.Fatal("steady 522/524 background with a healthy origin is bookkeeping")
+	}
+	// The origin stops answering: not bookkeeping.
+	down := cur
+	down.Origin = &OriginMetrics{Requests: 50_000}
+	if UnreachableArtifact(down, base) {
+		t.Fatal("origin answered requests collapsed")
+	}
+	// A doubling is an incident (and the alert line's business).
+	spike := cur
+	spike.Unreachable = 25_000
+	if UnreachableArtifact(spike, base) {
+		t.Fatal("spike")
+	}
+	// Normally-zero baseline (a VPS origin): never a footnote.
+	if UnreachableArtifact(cur, Metrics{Origin: base.Origin}) {
+		t.Fatal("zero baseline")
+	}
+	// Mostly 502-like statuses: not this pattern.
+	mixed := cur
+	mixed.UnreachableBy = map[string]int64{"521": 9_000, "522": 1_377}
+	if UnreachableArtifact(mixed, base) {
+		t.Fatal("521 is a refused connection, not bookkeeping")
+	}
+}

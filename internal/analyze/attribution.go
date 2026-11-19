@@ -130,6 +130,8 @@ const (
 	HypOriginDown    = "origin_down"     // the edge cannot reach the origin
 	HypOriginLoad    = "origin_overload" // slower under more uncached load
 	HypOriginSlow    = "origin_slow"     // slower with load flat: the origin itself
+	HypCPUCostly     = "cpu_costly"      // CPU P50 and P99 up, calls held: calls really got more expensive
+	HypCPUMix        = "cpu_mix"         // CPU P50 up, P99 flat, calls down: mix change, not cost
 )
 
 // Confidence levels.
@@ -212,6 +214,14 @@ func Hypothesize(cur, base Metrics, fs []Finding, a Attribution) []Hypothesis {
 
 	for _, f := range fs {
 		if f.Rule != RuleCPUUp {
+			continue
+		}
+		switch JudgeCPU(cur.Worker(f.Subject), base.Worker(f.Subject)).Verdict {
+		case CPUMix:
+			out = append(out, Hypothesis{ID: HypCPUMix, Confidence: High, Subject: f.Subject})
+			continue
+		case CPUCostly:
+			out = append(out, Hypothesis{ID: HypCPUCostly, Confidence: High, Subject: f.Subject})
 			continue
 		}
 		callsUp := false

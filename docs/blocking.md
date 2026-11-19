@@ -10,7 +10,7 @@ flarehound block country XX --action challenge
 flarehound block ua "BadBot/1.0" --for 7d
 flarehound unblock asn 207990
 flarehound blocks              # everything blocked, attempts over 7 days, expiry
-flarehound enforce             # long-running: lifts blocks whose --for has passed
+flarehound enforce             # optional without a console: lifts blocks whose --for has passed
 ```
 
 With several zones configured, add `--zone NAME|ID`.
@@ -30,7 +30,9 @@ The same actions are available in the [web console](console.md#blocking-from-the
 
 ## What FlareHound touches
 
-- Only its own objects: one custom rule per target type and action, named `flarehound-<type>-<action>` (e.g. `flarehound-asn-challenge`), the list `flarehound_block`, and IP Access Rules whose notes start with `flarehound:`. Your rules are never edited or reordered; new rules are appended after them.
+- Only its own objects: one custom rule per target type and action, named `flarehound-<type>-<action>` (e.g. `flarehound-asn-challenge`), the list `flarehound_block`, and IP Access Rules whose notes start with `flarehound:`. Your rules are never edited or reordered.
+- **Where FlareHound rules go** (v1.16): after every skip rule (your services and verified crawlers stay exempt) and before your first challenge or block rule (a confirmed target is not challenged first). Review shows the position ("inserted at #4, after «…» and before «Protected Pages» (managed_challenge)") and it is read back. A FlareHound rule from before v1.16 that sits elsewhere is moved once, on its next block; adding members never moves it again.
+- **Bypass warning**: every skip rule ahead of the block rule is evaluated against the target and the user agents it sent in the last 24 hours. If one certainly matches, review shows a red warning naming the rule — the block may have no effect on that target.
 - Targets of one type are merged into one rule, so the custom-rule quota (Free 5 / Pro 20 / Business 100 / Enterprise 1,000, shared with your rules) is barely touched. Unblocking the last entry deletes the rule and frees the slot.
 - Expressions have a fixed format so they can be read back. If you hand-edit a FlareHound rule into a shape it does not recognise, FlareHound refuses to modify it. A rule that would exceed 4,096 characters is refused.
 - The IP list is used when `cloudflare.account_id` is configured and the token has Account Filter Lists: Edit; otherwise IPs go into an expression rule (still one rule).
@@ -70,7 +72,10 @@ After applying, FlareHound reads Cloudflare back to verify, writes an audit reco
 
 ## Expiry: `--for` and `enforce`
 
-`--for` takes Go durations plus days: `30m`, `24h`, `7d`. Cloudflare has no native expiry, so the time is stored in the archive's audit log and **`flarehound enforce`** lifts expired blocks (recorded as `expire` events). It needs the write token and must keep running:
+`--for` takes Go durations plus days: `30m`, `24h`, `7d`. Cloudflare has no native expiry, so the time is stored in the archive's audit log and FlareHound lifts expired blocks itself (recorded as `expire` events, actor `system:expiry` from the console or `ttl` from the CLI):
+
+- **The console**, when it holds the write token, runs the expiry pass every 5 minutes (v1.16). Nothing else to run.
+- **`flarehound enforce`** does the same without a console. It needs the write token and must keep running:
 
 ```bash
 flarehound enforce                 # every 5 minutes (--interval), all zones
@@ -81,11 +86,15 @@ One-click commands in alerts default to `--for 24h`. Without `--for`, a block is
 
 ## Listing and attempts
 
-`flarehound blocks [--days 7]` lists every FlareHound block with action, mechanism, attempts over the last N days, start, expiry and reason. It reconciles Cloudflare with the audit log and flags blocks created by hand (no audit record). The daily report lists each block's attempts in its window too. Attempts come from firewall events and show "n/a" where that dataset is unavailable (Free plan). Lift a block when the attempts stop, not when it gets quiet.
+`flarehound blocks [--days 7]` lists every FlareHound block with action, mechanism, attempts over the last N days, start, expiry and reason. It reconciles Cloudflare with the audit log and flags blocks created by hand (no audit record). The daily report lists each block's attempts in its window too. Attempts come from firewall events. Where that dataset is unavailable (Free plan), IP blocks' attempts are approximated from the archived IP board — each hour's top 50 IPs stopped at the edge — and marked "≈ … (approx.)" with the last hour the IP made the list (an IP outside the top 50 adds nothing that hour); other target types show "n/a". Lift a block when the attempts stop, not when it gets quiet.
+
+**Live check** (v1.16): the `LIVE 15m` column — and the blocks page — shows the last 15 minutes queried live, with the last attempt's time ("4 (last 09:07)"). Paid plans count firewall events on the block's own rule; Free counts the target's requests stopped at the edge by any rule. Use it right after blocking: the archived attempts lag by up to an hour.
+
+The daily report adds **Expiring this week**: blocks expiring within 7 days, marked *still knocking — consider renewing* or *quiet — it will be lifted automatically*.
 
 ## Docker
 
-The `admin` profile in `docker-compose.yml` runs the enforcer with the write token, separate from the watchdog:
+A console service holding the write token lifts expired blocks on its own. Without a console, the `admin` profile in `docker-compose.yml` runs the enforcer with the write token, separate from the watchdog:
 
 ```yaml
   flarehound-admin:

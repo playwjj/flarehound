@@ -17,7 +17,7 @@ Each window, for each zone (Cloudflare GraphQL Analytics, `httpRequestsAdaptiveG
 3. Origin 5xx (`originResponseStatus` 500–599), split by status (502 / 503 / 504 …) and as a share of the requests the origin answered.
 4. **Origin unreachable** — the edge's own 52x answers (`edgeResponseStatus` 520–526 and 530): Cloudflare could not reach the origin at all (521 refused, 522/524 timed out, 523 no route, 525/526 TLS). The origin answered nothing, so these never show up as origin 5xx.
 5. **Origin latency** — P95 time to first byte (`originResponseHeaderReceiveDurationMs`: the application computing) and of the full response (`originResponseDurationMs`: plus transfer), with TCP/TLS connect P95s as detail. Read over the requests the origin actually answered (`originResponseStatus > 0`); cache hits would pull the quantiles to 0. Available on every plan, Free included; where the API does not answer, latency is "not measured" and the round goes on.
-6. Per configured Worker: invocations and CPU P50.
+6. Per configured Worker: invocations and CPU P50 / P99 (one query).
 7. Top user agents and Top ASNs — Top 10 for the current window, Top 25 for the baseline ("old faces").
 8. Per `path_rules` entry: requests matching the path (optionally `dynamic` only).
 
@@ -30,7 +30,7 @@ Any line crossed puts the zone into an anomaly. Defaults (all configurable under
 | `total_up` | Zone requests rise ≥ `total_up_pct` and the current window ≥ `min_count` | +35% |
 | `dynamic_up` | Dynamic responses rise ≥ `dynamic_up_pct`, current ≥ `min_count` | +50% |
 | `worker_calls_up` | A Worker's invocations rise ≥ `worker_calls_up_pct`, current ≥ `min_count` | +35% |
-| `cpu_p50_up` | A Worker's CPU P50 rises ≥ `cpu_p50_up_pct`; both windows' invocations ≥ `min_count` | +25% |
+| `cpu_p50_up` | A Worker's CPU P50 rises ≥ `cpu_p50_up_pct`; both windows' invocations ≥ `min_count`. The line carries P50, P99 and calls changes and their reading (see below) | +25% |
 | `origin_5xx` | Origin 5xx > `origin_5xx_min` **and** ≥ `origin_5xx_multiplier` × baseline | 3× and > 50 |
 | `origin_unreachable` | Edge 52x ≥ `unreachable_min` **and** ≥ 2× baseline (normally 0) | ≥ 10 |
 | `origin_slow` | The origin's first-byte P95 rises ≥ `origin_slow_up_pct` **and** reaches `origin_slow_min_ms`; both windows ≥ 100 origin-answered requests. Reported as `ttfb` — or as `total` when only the full response slowed (transfer: large bodies, bandwidth) | +100% and ≥ 1 s |
@@ -45,6 +45,14 @@ The same flood costs a Worker site money (the platform absorbs it; the bill come
 FlareHound only sees the edge: database locks, a full disk or memory pressure on the VPS are visible only as their effect on these numbers. Adaptive data is sampled — fit for trends and alerts, not SLA accounting.
 
 `min_count` (default 1,000) exists because on a small site 10 → 40 requests is +300%; without a floor, quiet alerting is impossible.
+
+### Worker CPU: more expensive, or a different mix?
+
+A median can rise without any call getting slower: when a flood of cheap calls recedes, the calls left are the heavier ones. Every CPU line therefore carries **P50, P99 and calls** and reads them:
+
+- P50 and P99 up together, calls not down (more than −10%): **really more expensive** — a code change, a slower dependency, heavier requests. High severity.
+- P50 up, P99 up less than half as much, calls down ≥ 10%: **mix change** — reported, at **low severity**, with its own hypothesis.
+- Anything else, or no P99 in one window (hours archived before v1.16): undecided; the earlier reading stays.
 
 ### Collapse needs settled data
 

@@ -43,6 +43,14 @@ func (fakeRead) FirewallTop(_ context.Context, _ string, _, _ time.Time, _, _ st
 	return []cfapi.Face{{Name: "AS24940", ASN: 24940, Count: 10}}, nil
 }
 
+func (fakeRead) Minutes(_ context.Context, _ string, firewall bool, _, to time.Time, _ string, f cfapi.Filter, _ int) ([]cfapi.MinuteCount, error) {
+	if firewall {
+		return []cfapi.MinuteCount{{At: to.Add(-3 * time.Minute).Truncate(time.Minute), Face: cfapi.Face{Name: "AS24940", ASN: 24940, Count: 4}},
+			{At: to.Add(-9 * time.Minute).Truncate(time.Minute), Face: cfapi.Face{Name: "AS4134", ASN: 4134, Count: 99}}}, nil
+	}
+	return []cfapi.MinuteCount{{At: to.Add(-2 * time.Minute).Truncate(time.Minute), Face: cfapi.Face{Count: 7}}}, nil
+}
+
 var now = time.Date(2026, 11, 17, 9, 10, 0, 0, time.UTC)
 
 func newEnv(t *testing.T, input string) (*Env, *fakecf.CF, *bytes.Buffer) {
@@ -184,9 +192,35 @@ func TestListShowsAttemptsAndDrift(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := out.String()
-	for _, want := range []string{"AS24940", "challenge", "30", "flood", "MISSING in Cloudflare", "attempts cover only 3 day(s)"} {
+	for _, want := range []string{"AS24940", "challenge", "30", "flood", "MISSING in Cloudflare", "attempts cover only 3 day(s)",
+		"LIVE 15m", "4 (last 09:07)"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("list lacks %q:\n%s", want, s)
 		}
+	}
+}
+
+// Free zones: attempts from the archived IP board, marked approximate.
+func TestApproxAttempts(t *testing.T) {
+	e, _, _ := newEnv(t, "")
+	z := e.Zone.ZoneID
+	tg := target(t, "ip", "106.201.104.211")
+	h := now.Truncate(time.Hour)
+	for i, n := range []int64{400, 0, 15} {
+		snap := store.Snapshot{BlockedIPs: []cfapi.Face{{Name: "9.9.9.9", Count: 1}}}
+		if n > 0 {
+			snap.BlockedIPs = append(snap.BlockedIPs, cfapi.Face{Name: "106.201.104.211", Count: n})
+		}
+		from := h.Add(-time.Duration(3-i) * time.Hour)
+		if err := e.Store.PutSnapshot(z, store.Hour, from, from.Add(time.Hour), snap); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, ok, err := e.ApproxAttempts(tg, h.Add(-24*time.Hour), h)
+	if err != nil || !ok || a.Count != 415 || a.Hours != 3 || !a.LastHour.Equal(h.Add(-time.Hour)) {
+		t.Fatalf("%+v %v %v", a, ok, err)
+	}
+	if _, ok, _ := e.ApproxAttempts(target(t, "asn", "24940"), h.Add(-24*time.Hour), h); ok {
+		t.Fatal("the IP board cannot see ASNs")
 	}
 }

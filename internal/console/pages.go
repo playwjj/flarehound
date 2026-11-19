@@ -71,8 +71,11 @@ type page struct {
 	Log         []store.BlockEvent
 
 	// writes (v1.4)
-	CanWrite  bool // this viewer may block (admin, console holds the write token)
-	WriteOn   bool // this console holds the write token
+	CanWrite bool // this viewer may block (admin, console holds the write token)
+	WriteOn  bool // this console holds the write token
+	// TOTPHint: an admin of a console holding the write token, with
+	// console.require_totp off and the hint not dismissed.
+	TOTPHint  bool
 	LiveB     *liveBlocks
 	Form      *blockForm
 	Prep      *blockcli.Prepared
@@ -295,6 +298,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, name
 	p.CanWrite = p.WriteOn && p.Req.User != nil && p.Req.User.Admin()
 	p.Lang = string(s.L(r))
 	p.CanSettings = s.settingsOn() && p.Req.User != nil && p.Req.User.Admin()
+	p.TOTPHint = p.CanWrite && s.totpHint()
 	p.CanSnap = s.canSnapshot(p.Req)
 	p.Here = "/"
 	if r.Method == http.MethodGet {

@@ -88,3 +88,51 @@ func TestCoverNote(t *testing.T) {
 		t.Fatalf("cover note: %s", got)
 	}
 }
+
+// Replay of the 2026-11-19 01:07 alert: the message carries the three
+// numbers and the mix-change reading, so nobody re-derives it by hand.
+func TestCPUAlertCarriesCheck(t *testing.T) {
+	base := analyze.Metrics{Dynamic: 30_000, Workers: []analyze.WorkerMetrics{{Name: "web", Calls: 100_000, CPUP50ms: 2.0, CPUP99ms: 25.0}}}
+	cur := analyze.Metrics{Dynamic: 30_000, Workers: []analyze.WorkerMetrics{{Name: "web", Calls: 82_000, CPUP50ms: 3.01, CPUP99ms: 28.0}}}
+	fs := []analyze.Finding{{Rule: analyze.RuleCPUUp, Subject: "web", Cur: 3.01, Base: 2, Pct: 50.5}}
+	msg := Intraday("zh", IntradayData{Zone: "z", Window: w, Decision: state.DecAlert, Cur: cur, Base: base, Findings: fs,
+		Hypotheses: analyze.Hypothesize(cur, base, fs, analyze.Attribution{}), Severity: analyze.Assess(cur, base, fs)})
+	for _, want := range []string{"低严重度：Worker CPU 构成变化", "辨伪：P50 +50.5%，P99 +12.0%，调用量 -18.0%", "构成变化而非变贵", "P99 28.0 vs 25.0 ms"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("missing %q in:\n%s", want, msg)
+		}
+	}
+}
+
+func TestDailyExpiringThisWeek(t *testing.T) {
+	day := schedule.Window{From: w.From.Add(-23 * time.Hour), To: w.To}
+	d := DailyData{Zone: "z", Window: day, Loc: time.UTC, Blocks: []BlockStatus{
+		{Target: "ip 106.201.104.211", Action: "block", Attempts: 55_435, Since: day.From, ExpiresAt: day.To.Add(3 * 24 * time.Hour)},
+		{Target: "asn 45102", Action: "block", Attempts: 0, Since: day.From, ExpiresAt: day.To.Add(5 * 24 * time.Hour)},
+		{Target: "ip 1.2.3.4", Action: "block", Attempts: 415, Approx: true, LastHour: day.To.Add(-time.Hour), Since: day.From, ExpiresAt: day.To.Add(30 * 24 * time.Hour)},
+		{Target: "ua BadBot", Action: "block", Since: day.From},
+	}}
+	msg := Daily("zh", d)
+	for _, want := range []string{"- 本周到期：", "ip 106.201.104.211（block）11-20 09:00 到期：仍在敲门（窗口内 55,435 次）——建议续期",
+		"asn 45102（block）11-22 09:00 到期：窗口内已无尝试——到期将自动解除", "≈415（近似值，来自 IP 榜归档；最近上榜 11-17 08:00）"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("missing %q in:\n%s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "ip 1.2.3.4（block）") || strings.Contains(msg, "BadBot（") {
+		t.Errorf("only blocks expiring within 7 days belong in the list:\n%s", msg)
+	}
+}
+
+func TestUnreachableFootnote(t *testing.T) {
+	base := analyze.Metrics{Origin5xx: 220, Unreachable: 9_800, UnreachableBy: map[string]int64{"522": 6_600, "524": 3_200}, Origin: &analyze.OriginMetrics{Requests: 400_000}}
+	cur := analyze.Metrics{Origin5xx: 213, Unreachable: 10_377, UnreachableBy: map[string]int64{"522": 7_007, "524": 3_341, "520": 29}, Origin: &analyze.OriginMetrics{Requests: 410_000}}
+	msg := Daily("zh", DailyData{Zone: "z", Window: w, Cur: cur, Base: base})
+	if !strings.Contains(msg, "主要为边缘记账条目，非源站故障") {
+		t.Fatalf("got:\n%s", msg)
+	}
+	cur.Origin = &analyze.OriginMetrics{Requests: 10_000}
+	if msg := Daily("zh", DailyData{Zone: "z", Window: w, Cur: cur, Base: base}); strings.Contains(msg, "记账条目") {
+		t.Fatalf("no footnote when the origin stopped answering:\n%s", msg)
+	}
+}

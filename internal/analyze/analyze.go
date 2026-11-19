@@ -100,6 +100,8 @@ type WorkerMetrics struct {
 	Name     string  `json:"name"`
 	Calls    int64   `json:"calls"`
 	CPUP50ms float64 `json:"cpu_p50_ms"`
+	// CPUP99ms is the tail (0: not measured — hours archived before v1.16).
+	CPUP99ms float64 `json:"cpu_p99_ms,omitempty"`
 }
 
 // Metrics is one window's worth of observations for one zone. For the

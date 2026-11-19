@@ -51,5 +51,5 @@ FlareHound logs to stderr; in Docker use `docker compose logs -f flarehound`. Se
 - **`custom-rule quota is full`** — unblock stale entries, merge rules (see the [audit's quota section](audit.md#quota)), or grant Zone → WAF: Edit so the IP Access Rules fallback can be used for IPs and ASNs.
 - **`--for needs the archive`** / **`the execution module needs the archive`** — set `archive.disabled` to false.
 - **`rule changes have no --yes`** — by design; confirm interactively.
-- **Expired blocks not lifted** — `flarehound enforce` must be running (`docker compose --profile admin up -d`).
+- **Expired blocks not lifted** — the console must hold the write token (it lifts them every 5 minutes), or `flarehound enforce` must be running (`docker compose --profile admin up -d`). The blocks page warns when neither is.
 - **A read-back mismatch** after a rule change — the error includes `flarehound rules restore <id>`; compare with the dashboard first.

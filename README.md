@@ -10,7 +10,7 @@ English | [中文](README.zh.md)
 
 Cloudflare gives you data. FlareHound gives you the conclusion.
 
-> Status: **v1.15.0** — origin view for VPS sites behind the proxy (origin unreachable 52x, origin latency P95, 5xx rate and status split); IP board (who keeps hitting, last hour and 24 h; verified bots folded, ranges summed), client IPs in the drill-down; "what is rising now": blocked board, trend strip vs yesterday, live faces; e-mail over HTTPS (Resend) where SMTP is blocked; per-zone WAF audit coverage; cross-zone home, block verdicts in the daily report, rule-covered faces marked, audit/rule snapshots; settings in the console (notifications with test sends, alert lines with a replay preview, known faces, network names); console in English or Chinese; WAF basics, rule recipes and plain-words rules; live hour and movers drill-down; web console with in-console blocking, undo, before/after, read-only snapshots and Google / GitHub sign-in; mark-as-known as a compact link. Documentation: **https://playwjj.github.io/flarehound/** · Changelog: [CHANGELOG.md](CHANGELOG.md)
+> Status: **v1.16.0** — expired blocks lifted by the console; block rules placed after skip rules and ahead of challenges, with a bypass warning at review; live 15-minute check per block and approximate attempts on Free; Worker CPU alerts check themselves (P50 vs P99 vs calls); origin view for VPS sites behind the proxy (origin unreachable 52x, origin latency P95, 5xx rate and status split); IP board (who keeps hitting, last hour and 24 h; verified bots folded, ranges summed), client IPs in the drill-down; "what is rising now": blocked board, trend strip vs yesterday, live faces; e-mail over HTTPS (Resend) where SMTP is blocked; per-zone WAF audit coverage; cross-zone home, block verdicts in the daily report, rule-covered faces marked, audit/rule snapshots; settings in the console (notifications with test sends, alert lines with a replay preview, known faces, network names); console in English or Chinese; WAF basics, rule recipes and plain-words rules; live hour and movers drill-down; web console with in-console blocking, undo, before/after, read-only snapshots and Google / GitHub sign-in; mark-as-known as a compact link. Documentation: **https://playwjj.github.io/flarehound/** · Changelog: [CHANGELOG.md](CHANGELOG.md)
 >
 > **Direction:** the built-in web console (since v1.3) is the centre of the product — live movers, new faces, history against the long-term baseline, the WAF audit and rules, settings, and in-console blocking with per-account audit. Notifications are the alerting layer that brings you to the console. See the [web console revision note](docs/web-console-revision.md).
 >
@@ -144,12 +144,12 @@ flarehound block country XX --action challenge
 flarehound block ua "BadBot/1.0" --for 7d --reason "scraper, 11-17 incident"
 flarehound unblock asn 207990
 flarehound blocks            # everything blocked, with 7-day attempts and expiry
-flarehound enforce           # long-running: lifts blocks whose --for has passed
+flarehound enforce           # optional: lifts expired blocks without a console
 ```
 
 Before anything changes you see the exact plan — the rule it edits and the expression afterwards, the custom-rule quota, the target's measured share of the last hour's excess, and every warning — and confirm once. FlareHound only ever edits its own objects (rules named `flarehound-…`, the IP list `flarehound_block`), merges each target type into one rule so your quota is barely touched, keeps verified search bots allowed on ASN and country rules, and reads the result back to verify. It refuses to block Cloudflare's ranges, your origin IPs (from DNS), private ranges and anything on your `blocking.never_block` list. Blocking a residential/backbone ASN or a whole country requires retyping the ASN or country code. Every action lands in an append-only audit log, and the daily report lists each block's attempts — lift a block when the attempts stop, not when it gets quiet.
 
-In Docker: `docker compose --profile admin up -d` starts the enforcer with the write token, and `docker compose run --rm flarehound-admin block …` runs commands.
+A console holding the write token lifts expired blocks itself (every 5 minutes); without a console, run `flarehound enforce` — in Docker `docker compose --profile admin up -d` starts it with the write token, and `docker compose run --rm flarehound-admin block …` runs commands.
 
 ## WAF basics and recipes
 

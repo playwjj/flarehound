@@ -55,7 +55,7 @@ With `base_url` set, alerts link to the movers view, recoveries and daily report
 | **IPs** | Which client addresses keep hitting the zone. **Last 60 minutes** (live, like the overview) or **24 h** (summed from the archive, which keeps each hour's top 50 addresses from v1.14 on): requests, share of the zone, *hours present* with a 24-hour strip (ranked by persistence, or by requests), the share stopped at the edge, the network, and *block…* per address (*blocked by FlareHound* when an active IP block covers it). IPv6 is summed per /64, IPv4 per /24 when two or more addresses of one /24 are listed (its largest addresses shown beneath, each drillable). Addresses Cloudflare verified as a known bot (real Googlebot, Bingbot, …) are folded at the bottom as *Verified bots* — a fake crawler is not verified and stays on the board; addresses in networks you marked known are folded too. Other crawler networks are labelled but never folded (AS8075 is Bingbot and Azure alike). Each address drills down into its paths, status codes, cache status and user agents. |
 | **History** | 24 h / 7 d / 30 d (or ending on a chosen date): requests and `dynamic` against a 28-day same-hour P25–P75 band, plus a timeline of alerts, recoveries, blocks, unblocks, expiries and rule changes. |
 | **WAF audit** | The same audit as `flarehound audit`, cached for 30 minutes; re-run on demand (once a minute at most). |
-| **Blocks** | With the write token: the blocks as Cloudflare holds them, joined with the audit log, attempts since each block, expiry, the rule quota and whether `flarehound enforce` is running; unblock, change expiry, undo, before/after. Without it: the audit log's view. |
+| **Blocks** | With the write token: the blocks as Cloudflare holds them, joined with the audit log, attempts since each block (approximate on Free), the last 15 minutes queried live, expiry, the rule quota and whether expired blocks are being lifted; unblock, change expiry, undo, before/after. Without it: the audit log's view. |
 
 Apart from the live hour and the drill-down, all numbers come from settled hourly windows in the archive — the same windows, queries and baseline the alerts use. The live hour uses the same queries on a rolling window; the drill-down queries Cloudflare live (it keeps about 31 days) and caches each breakdown for 10 minutes.
 
@@ -85,7 +85,11 @@ The same steps apply to **unblock** and to **change expiry** (+24 h, +7 days, +3
 
 **Before / after**: every comparison ends with a one-sentence verdict ("requests 45,000 → 900 (−98 %), practically gone", "still coming, but 95 % answered 403", "no clear effect — check that the rule matches"); the daily report lists the day's new blocks with theirs. For every block, the console compares the hour before with the hour after it took effect — the target's requests and share of the zone, its status codes (blocked requests are still counted, as 403), the zone total, and the rule's attempts. It is computed automatically once that hour has settled (a partial comparison is shown before) and the block is marked on the history timeline.
 
-**Expiry** stays the job of `flarehound enforce` (CLI, or the `admin` service in docker-compose). The blocks page shows when it last ran and warns when blocks have an expiry but the enforcer is not running.
+**Expiry**: a console holding the write token lifts expired blocks itself, every 5 minutes, recorded as `system:expiry` in both audit logs (v1.16). The blocks page shows when the expiry pass last ran and warns when blocks have an expiry but nothing is lifting them (no console with the write token and no `flarehound enforce`).
+
+**Position and bypass**: review shows where the rule holding the target sits ("inserted at #4, after … and before …") — after the zone's skip rules, ahead of its challenge and block rules — and a red warning when a skip rule ahead would let this target through (see [Blocking](blocking.md)).
+
+**Two-factor hint**: while the console holds the write token and `console.require_totp` is off, admins see a banner until the option is turned on or an admin keeps it off explicitly (recorded in the audit log).
 
 The CLI (`flarehound block / unblock / blocks / enforce`) is unchanged and remains the fallback when the console is down.
 

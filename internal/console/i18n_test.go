@@ -44,7 +44,7 @@ func TestI18nKeys(t *testing.T) {
 	}
 	// Keys passed through page fields / helpers.
 	for _, k := range []string{"m_total", "m_worker_calls", "m_worker_cpu", "m_dynamic", "m_origin5xx",
-		"m_unreachable", "m_origin_ttfb", "m_origin_total"} {
+		"m_unreachable", "m_unreachable_book", "m_origin_ttfb", "m_origin_total"} {
 		add(k, "data.go")
 	}
 	if len(used) < 100 {

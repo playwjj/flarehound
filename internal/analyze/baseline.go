@@ -45,6 +45,7 @@ func Median(samples []Metrics) Metrics {
 	var ttfb, otot, tcp, tls []float64
 	calls := map[string][]int64{}
 	cpu := map[string][]float64{}
+	cpu99 := map[string][]float64{}
 	paths := map[string][]int64{}
 	var workerOrder []string
 	for _, s := range samples {
@@ -63,6 +64,9 @@ func Median(samples []Metrics) Metrics {
 			}
 			calls[w.Name] = append(calls[w.Name], w.Calls)
 			cpu[w.Name] = append(cpu[w.Name], w.CPUP50ms)
+			if w.CPUP99ms > 0 { // hours archived before v1.16 have no P99
+				cpu99[w.Name] = append(cpu99[w.Name], w.CPUP99ms)
+			}
 		}
 		for k, v := range s.Paths {
 			paths[k] = append(paths[k], v)
@@ -77,7 +81,11 @@ func Median(samples []Metrics) Metrics {
 			TCPP95ms: medianFloat(tcp), TLSP95ms: medianFloat(tls)}
 	}
 	for _, name := range workerOrder {
-		m.Workers = append(m.Workers, WorkerMetrics{Name: name, Calls: medianInt(calls[name]), CPUP50ms: medianFloat(cpu[name])})
+		wm := WorkerMetrics{Name: name, Calls: medianInt(calls[name]), CPUP50ms: medianFloat(cpu[name])}
+		if len(cpu99[name]) > 0 {
+			wm.CPUP99ms = medianFloat(cpu99[name])
+		}
+		m.Workers = append(m.Workers, wm)
 	}
 	if len(paths) > 0 {
 		m.Paths = map[string]int64{}

@@ -73,8 +73,56 @@ func (c *CF) AddRule(_ context.Context, _, _ string, r cfapi.Rule) (cfapi.Rulese
 	}
 	c.log("add_rule " + r.Ref)
 	r.ID = c.id("r")
-	c.RS.Rules = append(c.RS.Rules, r)
+	pos := r.Position
+	r.Position = nil
+	if err := c.insert(r, pos); err != nil {
+		return cfapi.Ruleset{}, err
+	}
 	return clone(c.RS), nil
+}
+
+// insert places r by position (nil: append), as Cloudflare does.
+func (c *CF) insert(r cfapi.Rule, pos *cfapi.Position) error {
+	if pos == nil {
+		c.RS.Rules = append(c.RS.Rules, r)
+		return nil
+	}
+	for i, x := range c.RS.Rules {
+		switch x.ID {
+		case pos.Before:
+			c.RS.Rules = slices.Insert(c.RS.Rules, i, r)
+			return nil
+		case pos.After:
+			c.RS.Rules = slices.Insert(c.RS.Rules, i+1, r)
+			return nil
+		}
+	}
+	return &cfapi.APIError{Status: 400, Message: "position: rule not found"}
+}
+
+// UserRuleAction adds a user rule with a given action (and, for skip,
+// what it skips).
+func (c *CF) UserRuleAction(desc, action, expr string) string {
+	c.UserRule(desc, expr)
+	r := &c.RS.Rules[len(c.RS.Rules)-1]
+	r.Action = action
+	if action == "skip" {
+		r.ActionParameters = &cfapi.ActionParameters{Ruleset: "current"}
+	}
+	return r.ID
+}
+
+// Order lists the rules' refs (or descriptions for user rules), in order.
+func (c *CF) Order() []string {
+	var out []string
+	for _, r := range c.RS.Rules {
+		if r.Ref != "" {
+			out = append(out, r.Ref)
+		} else {
+			out = append(out, r.Description)
+		}
+	}
+	return out
 }
 func (c *CF) UpdateRule(_ context.Context, _, _ string, r cfapi.Rule) (cfapi.Ruleset, error) {
 	for i := range c.RS.Rules {
@@ -83,7 +131,17 @@ func (c *CF) UpdateRule(_ context.Context, _, _ string, r cfapi.Rule) (cfapi.Rul
 				return cfapi.Ruleset{}, fmt.Errorf("test: updated a user rule")
 			}
 			c.log("update_rule " + r.Ref + " " + r.Expression)
-			c.RS.Rules[i] = r
+			pos := r.Position
+			r.Position = nil
+			if pos == nil {
+				c.RS.Rules[i] = r
+				return clone(c.RS), nil
+			}
+			c.log("move_rule " + r.Ref)
+			c.RS.Rules = slices.Delete(c.RS.Rules, i, i+1)
+			if err := c.insert(r, pos); err != nil {
+				return cfapi.Ruleset{}, err
+			}
 			return clone(c.RS), nil
 		}
 	}

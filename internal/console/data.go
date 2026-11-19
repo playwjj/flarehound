@@ -154,6 +154,10 @@ func originRows(th config.Thresholds, cur, base analyze.Metrics, has bool) []Met
 		switch {
 		case cur.Unreachable > 0 && cur.Unreachable >= th.UnreachableMin && u.Cur >= 2*u.Base:
 			u.Status = StatusAlert
+		case has && analyze.UnreachableArtifact(cur, base):
+			// A steady 522/524 background with the origin answering:
+			// bookkeeping (Worker zones), labelled as such, not "watch".
+			u.Status, u.Key = StatusOK, "m_unreachable_book"
 		case cur.Unreachable > 0:
 			u.Status = StatusWatch
 		default:

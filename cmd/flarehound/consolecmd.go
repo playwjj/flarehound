@@ -270,6 +270,12 @@ func serveConsole(ctx context.Context, cfg *config.Config, cfgPath string, db *c
 		mode = "blocking enabled for admins"
 	}
 	go srv.Background(ctx) // keeps slow pages warm (and, with the write token, blocks and effects)
+	if srv.CanWrite() {
+		// The console holds the write token: it lifts expired blocks itself
+		// (a separate `flarehound enforce` is no longer required).
+		go srv.ExpiryLoop(ctx)
+		mode += ", lifts expired blocks"
+	}
 	hs := &http.Server{Addr: cs.Listen, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout: 30 * time.Second, WriteTimeout: 3 * time.Minute, IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 64 << 10}
 

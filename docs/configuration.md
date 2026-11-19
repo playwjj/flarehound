@@ -13,7 +13,7 @@ A complete example is `config.example.json` in the repository. Validation errors
 | `cloudflare.zones` | array | — | **Required**, at least one zone. |
 | `cloudflare.zones[].zone_id` | string | — | **Required.** 32-char hex zone ID. |
 | `cloudflare.zones[].name` | string | the zone ID | Display name; also the default WAF-audit probe host and the `--zone` selector. |
-| `cloudflare.zones[].workers` | string[] | `[]` | Worker script names to watch (invocations and CPU P50). Each is evaluated separately. Needs Account Analytics: Read. |
+| `cloudflare.zones[].workers` | string[] | `[]` | Worker script names to watch (invocations and CPU P50 / P99). Each is evaluated separately. Needs Account Analytics: Read. |
 | `cloudflare.zones[].waf_audit.hosts` | string[] | global hosts in this zone, else the zone name | This zone's WAF-audit probe hosts. Each must be the zone or a subdomain of it. |
 | `cloudflare.zones[].waf_audit.sensitive_paths` | string[] | — | This zone's whole sensitive-path list for the coverage check. When set (even `[]`), the default list is not used for this zone. |
 

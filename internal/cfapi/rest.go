@@ -213,6 +213,15 @@ type Rule struct {
 	// Read-side only (the audit); never sent by FlareHound's writes.
 	ActionParameters *ActionParameters `json:"action_parameters,omitempty"`
 	LastUpdated      time.Time         `json:"last_updated,omitzero"`
+	// Write-side only: where to put the rule on create / update (nil:
+	// append on create, stay in place on update).
+	Position *Position `json:"position,omitempty"`
+}
+
+// Position places a rule relative to another rule of the same ruleset.
+type Position struct {
+	Before string `json:"before,omitempty"`
+	After  string `json:"after,omitempty"`
 }
 
 // ActionParameters of a skip rule: what it skips.
@@ -248,7 +257,7 @@ func (c *REST) CreateEntrypoint(ctx context.Context, zoneID string, r Rule) (Rul
 	return rs, err
 }
 
-// AddRule appends a rule to the ruleset (after the user's rules).
+// AddRule adds a rule to the ruleset: at r.Position, or appended.
 func (c *REST) AddRule(ctx context.Context, zoneID, rulesetID string, r Rule) (Ruleset, error) {
 	var rs Ruleset
 	_, err := c.do(ctx, http.MethodPost, fmt.Sprintf("/zones/%s/rulesets/%s/rules", url.PathEscape(zoneID), url.PathEscape(rulesetID)), r, &rs)

@@ -28,6 +28,7 @@ h3 { font-size: .95rem; margin: 1rem 0 .4rem; }
 .nowrap { white-space: nowrap; }
 .r { text-align: right; }
 .good { color: var(--ok); } .bad { color: var(--alert); }
+small.live { color: var(--ok); white-space: nowrap; }
 
 header.top { display: flex; align-items: center; justify-content: space-between; gap: .5rem;
   padding: .6rem 1rem; background: var(--card); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 2; }

@@ -148,7 +148,8 @@ func TestManagerLifecycle(t *testing.T) {
 	m := &block.Manager{API: cf, ZoneID: "z", AccountID: "acct"}
 	ctx := context.Background()
 
-	// ASN: creates one rule, appended after the user's rule.
+	// ASN: creates one rule, ahead of the user's protective rule (no skip
+	// rules here) — a confirmed target is not challenged first.
 	p := apply(t, m, mustT(t, "asn", "207990"), block.Challenge)
 	if p.Op != block.OpCreateRule {
 		t.Fatalf("op %s", p.Op)
@@ -162,8 +163,8 @@ func TestManagerLifecycle(t *testing.T) {
 	if r.Expression != "(ip.geoip.asnum in {24940 207990}) and not cf.client.bot" || r.Action != "managed_challenge" {
 		t.Fatalf("rule %+v", r)
 	}
-	if cf.RS.Rules[0].Description != "my login challenge" || len(cf.RS.Rules) != 2 {
-		t.Fatal("user rule moved or touched")
+	if u := cf.RS.Rules[1]; u.Description != "my login challenge" || u.Expression != `http.request.uri.path eq "/login"` || len(cf.RS.Rules) != 2 {
+		t.Fatalf("user rule touched, or FlareHound's not placed first: %v", cf.Order())
 	}
 
 	// IP block: list + rule.
@@ -303,5 +304,100 @@ func TestMissingPermissionsDegrade(t *testing.T) {
 	st, _ = m.Load(context.Background())
 	if _, err := st.PlanBlock(mustT(t, "asn", "64496"), block.Challenge); err == nil || !strings.Contains(err.Error(), "Zone → WAF: Edit") {
 		t.Fatalf("full quota without access-rule permission: %v", err)
+	}
+}
+
+// The 2026-11-19 starngage case: a new IP block landed last (#18), behind
+// the challenge rule #13, so the confirmed IP kept eating challenges.
+// Placement: after every skip rule, before the first user challenge/block.
+func TestPlacement(t *testing.T) {
+	cf := fakecf.New("pro", 20)
+	cf.UserRuleAction("allow own services", "skip", `ip.src in {203.0.113.7}`)
+	cf.UserRuleAction("UA allowlist", "skip", `http.user_agent contains "StarngageBot"`)
+	cf.UserRuleAction("log api", "log", `http.request.uri.path eq "/api"`)
+	cf.UserRuleAction("Protected Pages", "managed_challenge", `http.request.uri.path eq "/login"`)
+	cf.UserRuleAction("block bad paths", "block", `http.request.uri.path eq "/wp-admin"`)
+	m := &block.Manager{API: cf, ZoneID: "z", AccountID: "acct"}
+	ctx := context.Background()
+
+	st, _ := m.Load(ctx)
+	ip := mustT(t, "ip", "106.201.104.211")
+	p, err := st.PlanBlock(ip, block.Block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Place.Pos != 4 || p.Place.Skips != 2 || p.Place.Before == nil || p.Place.Before.Description != "Protected Pages" {
+		t.Fatalf("placement %+v", p.Place)
+	}
+	if d := p.Place.Describe(); !strings.Contains(d, "inserted at #4, after «log api» (log) and before «Protected Pages» (managed_challenge)") {
+		t.Fatal(d)
+	}
+	e, err := m.Apply(ctx, st, p, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"allow own services", "UA allowlist", "log api", "flarehound-ip-block", "Protected Pages", "block bad paths"}
+	if !slices.Equal(cf.Order(), want) || e.Pos != 4 {
+		t.Fatalf("order %v (read back #%d)", cf.Order(), e.Pos)
+	}
+
+	// Adding members does not move the rule.
+	cf.Calls = nil
+	apply(t, m, mustT(t, "ip", "45.13.7.9"), block.Block)
+	if slices.ContainsFunc(cf.Calls, func(c string) bool { return strings.HasPrefix(c, "move_rule") }) || !slices.Equal(cf.Order(), want) {
+		t.Fatalf("moved on a member add: %v %v", cf.Calls, cf.Order())
+	}
+
+	// A FlareHound rule created before v1.16 sits last: moved once.
+	cf2 := fakecf.New("pro", 20)
+	cf2.UserRuleAction("UA allowlist", "skip", `http.user_agent contains "StarngageBot"`)
+	cf2.UserRuleAction("Protected Pages", "managed_challenge", `http.request.uri.path eq "/login"`)
+	m2 := &block.Manager{API: cf2, ZoneID: "z", AccountID: "acct"}
+	cf2.RS.Rules = append(cf2.RS.Rules, cfapi.Rule{ID: "old", Ref: "flarehound-asn-block", Description: "flarehound-asn-block (managed by FlareHound)",
+		Action: "block", Expression: "(ip.geoip.asnum in {45102}) and not cf.client.bot", Enabled: true})
+	st2, _ := m2.Load(ctx)
+	p2, err := st2.PlanBlock(mustT(t, "asn", "24560"), block.Block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p2.Place.Move || p2.Place.From != 3 || p2.Place.Pos != 2 || !strings.Contains(p2.Place.Describe(), "moves once from #3 to #2") {
+		t.Fatalf("%+v %s", p2.Place, p2.Place.Describe())
+	}
+	if _, err := m2.Apply(ctx, st2, p2, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if got := cf2.Order(); !slices.Equal(got, []string{"UA allowlist", "flarehound-asn-block", "Protected Pages"}) {
+		t.Fatalf("order %v", got)
+	}
+	st2, _ = m2.Load(ctx)
+	if p3, _ := st2.PlanBlock(mustT(t, "asn", "30058"), block.Block); p3.Place.Move || !strings.Contains(p3.Place.Describe(), "stays at #2") {
+		t.Fatalf("second add must not move: %+v", p3.Place)
+	}
+}
+
+// A target that carries the allowlisted user agent would be skipped
+// before it reaches the block: review must say so.
+func TestBypassWarning(t *testing.T) {
+	cf := fakecf.New("pro", 20)
+	cf.UserRuleAction("UA allowlist", "skip", `http.user_agent contains "StarngageBot"`)
+	cf.UserRuleAction("own monitor", "skip", `ip.src eq 198.51.100.9`)
+	cf.UserRuleAction("Protected Pages", "managed_challenge", `http.request.uri.path eq "/login"`)
+	m := &block.Manager{API: cf, ZoneID: "z", AccountID: "acct"}
+	st, _ := m.Load(context.Background())
+	ip := mustT(t, "ip", "106.201.104.211")
+	p, _ := st.PlanBlock(ip, block.Block)
+	profile := []cfapi.Face{{Name: "Mozilla/5.0 StarngageBot/2.1", Count: 300}, {Name: "curl/8", Count: 100}}
+	bs := st.Bypasses(ip, p.RuleRef, p.Place.Pos, profile)
+	if len(bs) != 1 || bs[0].Pos != 1 || bs[0].Share != 0.75 || !strings.Contains(bs[0].String(), "skip rule #1 «UA allowlist» (skip)") {
+		t.Fatalf("%+v", bs)
+	}
+	// The monitor's IP itself is skipped by its own rule.
+	mon := mustT(t, "ip", "198.51.100.9")
+	if bs := st.Bypasses(mon, p.RuleRef, p.Place.Pos, nil); len(bs) != 1 || bs[0].Pos != 2 || bs[0].UA != "" {
+		t.Fatalf("%+v", bs)
+	}
+	// An ordinary crawler is not.
+	if bs := st.Bypasses(ip, p.RuleRef, p.Place.Pos, []cfapi.Face{{Name: "curl/8", Count: 1}}); len(bs) != 0 {
+		t.Fatalf("%+v", bs)
 	}
 }

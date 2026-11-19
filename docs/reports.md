@@ -34,7 +34,7 @@ Suggestions (read-only — FlareHound never applies them; do it in the Cloudflar
 The parts, in order:
 
 1. **Headline** — which lines were crossed and by how much (up to four; collapse, 5xx, expensive, total and new faces first).
-2. **Two-window comparison** — total, Worker invocations and CPU P50, dynamic, origin 5xx (with its share of origin answers and the 502/503/504 split), origin unreachable (52x, when any), origin latency P95 (first byte / full response); plus the long baseline when it is active.
+2. **Two-window comparison** — total, Worker invocations and CPU P50 / P99, dynamic, origin 5xx (with its share of origin answers and the 502/503/504 split), origin unreachable (52x, when any; a steady 522/524 background in both windows with the origin answering is footnoted as edge bookkeeping), origin latency P95 (first byte / full response); plus the long baseline when it is active.
 3. **Attribution** — collected only when a message is going out (quiet rounds cost no extra queries). A failed attribution query never blocks the alert.
 4. **Hypotheses** — each with confidence and a falsifier. With no supported hypothesis the message says it reports numbers only.
 5. **Block candidates** — see below.
@@ -44,7 +44,7 @@ Email gets the same report as HTML with charts, and Telegram, Discord and WeCom 
 
 ### Severity: is it loud, or does it hurt?
 
-A flood that the edge absorbs — zone requests or Worker calls up, new faces, but **real rendering (`dynamic`) up less than 15%** and no dynamic, CPU, origin 5xx, origin slow/unreachable, collapse or path line crossed — is reported as its own verdict at **low severity**: *"edge-absorbed flood: the extra traffic is absorbed at the edge, real rendering +1.0%, CPU and origin errors unchanged — watch it, no action needed."* Anything expensive or broken makes it **high**. The JSONL record carries `severity: "low" | "high"`.
+A flood that the edge absorbs — zone requests or Worker calls up, new faces, but **real rendering (`dynamic`) up less than 15%** and no dynamic, CPU, origin 5xx, origin slow/unreachable, collapse or path line crossed — is reported as its own verdict at **low severity**: *"edge-absorbed flood: the extra traffic is absorbed at the edge, real rendering +1.0%, CPU and origin errors unchanged — watch it, no action needed."* A Worker CPU P50 rise that P99 and the call count explain as a **mix change** (and nothing else expensive) is also low severity: *"low severity: Worker CPU mix change"*. Anything expensive or broken makes it **high**. The JSONL record carries `severity: "low" | "high"`.
 
 ### Dashboard terms and network labels
 

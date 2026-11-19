@@ -114,6 +114,7 @@ type Server struct {
 	attemptsMu    sync.Mutex
 	attemptsCache map[string]attemptsEntry
 	attemptsBusy  map[string]bool
+	blockLive     map[string]blockLiveEntry // block live checks, under attemptsMu
 
 	rulesMu    sync.Mutex
 	rulesCache map[string]rulesEntry
@@ -144,7 +145,7 @@ type auditEntry struct {
 func New(cfg *config.Config, db *DB, arch Archive, auditor Auditor, version string) (*Server, string, error) {
 	s := &Server{Cfg: cfg, DB: db, Archive: arch, Auditor: auditor, Version: version, Now: time.Now,
 		trusted: cfg.TrustedProxies(), defLang: lang(cfg.Report.Language), limiter: newLimiter(10, time.Minute), totpAcct: newLimiter(20, time.Hour), totpSess: newLimiter(5, preMFATTL),
-		auditCache: map[string]auditEntry{}, attemptsCache: map[string]attemptsEntry{}, attemptsBusy: map[string]bool{},
+		auditCache: map[string]auditEntry{}, attemptsCache: map[string]attemptsEntry{}, attemptsBusy: map[string]bool{}, blockLive: map[string]blockLiveEntry{},
 		liveCache: map[string]*liveEntry{}, drillCache: map[string]*drillEntry{}, rulesCache: map[string]rulesEntry{},
 		blockedCache: map[string]*blockedEntry{}, ipCache: map[string]*ipEntry{}}
 	s.OAuth = builtinProviders(cfg.Console)
@@ -305,6 +306,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /rules/review", admin(s.requireRules(s.ruleReview)))
 	mux.Handle("POST /rules/apply", admin(s.requireRules(s.ruleApply)))
 	mux.Handle("GET /blocks", user(s.blocksPage))
+	mux.Handle("POST /totp-hint/dismiss", admin(s.totpHintDismiss))
 	mux.Handle("GET /blocks/new", admin(s.requireWrite(s.blockNewPage)))
 	mux.Handle("POST /blocks/review", admin(s.requireWrite(s.blockReview)))
 	mux.Handle("POST /blocks/apply", admin(s.requireWrite(s.blockApply)))

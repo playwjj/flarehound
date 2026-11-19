@@ -139,6 +139,7 @@ type row struct {
 	} `json:"sum"`
 	Quantiles struct {
 		CPUP50 float64 `json:"cpuTimeP50"` // microseconds
+		CPUP99 float64 `json:"cpuTimeP99"` // microseconds
 		// Origin latency P95s, milliseconds (OriginStats only).
 		OriginTTFBP95  float64 `json:"originResponseHeaderReceiveDurationMsP95"`
 		OriginTotalP95 float64 `json:"originResponseDurationMsP95"`
@@ -606,31 +607,95 @@ func (c *Client) FirewallTop(ctx context.Context, zoneID string, from, to time.T
 	return faces(rows, dim), nil
 }
 
-// WorkerStats returns invocation count (requests, including subrequests)
-// and CPU P50 in milliseconds for one Worker script in the window.
+// WorkerStat is one Worker script's window: invocations (including
+// subrequests) and CPU time quantiles in milliseconds.
+type WorkerStat struct {
+	Requests int64
+	CPUP50ms float64
+	CPUP99ms float64
+}
+
+// WorkerStats returns invocation count and the CPU P50 / P99 for one
+// Worker script in the window — one query, both quantiles. The P99 is
+// what tells "the typical call got more expensive" from "the cheap calls
+// left and the median moved" (a mix change).
 // The dataset has quantiles only; there is no CPU total — cost estimates
 // must be derived and labelled as estimates.
-func (c *Client) WorkerStats(ctx context.Context, accountID, script string, from, to time.Time) (requests int64, cpuP50ms float64, err error) {
-	q := fmt.Sprintf(`{viewer{accounts(filter:{accountTag:%s}){workersInvocationsAdaptive(limit:100,filter:{%s}){sum{requests}quantiles{cpuTimeP50}}}}}`,
+func (c *Client) WorkerStats(ctx context.Context, accountID, script string, from, to time.Time) (WorkerStat, error) {
+	var st WorkerStat
+	q := fmt.Sprintf(`{viewer{accounts(filter:{accountTag:%s}){workersInvocationsAdaptive(limit:100,filter:{%s}){sum{requests}quantiles{cpuTimeP50 cpuTimeP99}}}}}`,
 		quote(accountID), Filter{WorkerScript: script}.render(from, to))
 	r, err := c.query(ctx, q)
 	if err != nil {
-		return 0, 0, err
+		return st, err
 	}
 	if len(r.Data.Viewer.Accounts) == 0 {
-		return 0, 0, ErrNoAccess
+		return st, ErrNoAccess
 	}
 	// Usually a single group. If the API splits it, the request-weighted
-	// mean of the P50s is an approximation, not a true quantile.
-	var wsum float64
+	// mean of the quantiles is an approximation, not a true quantile.
+	var w50, w99 float64
 	for _, inv := range r.Data.Viewer.Accounts[0].Workers {
-		requests += inv.Sum.Requests
-		wsum += inv.Quantiles.CPUP50 * float64(inv.Sum.Requests)
+		st.Requests += inv.Sum.Requests
+		w50 += inv.Quantiles.CPUP50 * float64(inv.Sum.Requests)
+		w99 += inv.Quantiles.CPUP99 * float64(inv.Sum.Requests)
 	}
-	if requests > 0 {
-		cpuP50ms = wsum / float64(requests) / 1000.0
+	if st.Requests > 0 {
+		st.CPUP50ms = w50 / float64(st.Requests) / 1000.0
+		st.CPUP99ms = w99 / float64(st.Requests) / 1000.0
 	}
-	return requests, cpuP50ms, nil
+	return st, nil
+}
+
+// MinuteCount is one minute of a per-minute breakdown.
+type MinuteCount struct {
+	At time.Time
+	Face
+}
+
+// Minutes returns per-minute counts, newest first, of the firewall-events
+// dataset (firewall true) or the HTTP requests dataset, optionally split
+// by one more dimension (dim, "" for none). It is the live check behind
+// "is this block catching anything right now" — the minute grain also
+// says when the last attempt was.
+func (c *Client) Minutes(ctx context.Context, zoneID string, firewall bool, from, to time.Time, dim string, f Filter, limit int) ([]MinuteCount, error) {
+	dataset := "httpRequestsAdaptiveGroups"
+	if firewall {
+		dataset = "firewallEventsAdaptiveGroups"
+	}
+	dims := "datetimeMinute"
+	if dim != "" {
+		dims += " " + dim
+	}
+	q := fmt.Sprintf(`{viewer{zones(filter:{zoneTag:%s}){%s(limit:%d,orderBy:[datetimeMinute_DESC],filter:{%s}){count dimensions{%s}}}}}`,
+		quote(zoneID), dataset, limit, f.render(from, to), dims)
+	r, err := c.query(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	if len(r.Data.Viewer.Zones) == 0 {
+		return nil, ErrNoAccess
+	}
+	rows := r.Data.Viewer.Zones[0].HTTP
+	if firewall {
+		rows = r.Data.Viewer.Zones[0].Firewall
+	}
+	out := make([]MinuteCount, 0, len(rows))
+	for _, rw := range rows {
+		m := MinuteCount{Face: Face{Count: rw.Count}}
+		if s, ok := rw.Dimensions["datetimeMinute"].(string); ok {
+			m.At, _ = time.Parse(time.RFC3339, s)
+		}
+		if dim != "" {
+			v := rw.Dimensions[dim]
+			if dim == DimASN || dim == FwDimASN {
+				m.ASN, _ = asnOf(v)
+			}
+			m.Name = fmt.Sprint(v)
+		}
+		out = append(out, m)
+	}
+	return out, nil
 }
 
 // OriginStats is the origin's side of a window, read over the requests

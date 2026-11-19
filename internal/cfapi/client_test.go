@@ -114,10 +114,24 @@ func TestClientIPDimAndSplitBots(t *testing.T) {
 
 func TestWorkerStats(t *testing.T) {
 	c := server(t, `{"data":{"viewer":{"accounts":[{"workersInvocationsAdaptive":[
-		{"sum":{"requests":1000},"quantiles":{"cpuTimeP50":4000}}]}]}}}`, nil)
-	n, cpu, err := c.WorkerStats(context.Background(), "acct", "web", from, to)
-	if err != nil || n != 1000 || cpu != 4 {
-		t.Fatalf("n=%d cpu=%v err=%v", n, cpu, err)
+		{"sum":{"requests":1000},"quantiles":{"cpuTimeP50":4000,"cpuTimeP99":25000}}]}]}}}`, nil)
+	st, err := c.WorkerStats(context.Background(), "acct", "web", from, to)
+	if err != nil || st.Requests != 1000 || st.CPUP50ms != 4 || st.CPUP99ms != 25 {
+		t.Fatalf("%+v err=%v", st, err)
+	}
+}
+
+func TestMinutes(t *testing.T) {
+	var q string
+	c := server(t, `{"data":{"viewer":{"zones":[{"firewallEventsAdaptiveGroups":[
+		{"count":3,"dimensions":{"datetimeMinute":"2026-11-19T01:07:00Z","clientIP":"45.13.7.7"}},
+		{"count":5,"dimensions":{"datetimeMinute":"2026-11-19T01:02:00Z","clientIP":"45.13.7.8"}}]}]}}}`, &q)
+	got, err := c.Minutes(context.Background(), "zone", true, from, to, FwDimIP, Filter{FirewallRuleID: "r1"}, 100)
+	if err != nil || len(got) != 2 || got[0].Name != "45.13.7.7" || got[0].Count != 3 || !got[0].At.Equal(time.Date(2026, 11, 19, 1, 7, 0, 0, time.UTC)) {
+		t.Fatalf("got %+v %v", got, err)
+	}
+	if !strings.Contains(q, "firewallEventsAdaptiveGroups") || !strings.Contains(q, "datetimeMinute_DESC") || !strings.Contains(q, `ruleId:"r1"`) {
+		t.Fatalf("query %s", q)
 	}
 }
 

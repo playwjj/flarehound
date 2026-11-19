@@ -144,7 +144,7 @@ func runDoctor(ctx context.Context, cfg *config.Config, cfgPath string, out io.W
 			}
 		}
 		for _, wk := range z.Workers {
-			if _, _, err := read.WorkerStats(ctx, cfg.Cloudflare.AccountID, wk, w.From, w.To); err != nil {
+			if _, err := read.WorkerStats(ctx, cfg.Cloudflare.AccountID, wk, w.From, w.To); err != nil {
 				d.bad("worker %s: %v — grant Account → Account Analytics: Read", wk, err)
 			} else {
 				d.ok("worker %s: metrics readable", wk)

@@ -29,6 +29,7 @@ type ReadAPI interface {
 	ASNName(ctx context.Context, zoneID string, from, to time.Time, asn int) (string, error)
 	Capabilities(ctx context.Context, zoneID string) (cfapi.Caps, error)
 	block.FirewallAPI
+	block.MinutesAPI
 }
 
 // WriteAPI is the write-token REST surface plus the guard-rail reads.
@@ -158,6 +159,11 @@ type Prepared struct {
 	Strong     bool     // the person must retype StrongWant
 	StrongWant string
 	ExpiresAt  time.Time // zero: permanent
+	// Where is the rule's place in the custom rules after the change, in
+	// words ("" for IP Access Rules); Bypass lists skip rules ahead of it
+	// that let this target through — the block may then do nothing.
+	Where  string
+	Bypass []string
 
 	state block.State
 }
@@ -213,11 +219,43 @@ func (e *Env) Prepare(ctx context.Context, t block.Target, o BlockOpts) (*Prepar
 	}
 	_, p.Share, p.Measured, p.ShareKnown = e.measure(ctx, t)
 	p.Warnings = block.Warnings(t, o.Action, p.Network, p.Share, p.ShareKnown)
+	if !p.Plan.Place.Ignored {
+		p.Where = p.Plan.Place.Describe()
+		for _, b := range st.Bypasses(t, p.Plan.RuleRef, p.Plan.Place.Pos, e.profile(ctx, t)) {
+			p.Bypass = append(p.Bypass, b.String())
+		}
+	}
 	p.Strong, p.StrongWant = block.NeedsStrongConfirm(t, o.Action, p.Network)
 	if o.TTL > 0 {
 		p.ExpiresAt = e.now().Add(o.TTL)
 	}
 	return p, nil
+}
+
+// topAPI is the optional Top-N read the bypass check uses for the
+// target's user agents.
+type topAPI interface {
+	Top(ctx context.Context, zoneID string, from, to time.Time, dim string, limit int, f cfapi.Filter) ([]cfapi.Face, error)
+}
+
+// profile returns the target's top user agents over the last 24 hours —
+// what the skip rules ahead of the block are evaluated against. Empty when
+// the target cannot be selected or the read API has no Top.
+func (e *Env) profile(ctx context.Context, t block.Target) []cfapi.Face {
+	tp, ok := e.Read.(topAPI)
+	if !ok {
+		return nil
+	}
+	f, ok := FilterFor(t)
+	if !ok {
+		return nil
+	}
+	to := e.now().UTC().Truncate(time.Minute)
+	fs, err := tp.Top(ctx, e.Zone.ZoneID, to.Add(-24*time.Hour), to, cfapi.DimUserAgent, 10, f)
+	if err != nil {
+		return nil
+	}
+	return fs
 }
 
 // Execute applies a prepared block (verified by read-back) and appends
@@ -230,6 +268,9 @@ func (e *Env) Execute(ctx context.Context, p *Prepared) (block.Entry, error) {
 	entry, err := e.manager().Apply(ctx, p.state, p.Plan, comment)
 	if err != nil {
 		return entry, err
+	}
+	if want := p.Plan.Place; !want.Ignored && entry.Pos > 0 && entry.Pos != want.Pos {
+		p.Notes = append(p.Notes, fmt.Sprintf("read-back: rule %s is at #%d, expected #%d — the block is live; check the order in the dashboard", p.Plan.RuleRef, entry.Pos, want.Pos))
 	}
 	ev := store.BlockEvent{At: e.now(), Zone: e.Zone.ZoneID, Op: "block", Type: string(p.Target.Type), Value: p.Target.Value,
 		Action: string(p.Opts.Action), Mechanism: string(entry.Mechanism), RuleID: entry.RuleID, Reason: p.Opts.Reason,
@@ -247,23 +288,31 @@ var ErrAuditFailed = errors.New("applied, but the audit record failed")
 
 // FilterFor is the analytics filter selecting a target's requests. CIDRs
 // and countries cannot be selected in adaptive analytics (ok is false).
-func FilterFor(t block.Target) (cfapi.Filter, bool) {
-	f := cfapi.Filter{}
-	switch t.Type {
-	case block.ASN:
-		f.ASN = t.ASNumber()
-	case block.UA:
-		f.UserAgentLike = "%" + t.Value + "%"
-	case block.IP:
-		pf, _ := t.Prefix()
-		if !pf.IsSingleIP() {
-			return f, false
-		}
-		f.ClientIP = pf.Addr().String()
-	default:
-		return f, false
+func FilterFor(t block.Target) (cfapi.Filter, bool) { return block.AnalyticsFilter(t) }
+
+// ApproxAttempts approximates a block's attempts in [from, to) from the
+// archived IP board (zones without firewall events). ok is false when the
+// target is not an IP or there is no archive.
+func (e *Env) ApproxAttempts(t block.Target, from, to time.Time) (block.Approx, bool, error) {
+	if e.Store == nil || t.Type != block.IP {
+		return block.Approx{}, false, nil
 	}
-	return f, true
+	hs, err := e.Store.HourSnapshots(e.Zone.ZoneID, from, to)
+	if err != nil {
+		return block.Approx{}, false, err
+	}
+	hf := make([]block.HourFaces, 0, len(hs))
+	for _, h := range hs {
+		hf = append(hf, block.HourFaces{From: h.From, Faces: h.BlockedIPs})
+	}
+	a, ok := block.ApproxAttempts(t, hf)
+	return a, ok, nil
+}
+
+// LiveCheck runs the live check for one block (see block.LiveCheck).
+func (e *Env) LiveCheck(ctx context.Context, x block.Entry, caps cfapi.Caps) (block.Live, bool, error) {
+	firewall := !caps.Probed || caps.FirewallEnabled
+	return block.LiveCheck(ctx, e.Read, e.Zone.ZoneID, x.RuleID, x.Target, firewall, e.now())
 }
 
 // Live loads the zone's FlareHound blocks as Cloudflare holds them.
@@ -297,18 +346,24 @@ func (e *Env) Block(ctx context.Context, t block.Target, o BlockOpts) error {
 	if p.Plan.Expression != "" {
 		e.printf("Rule after: %s\n", p.Plan.Expression)
 	}
+	if p.Where != "" {
+		e.printf("Position:   rule %s %s\n", p.Plan.RuleRef, p.Where)
+	}
 	if p.ShareKnown {
 		e.printf("Measured:   %s\n", p.Measured)
 	} else {
 		e.printf("Measured:   not measurable for this target type\n")
 	}
 	if o.TTL > 0 {
-		e.printf("Expires:    %s (after %s; needs `flarehound enforce` running)\n", p.ExpiresAt.In(e.loc()).Format("2006-01-02 15:04 MST"), o.TTL)
+		e.printf("Expires:    %s (after %s; lifted by the console holding the write token, or by `flarehound enforce`)\n", p.ExpiresAt.In(e.loc()).Format("2006-01-02 15:04 MST"), o.TTL)
 	} else {
 		e.printf("Expires:    never (unblock with `flarehound unblock %s %s`)\n", t.Type, t.Value)
 	}
 	for _, w := range p.Warnings {
 		e.printf("WARNING:    %s\n", w)
+	}
+	for _, b := range p.Bypass {
+		e.printf("WARNING:    %s\n", b)
 	}
 
 	if p.Strong {
@@ -327,11 +382,15 @@ func (e *Env) Block(ctx context.Context, t block.Target, o BlockOpts) error {
 		}
 	}
 
+	notes := len(p.Notes)
 	entry, err := e.Execute(ctx, p)
 	if errors.Is(err, ErrAuditFailed) {
 		e.printf("warning: %v\n", err)
 	} else if err != nil {
 		return err
+	}
+	for _, n := range p.Notes[notes:] {
+		e.printf("warning: %s\n", n)
 	}
 	e.printf("Done — %s is now %s (%s, verified by read-back). Undo: %s\n",
 		t, map[block.Action]string{block.Block: "blocked", block.Challenge: "challenged"}[o.Action], entry.Mechanism,
@@ -449,8 +508,12 @@ func (e *Env) List(ctx context.Context, days int) error {
 		from = c
 		e.printf("note: attempts cover only %.0f day(s) — the zone keeps firewall events that long\n", to.Sub(from).Hours()/24)
 	}
+	if attemptsNA {
+		e.printf("note: no firewall events on this plan — IP attempts are approximated from the archived IP board (~: Top 50 per hour, so low-volume knocking may read 0; \"last\" is the last hour the IP made the list)\n")
+	}
+	e.printf("LIVE = the last %d minutes, queried now (%s)\n", int(block.LiveWindow/time.Minute), map[bool]string{true: "requests stopped at the edge, any rule", false: "firewall events on the block's rule"}[attemptsNA])
 	tw := tabwriter.NewWriter(e.Out, 0, 2, 2, ' ', 0)
-	fmt.Fprintf(tw, "TARGET\tACTION\tMECHANISM\tATTEMPTS %dd\tSINCE\tEXPIRES\tREASON\n", days)
+	fmt.Fprintf(tw, "TARGET\tACTION\tMECHANISM\tATTEMPTS %dd\tLIVE %dm\tSINCE\tEXPIRES\tREASON\n", days, int(block.LiveWindow/time.Minute))
 	seen := map[block.Target]bool{}
 	for _, x := range block.Sorted(entries) {
 		seen[x.Target] = true
@@ -458,6 +521,20 @@ func (e *Env) List(ctx context.Context, days int) error {
 		if !attemptsNA {
 			if n, err := block.Attempts(ctx, e.Read, e.Zone.ZoneID, x.RuleID, x.Target, from, to); err == nil {
 				attempts = fmt.Sprint(n)
+			}
+		} else if a, ok, err := e.ApproxAttempts(x.Target, from, to); err == nil && ok && a.Hours > 0 {
+			attempts = "~" + fmt.Sprint(a.Count)
+			if !a.LastHour.IsZero() {
+				attempts += " (last " + a.LastHour.In(e.loc()).Format("01-02 15h") + ")"
+			}
+		}
+		live := "-"
+		if l, ok, err := e.LiveCheck(ctx, x, caps); err != nil {
+			live = "error"
+		} else if ok {
+			live = fmt.Sprint(l.Count)
+			if !l.Last.IsZero() {
+				live += " (last " + l.Last.In(e.loc()).Format("15:04") + ")"
 			}
 		}
 		since, expires, reason := "-", "never", "(no audit record: created by hand or elsewhere)"
@@ -467,11 +544,11 @@ func (e *Env) List(ctx context.Context, days int) error {
 				expires = ev.ExpiresAt.In(e.loc()).Format("2006-01-02 15:04")
 			}
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", x.Target, x.Action, x.Mechanism, attempts, since, expires, reason)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", x.Target, x.Action, x.Mechanism, attempts, live, since, expires, reason)
 	}
 	for t, ev := range audit {
 		if !seen[t] {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t-\t%s\t-\tMISSING in Cloudflare (removed by hand?)\n", t, ev.Action, ev.Mechanism, ev.At.In(e.loc()).Format("2006-01-02 15:04"))
+			fmt.Fprintf(tw, "%s\t%s\t%s\t-\t-\t%s\t-\tMISSING in Cloudflare (removed by hand?)\n", t, ev.Action, ev.Mechanism, ev.At.In(e.loc()).Format("2006-01-02 15:04"))
 		}
 	}
 	return tw.Flush()
@@ -481,14 +558,20 @@ func (e *Env) List(ctx context.Context, days int) error {
 // it removed. Blocks already gone from Cloudflare are closed in the
 // audit log too.
 func (e *Env) Expire(ctx context.Context) (int, error) {
+	ts, err := e.ExpireTargets(ctx)
+	return len(ts), err
+}
+
+// ExpireTargets is Expire returning the targets it closed.
+func (e *Env) ExpireTargets(ctx context.Context) ([]block.Target, error) {
 	if e.Store == nil {
-		return 0, errors.New("TTL enforcement needs the archive (it holds the expiry times)")
+		return nil, errors.New("TTL enforcement needs the archive (it holds the expiry times)")
 	}
 	evs, err := e.Store.ActiveBlocks(e.Zone.ZoneID)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	n := 0
+	var done []block.Target
 	var errs []error
 	for _, ev := range evs {
 		if ev.ExpiresAt.IsZero() || ev.ExpiresAt.After(e.now()) {
@@ -497,13 +580,11 @@ func (e *Env) Expire(ctx context.Context) (int, error) {
 		t := block.Target{Type: block.Type(ev.Type), Value: ev.Value}
 		err := e.Unblock(ctx, t, true, "expire", "TTL reached ("+ev.ExpiresAt.Format(time.RFC3339)+")")
 		switch {
-		case err == nil:
-			n++
-		case errors.Is(err, block.ErrNotBlocked), errors.Is(err, ErrAuditFailed):
-			n++
+		case err == nil, errors.Is(err, block.ErrNotBlocked), errors.Is(err, ErrAuditFailed):
+			done = append(done, t)
 		default:
 			errs = append(errs, fmt.Errorf("%s: %w", t, err))
 		}
 	}
-	return n, errors.Join(errs...)
+	return done, errors.Join(errs...)
 }

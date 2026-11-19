@@ -14,7 +14,8 @@
       {{if .Missing}}<br><span class="bad">{{t "missing_cf"}}</span>{{else if not .HasEvent}}<br><small class="muted">{{t "no_audit"}}</small>{{end}}
       {{if and .HasEvent .Event.Reason}}<br><small class="muted">{{.Event.Reason}}</small>{{end}}</td>
     <td data-label="{{t "action"}}">{{.Action}}</td>
-    <td data-label="{{t "attempts"}}" class="r">{{if .AttemptsKnown}}{{num .Attempts}}<br><small class="muted">{{t "since"}} {{when .AttemptsFrom}}</small>{{else if .AttemptsPending}}<span class="muted">{{t "computing"}}</span>{{else}}<span class="muted">—</span>{{end}}</td>
+    <td data-label="{{t "attempts"}}" class="r">{{if .AttemptsKnown}}{{num .Attempts}}<br><small class="muted">{{t "since"}} {{when .AttemptsFrom}}</small>{{else if .AttemptsPending}}<span class="muted">{{t "computing"}}</span>{{else if .Approx}}≈ {{num .Approx.Count}}<br><small class="muted" title="{{t "approx_note"}}">{{t "approx_src"}}{{if not .Approx.LastHour.IsZero}} · {{t "approx_last"}} {{when .Approx.LastHour}}{{end}}</small>{{else}}<span class="muted">—</span>{{end}}
+      {{if .LiveKnown}}<br><small class="live" title="{{if eq .Live.Source "edge"}}{{t "live_src_edge"}}{{else}}{{t "live_src_fw"}}{{end}}">{{tf "live_check" (num .Live.Count)}}{{if not .Live.Last.IsZero}} · {{t "live_last"}} {{hm .Live.Last}}{{end}}</small>{{else if .LivePending}}<br><small class="muted">{{t "live_checking"}}</small>{{end}}</td>
     <td data-label="{{t "expires"}}" class="nowrap">{{if and .HasEvent (not .Event.ExpiresAt.IsZero)}}{{when .Event.ExpiresAt}}{{else}}{{t "permanent"}}{{end}}</td>
     <td data-label="{{t "actions"}}" class="acts">{{if and $can (not .Missing)}}
       <form method="post" action="/blocks/unblock/review" class="op"><input type="hidden" name="csrf" value="{{$rq.CSRF}}"><input type="hidden" name="z" value="{{$z.Name}}"><input type="hidden" name="type" value="{{.Target.Type}}"><input type="hidden" name="value" value="{{.Target.Value}}"><button class="small">{{t "unblock"}}</button></form>
@@ -96,13 +97,15 @@
     <dt>{{t "action"}}</dt><dd><b>{{.Opts.Action}}</b></dd>
     <dt>{{t "mechanism"}}</dt><dd>{{.Plan.Note}}</dd>
     {{if .Plan.Expression}}<dt>{{t "rule_after"}}</dt><dd><code class="wrap">{{.Plan.Expression}}</code></dd>{{end}}
+    {{if .Where}}<dt>{{t "rule_position"}}</dt><dd>{{.Plan.RuleRef}} {{.Where}}</dd>{{end}}
     <dt>{{t "measured"}}</dt><dd>{{if .ShareKnown}}{{.Measured}}{{else}}<span class="muted">{{t "not_measurable"}}</span>{{end}}</dd>
     <dt>{{t "expires"}}</dt><dd>{{if .ExpiresAt.IsZero}}{{t "permanent"}}{{else}}{{when .ExpiresAt}} <small class="muted">({{t "needs_enforce"}})</small>{{end}}</dd>
     {{if .Opts.Reason}}<dt>{{t "reason"}}</dt><dd>{{.Opts.Reason}}</dd>{{end}}
   </dl>
   {{range .Notes}}<div class="banner info">{{.}}</div>{{end}}
   <h2>{{t "guard_title"}}</h2>
-  {{if .Warnings}}{{range .Warnings}}<div class="banner warn">⚠ {{.}}</div>{{end}}{{else}}<p class="good">✓ {{t "guard_clean"}}</p>{{end}}
+  {{range .Bypass}}<div class="banner err">⛔ {{.}}</div>{{end}}
+  {{if .Warnings}}{{range .Warnings}}<div class="banner warn">⚠ {{.}}</div>{{end}}{{else if not .Bypass}}<p class="good">✓ {{t "guard_clean"}}</p>{{end}}
   {{end}}
 {{end}}
 {{if .Token}}

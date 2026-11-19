@@ -105,6 +105,11 @@ CREATE TABLE IF NOT EXISTS snapshots (
 	expires_at INTEGER NOT NULL,
 	revoked    INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS flags (
+	name  TEXT    PRIMARY KEY,
+	value TEXT    NOT NULL,
+	at    INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS audit (
 	id     INTEGER PRIMARY KEY AUTOINCREMENT,
 	at     INTEGER NOT NULL,
@@ -633,6 +638,24 @@ func (d *DB) RevokeInvite(hash string) error {
 type AuditEntry struct {
 	At                                time.Time
 	Actor, IP, Action, Target, Detail string
+}
+
+// Flag returns a console flag (a one-off choice an admin made, such as
+// dismissing a hint).
+func (d *DB) Flag(name string) (string, bool, error) {
+	var v string
+	err := d.db.QueryRow(`SELECT value FROM flags WHERE name = ?`, name).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	return v, err == nil, err
+}
+
+// SetFlag records a console flag.
+func (d *DB) SetFlag(name, value string) error {
+	_, err := d.db.Exec(`INSERT INTO flags (name, value, at) VALUES (?, ?, ?)
+		ON CONFLICT(name) DO UPDATE SET value = excluded.value, at = excluded.at`, name, value, d.now().Unix())
+	return err
 }
 
 func (d *DB) Audit(actor, ip, action, target, detail string) error {

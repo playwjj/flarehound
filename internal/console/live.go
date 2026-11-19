@@ -64,7 +64,8 @@ func blend(a, b analyze.Metrics, w float64) analyze.Metrics {
 	}
 	for _, n := range order {
 		wa, wb := a.Worker(n), b.Worker(n)
-		m.Workers = append(m.Workers, analyze.WorkerMetrics{Name: n, Calls: mix(wa.Calls, wb.Calls), CPUP50ms: w*wa.CPUP50ms + (1-w)*wb.CPUP50ms})
+		m.Workers = append(m.Workers, analyze.WorkerMetrics{Name: n, Calls: mix(wa.Calls, wb.Calls), CPUP50ms: w*wa.CPUP50ms + (1-w)*wb.CPUP50ms,
+			CPUP99ms: w*wa.CPUP99ms + (1-w)*wb.CPUP99ms})
 	}
 	m.Unreachable = mix(a.Unreachable, b.Unreachable)
 	// Latency quantiles do not add up; a weighted mean of the two hours'

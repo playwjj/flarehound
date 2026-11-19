@@ -50,6 +50,7 @@ type Entry struct {
 	Mechanism Mechanism
 	RuleID    string // custom rule id (rule / list mechanism) or access rule id
 	ItemID    string // list item id
+	Pos       int    // rule position read back after a block (1-based; 0: n/a)
 }
 
 // State is the zone's FlareHound-owned blocking objects.
@@ -230,6 +231,9 @@ type Plan struct {
 	RuleRef    string
 	Expression string // rule expression after the change (rule mechanisms)
 	Note       string // mechanism choice and quota, in plain words
+	// Place is where the rule holding the target sits after the change
+	// (rule and list mechanisms; Ignored for IP Access Rules).
+	Place Placement
 }
 
 func (s State) quotaLeft() int { return s.RuleLimit() - s.RulesUsed() }
@@ -237,6 +241,20 @@ func (s State) quotaLeft() int { return s.RuleLimit() - s.RulesUsed() }
 // PlanBlock decides how to block t with action a, choosing the mechanism
 // by plan and remaining quota (SPEC 13.1) and saying so.
 func (s State) PlanBlock(t Target, a Action) (Plan, error) {
+	p, err := s.planBlock(t, a)
+	if err != nil {
+		return p, err
+	}
+	switch p.Op {
+	case OpCreateRule, OpUpdateRule, OpAddListItem, OpCreateListRule:
+		p.Place = s.Place(p.RuleRef)
+	default:
+		p.Place.Ignored = true
+	}
+	return p, nil
+}
+
+func (s State) planBlock(t Target, a Action) (Plan, error) {
 	p := Plan{Target: t, Action: a}
 	existing, err := s.Find(t)
 	if err != nil {
@@ -302,12 +320,17 @@ func (m *Manager) Apply(ctx context.Context, st State, p Plan, comment string) (
 	switch p.Op {
 	case OpNone:
 	case OpCreateRule, OpUpdateRule:
-		if err := m.putRule(ctx, st, p.RuleRef, p.Action, p.Expression); err != nil {
+		if err := m.putRuleAt(ctx, st, p.RuleRef, p.Action, p.Expression, p.Place); err != nil {
 			return Entry{}, err
 		}
 	case OpAddListItem:
 		if err := m.API.AddListItems(ctx, m.AccountID, st.List.ID, []cfapi.ListItem{{IP: p.Target.Value, Comment: clip(comment, 400)}}); err != nil {
 			return Entry{}, err
+		}
+		if p.Place.Move { // the list rule moves once, unchanged otherwise
+			if err := m.putRuleAt(ctx, st, p.RuleRef, p.Action, ListExpression, p.Place); err != nil {
+				return Entry{}, err
+			}
 		}
 	case OpCreateListRule:
 		list := st.List
@@ -317,7 +340,7 @@ func (m *Manager) Apply(ctx context.Context, st State, p Plan, comment string) (
 				// The plan may not allow another list: degrade to an
 				// expression rule, which needs the same single rule.
 				expr := Expression(IP, []string{p.Target.Value})
-				if err2 := m.putRule(ctx, st, p.RuleRef, p.Action, expr); err2 != nil {
+				if err2 := m.putRuleAt(ctx, st, p.RuleRef, p.Action, expr, p.Place); err2 != nil {
 					return Entry{}, fmt.Errorf("create IP list: %v; expression-rule fallback: %w", err, err2)
 				}
 				break
@@ -327,7 +350,7 @@ func (m *Manager) Apply(ctx context.Context, st State, p Plan, comment string) (
 		if err := m.API.AddListItems(ctx, m.AccountID, list.ID, []cfapi.ListItem{{IP: p.Target.Value, Comment: clip(comment, 400)}}); err != nil {
 			return Entry{}, err
 		}
-		if err := m.putRule(ctx, st, p.RuleRef, p.Action, ListExpression); err != nil {
+		if err := m.putRuleAt(ctx, st, p.RuleRef, p.Action, ListExpression, p.Place); err != nil {
 			return Entry{}, err
 		}
 	case OpCreateAccessRule:
@@ -345,15 +368,27 @@ func (m *Manager) Apply(ctx context.Context, st State, p Plan, comment string) (
 }
 
 func (m *Manager) putRule(ctx context.Context, st State, ref string, a Action, expr string) error {
+	return m.putRuleAt(ctx, st, ref, a, expr, Placement{Ignored: true})
+}
+
+// putRuleAt creates or updates a FlareHound rule; a new rule goes where
+// pl says, an existing one moves only when pl.Move.
+func (m *Manager) putRuleAt(ctx context.Context, st State, ref string, a Action, expr string, pl Placement) error {
 	rule := cfapi.Rule{Ref: ref, Description: description(ref), Action: a.CF(), Expression: expr, Enabled: true}
 	if old, ok := st.Rules[ref]; ok {
 		rule.ID = old.ID
+		if pl.Move {
+			rule.Position = pl.Position(true)
+		}
 		_, err := m.API.UpdateRule(ctx, m.ZoneID, st.Ruleset.ID, rule)
 		return err
 	}
 	if !st.HasEntrypoint {
 		_, err := m.API.CreateEntrypoint(ctx, m.ZoneID, rule)
 		return err
+	}
+	if !pl.Ignored {
+		rule.Position = pl.Position(false)
 	}
 	_, err := m.API.AddRule(ctx, m.ZoneID, st.Ruleset.ID, rule)
 	return err
@@ -372,6 +407,9 @@ func (m *Manager) verify(ctx context.Context, t Target, a Action, want bool) (En
 	}
 	for _, e := range es {
 		if want && e.Action == a {
+			if e.Mechanism != MechAccess {
+				e.Pos = st.positionOf(RuleRef(t.Type, a))
+			}
 			return e, nil
 		}
 	}

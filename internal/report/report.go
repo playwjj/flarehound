@@ -239,8 +239,13 @@ func (l lang) twoWindows(b *strings.Builder, cur, base analyze.Metrics, baseLabe
 	fmt.Fprintf(b, "- %s%s\n", l.t("dynamic: ", "dynamic："), l.change(cur.Dynamic, base.Dynamic))
 	fmt.Fprintf(b, "- %s%s vs %s%s\n", l.t("origin 5xx: ", "源站 5xx："), n(cur.Origin5xx), n(base.Origin5xx), l.errDetail(cur))
 	if cur.Unreachable > 0 || base.Unreachable > 0 {
-		fmt.Fprintf(b, "- %s%s vs %s%s\n", l.t("origin unreachable (edge 52x): ", "源站不可达（边缘 52x）："),
-			n(cur.Unreachable), n(base.Unreachable), statusSplit(cur.UnreachableBy, l))
+		note := ""
+		if analyze.UnreachableArtifact(cur, base) {
+			note = l.t(" — mostly edge bookkeeping entries, not an outage: a steady 522/524 background in both windows while the origin keeps answering",
+				"——主要为边缘记账条目，非源站故障：两窗均有、以 522/524 为主的稳定底量，且源站照常回源")
+		}
+		fmt.Fprintf(b, "- %s%s vs %s%s%s\n", l.t("origin unreachable (edge 52x): ", "源站不可达（边缘 52x）："),
+			n(cur.Unreachable), n(base.Unreachable), statusSplit(cur.UnreachableBy, l), note)
 	}
 	if o := cur.Origin; o != nil {
 		line := fmt.Sprintf(l.t("- origin P95: first byte %s, full response %s", "- 源站 P95：首字节 %s，完整响应 %s"), ms(o.TTFBP95ms), ms(o.TotalP95ms))
@@ -257,10 +262,39 @@ func (l lang) twoWindows(b *strings.Builder, cur, base analyze.Metrics, baseLabe
 	}
 	for _, w := range cur.Workers {
 		bw := base.Worker(w.Name)
-		fmt.Fprintf(b, l.t("- Worker %s: %s %s; CPU P50 %.1f vs %.1f ms (%s)\n", "- Worker %s：%s %s；CPU P50 %.1f vs %.1f ms（%s）\n"), w.Name,
+		line := fmt.Sprintf(l.t("- Worker %s: %s %s; CPU P50 %.1f vs %.1f ms (%s)", "- Worker %s：%s %s；CPU P50 %.1f vs %.1f ms（%s）"), w.Name,
 			l.t("calls", "调用"), l.change(w.Calls, bw.Calls), w.CPUP50ms, bw.CPUP50ms,
 			l.pct(analyze.PctChange(w.CPUP50ms, bw.CPUP50ms)))
+		if w.CPUP99ms > 0 && bw.CPUP99ms > 0 {
+			line += fmt.Sprintf(l.t(", P99 %.1f vs %.1f ms (%s)", "，P99 %.1f vs %.1f ms（%s）"), w.CPUP99ms, bw.CPUP99ms,
+				l.pct(analyze.PctChange(w.CPUP99ms, bw.CPUP99ms)))
+		}
+		b.WriteString(line + "\n")
 	}
+}
+
+// cpuCheck is the three-number check every CPU line carries: the median,
+// the tail and the call count, and what they say together — so nobody has
+// to redo the attribution by hand.
+func (l lang) cpuCheck(f analyze.Finding, cur, base analyze.Metrics) string {
+	if f.Rule != analyze.RuleCPUUp {
+		return ""
+	}
+	j := analyze.JudgeCPU(cur.Worker(f.Subject), base.Worker(f.Subject))
+	p99 := l.t("P99 not measured", "P99 未采集")
+	if j.P99Known {
+		p99 = "P99 " + l.pct(j.P99Pct)
+	}
+	s := fmt.Sprintf(l.t("check: P50 %s, %s, calls %s", "辨伪：P50 %s，%s，调用量 %s"), l.pct(j.P50Pct), p99, l.pct(j.CallsPct))
+	switch j.Verdict {
+	case analyze.CPUMix:
+		s += l.t(" → mix change, not more expensive: the tail is flat and calls fell (the cheap calls left, the median moved)",
+			" → 构成变化而非变贵：尾部持平且调用量下降（便宜调用离场，中位数被抬高）")
+	case analyze.CPUCostly:
+		s += l.t(" → calls really got more expensive: the tail rose with the median and calls held",
+			" → 真变贵：尾部随中位数同涨且调用量未跌")
+	}
+	return s
 }
 
 // ms renders a latency: "803 ms", "1.4 s".
@@ -352,6 +386,16 @@ func (l lang) hypothesis(h analyze.Hypothesis) (claim, falsifier string) {
 	case analyze.HypSlowPath:
 		return fmt.Sprintf(l.t("Worker %s burns more CPU per call without more calls: likely a deploy change or a slow code path.", "Worker %s 调用量平稳但单次 CPU 上涨：疑为部署变更或慢路径。"), h.Subject),
 			l.t("the request mix shifted to heavier paths (see top dynamic paths).", "请求构成转向了更重的路径（见 dynamic 路径 Top）。")
+	case analyze.HypCPUMix:
+		return fmt.Sprintf(l.t("Worker %s: the request mix changed, the cost did not — CPU P50 rose while P99 stayed about flat and calls fell. Cheap calls left (e.g. a flood receding) and the median moved up. Reported at low severity.",
+				"Worker %s：构成变化而非变贵——CPU P50 上涨，但 P99 基本持平、调用量下降。便宜调用离场（如洪水退潮），中位数被抬高。按低严重度报告。"), h.Subject),
+			l.t("P99 rises in the next rounds too, or calls recover while P50 stays high — then calls really got more expensive.",
+				"后续几轮 P99 也上涨，或调用量回升而 P50 仍高——那就是真变贵。")
+	case analyze.HypCPUCostly:
+		return fmt.Sprintf(l.t("Worker %s calls really got more expensive: CPU P50 and P99 rose together while calls held — a code change, a slower dependency or heavier requests.",
+				"Worker %s 单次调用真变贵：CPU P50 与 P99 同涨且调用量未跌——疑为代码变更、依赖变慢或请求变重。"), h.Subject),
+			l.t("the rise lines up with a shift to heavier paths (see top dynamic paths) and no deploy — then it is the load, not the code.",
+				"上涨与请求转向更重的路径同时发生（见 dynamic 路径 Top）且无部署——那是负载而非代码。")
 	case analyze.HypOriginFailure:
 		return l.t("The origin is failing or overloaded.", "源站故障或过载。"),
 			l.t("the 5xx concentrate on a single route — then it is an application bug on that route.", "5xx 集中在单一路径——那是该路由的应用缺陷。")
@@ -435,6 +479,9 @@ func Intraday(language string, d IntradayData) string {
 	}[d.Decision]
 	if d.Severity.Level == analyze.SevLow && d.Decision == state.DecAlert {
 		head = l.t("low severity: edge-absorbed flood", "低严重度：边缘吸收的流量洪水")
+		if d.Severity.Kind == analyze.CPUMixKind {
+			head = l.t("low severity: Worker CPU mix change", "低严重度：Worker CPU 构成变化")
+		}
 	}
 	fmt.Fprintf(&b, "FlareHound · %s — %s\n", d.Zone, head)
 	if d.Severity.Kind == analyze.EdgeAbsorbed {
@@ -451,6 +498,9 @@ func Intraday(language string, d IntradayData) string {
 	b.WriteString(l.t("Lines crossed:\n", "越线：\n"))
 	for _, f := range d.Findings {
 		fmt.Fprintf(&b, "- %s\n", l.findingLine(f, d.DashRatio, d.Attr.ASNNames, d.Attr.ASNLabels, d.Attr.Covered))
+		if c := l.cpuCheck(f, d.Cur, d.Base); c != "" {
+			fmt.Fprintf(&b, "  %s\n", c)
+		}
 	}
 	b.WriteString("\n")
 	l.twoWindows(&b, d.Cur, d.Base, l.t("vs same hour yesterday", "对比昨日同时段"))
@@ -604,8 +654,12 @@ type BlockStatus struct {
 	Action     string
 	Attempts   int64
 	AttemptsNA bool
-	Since      time.Time
-	ExpiresAt  time.Time
+	// Approx: Attempts is summed from the archived IP board (no firewall
+	// events on the plan); LastHour is the last hour the IP made the list.
+	Approx    bool
+	LastHour  time.Time
+	Since     time.Time
+	ExpiresAt time.Time
 }
 
 // ArchiveInfo summarises the local archive for the daily report.
@@ -688,6 +742,9 @@ func Daily(language string, d DailyData) string {
 		}
 		for _, f := range d.Findings {
 			fmt.Fprintf(&b, "- %s\n", l.findingLine(f, ratio, d.ASNNames, d.ASNLabels, d.Covered))
+			if c := l.cpuCheck(f, d.Cur, d.Base); c != "" {
+				fmt.Fprintf(&b, "  %s\n", c)
+			}
 		}
 	}
 
@@ -733,10 +790,7 @@ func Daily(language string, d DailyData) string {
 		b.WriteString(l.t("- FlareHound blocks (attempts in the window — lift a block when attempts stop, not when it gets quiet):\n",
 			"- FlareHound 封锁项（窗口内尝试量——尝试停止才考虑解封，而不是看安静多久）：\n"))
 		for _, x := range d.Blocks {
-			att := n(x.Attempts)
-			if x.AttemptsNA {
-				att = l.t("n/a", "不可用")
-			}
+			att := l.attempts(x, locOr(d.Loc))
 			exp := l.t("permanent", "长期")
 			if !x.ExpiresAt.IsZero() {
 				exp = l.t("expires ", "到期 ") + x.ExpiresAt.In(locOr(d.Loc)).Format("01-02 15:04")
@@ -744,6 +798,7 @@ func Daily(language string, d DailyData) string {
 			fmt.Fprintf(&b, "  %s (%s): %s; %s %s; %s\n", x.Target, x.Action, att,
 				l.t("since", "始于"), x.Since.In(locOr(d.Loc)).Format("01-02 15:04"), exp)
 		}
+		l.expiring(&b, d)
 	}
 	for _, c := range d.Checkpoints {
 		mark := "✓"
@@ -787,6 +842,54 @@ func Daily(language string, d DailyData) string {
 		fmt.Fprintf(&b, "\n"+l.t("Data gaps (queries failed): %s\n", "数据缺口（查询失败）：%s\n"), strings.Join(d.Gaps, ", "))
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// attempts renders a block's attempts in the window.
+func (l lang) attempts(x BlockStatus, loc *time.Location) string {
+	switch {
+	case x.AttemptsNA:
+		return l.t("n/a", "不可用")
+	case x.Approx:
+		s := fmt.Sprintf(l.t("≈%s (approx., from the IP board archive", "≈%s（近似值，来自 IP 榜归档"), n(x.Attempts))
+		if !x.LastHour.IsZero() {
+			s += fmt.Sprintf(l.t("; last on the list %s", "；最近上榜 %s"), x.LastHour.In(loc).Format("01-02 15:00"))
+		}
+		return s + l.t(")", "）")
+	}
+	return n(x.Attempts)
+}
+
+// expiringDays is the "expiring this week" horizon of the daily report.
+const expiringDays = 7
+
+// expiring lists the blocks that expire within a week, with what their
+// attempts say: still knocking → consider renewing; quiet → it will be
+// lifted automatically.
+func (l lang) expiring(b *strings.Builder, d DailyData) {
+	var out []string
+	for _, x := range d.Blocks {
+		if x.ExpiresAt.IsZero() || x.ExpiresAt.After(d.Window.To.Add(expiringDays*24*time.Hour)) {
+			continue
+		}
+		when := x.ExpiresAt.In(locOr(d.Loc)).Format("01-02 15:04")
+		var verdict string
+		switch {
+		case x.AttemptsNA:
+			verdict = l.t("attempts unknown — check the blocks page before it lapses", "尝试量未知——到期前请到封锁页核对")
+		case x.Attempts > 0:
+			verdict = fmt.Sprintf(l.t("still knocking (%s in the window) — consider renewing", "仍在敲门（窗口内 %s 次）——建议续期"), n(x.Attempts))
+		default:
+			verdict = l.t("quiet in the window — it will be lifted automatically", "窗口内已无尝试——到期将自动解除")
+		}
+		out = append(out, fmt.Sprintf(l.t("  %s (%s) expires %s: %s\n", "  %s（%s）%s 到期：%s\n"), x.Target, x.Action, when, verdict))
+	}
+	if len(out) == 0 {
+		return
+	}
+	b.WriteString(l.t("- Expiring this week:\n", "- 本周到期：\n"))
+	for _, s := range out {
+		b.WriteString(s)
+	}
 }
 
 // impostor renders a failed crawler claim as its own line.

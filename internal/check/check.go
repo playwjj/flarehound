@@ -45,7 +45,7 @@ type API interface {
 	DashboardDay(ctx context.Context, zoneID string, date time.Time) (cfapi.Dashboard, error)
 	Hourly(ctx context.Context, zoneID string, from, to time.Time, f cfapi.Filter) (map[time.Time]int64, error)
 	Sampling(ctx context.Context, zoneID string, from, to time.Time) (int64, float64, error)
-	WorkerStats(ctx context.Context, accountID, script string, from, to time.Time) (int64, float64, error)
+	WorkerStats(ctx context.Context, accountID, script string, from, to time.Time) (cfapi.WorkerStat, error)
 	OriginStats(ctx context.Context, zoneID string, from, to time.Time) (cfapi.OriginStats, error)
 }
 
@@ -255,11 +255,11 @@ func (r *Runner) fetch(ctx context.Context, zone config.Zone, w schedule.Window,
 		}
 	}
 	for _, name := range zone.Workers {
-		calls, cpu, err := r.API.WorkerStats(ctx, r.Cfg.Cloudflare.AccountID, name, from, to)
+		ws, err := r.API.WorkerStats(ctx, r.Cfg.Cloudflare.AccountID, name, from, to)
 		if err != nil {
 			return m, fmt.Errorf("worker %s: %w", name, err)
 		}
-		m.Workers = append(m.Workers, analyze.WorkerMetrics{Name: name, Calls: calls, CPUP50ms: cpu})
+		m.Workers = append(m.Workers, analyze.WorkerMetrics{Name: name, Calls: ws.Requests, CPUP50ms: ws.CPUP50ms, CPUP99ms: ws.CPUP99ms})
 	}
 	for _, p := range r.Cfg.PathRules {
 		f := cfapi.Filter{PathLike: like(p.Path)}
@@ -367,11 +367,11 @@ func (r *Runner) settle(ctx context.Context, zone config.Zone, w schedule.Window
 				continue
 			}
 		case analyze.RuleCollapseWorker:
-			n, _, err := r.API.WorkerStats(ctx, r.Cfg.Cloudflare.AccountID, f.Subject, w.From, w.To)
+			ws, err := r.API.WorkerStats(ctx, r.Cfg.Cloudflare.AccountID, f.Subject, w.From, w.To)
 			if err != nil {
 				return fs, nil, err
 			}
-			if grew(int64(f.Cur), n) {
+			if grew(int64(f.Cur), ws.Requests) {
 				unsettled = append(unsettled, f.Key())
 				continue
 			}
@@ -676,6 +676,24 @@ func (r *Runner) Intraday(ctx context.Context, zone config.Zone) error {
 		HTML: htmlBody, Images: imgs}, view))
 }
 
+// approxAttempts approximates an IP block's attempts from the archived
+// IP board (hours' Top 50 IPs stopped at the edge).
+func (r *Runner) approxAttempts(zoneID string, t block.Target, from, to time.Time) (block.Approx, bool) {
+	if r.Store == nil || t.Type != block.IP {
+		return block.Approx{}, false
+	}
+	hs, err := r.Store.HourSnapshots(zoneID, from, to)
+	if err != nil {
+		return block.Approx{}, false
+	}
+	hf := make([]block.HourFaces, 0, len(hs))
+	for _, h := range hs {
+		hf = append(hf, block.HourFaces{From: h.From, Faces: h.BlockedIPs})
+	}
+	a, ok := block.ApproxAttempts(t, hf)
+	return a, ok && a.Hours > 0
+}
+
 // Daily builds and sends the daily report (SPEC 7.1 / 7.4): the last
 // 24 hours against the 24 hours before, with fixed checkpoints. It is
 // a scheduled report, so it is always sent; problems expand, a clean
@@ -790,10 +808,17 @@ func (r *Runner) Daily(ctx context.Context, zone config.Zone) error {
 			for _, ev := range evs {
 				t := block.Target{Type: block.Type(ev.Type), Value: ev.Value}
 				bs := report.BlockStatus{Target: t.String(), Action: ev.Action, Since: ev.At, ExpiresAt: ev.ExpiresAt}
+				var aerr error
 				if caps.FirewallEnabled {
-					bs.Attempts, err = block.Attempts(ctx, r.API, z, ev.RuleID, t, caps.FirewallFrom(w.From, r.now()), w.To)
+					bs.Attempts, aerr = block.Attempts(ctx, r.API, z, ev.RuleID, t, caps.FirewallFrom(w.From, r.now()), w.To)
+					bs.AttemptsNA = aerr != nil
+				} else {
+					// No firewall events (Free): approximate from the IP board.
+					bs.AttemptsNA = true
+					if a, ok := r.approxAttempts(z, t, w.From, w.To); ok {
+						bs.Attempts, bs.Approx, bs.LastHour, bs.AttemptsNA = a.Count, true, a.LastHour, false
+					}
 				}
-				bs.AttemptsNA = !caps.FirewallEnabled || err != nil
 				d.Blocks = append(d.Blocks, bs)
 			}
 		}

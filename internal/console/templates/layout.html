@@ -33,6 +33,8 @@
   </nav>
 </header>
 {{if and (not .Req.Secure) (not .Req.Loopback)}}<div class="banner warn">{{t "insecure"}}</div>{{end}}
+{{if .TOTPHint}}<div class="banner warn">{{t "totp_hint"}} <a href="/account">{{t "totp_hint_setup"}}</a>
+  <form method="post" action="/totp-hint/dismiss" class="op"><input type="hidden" name="csrf" value="{{.Req.CSRF}}"><input type="hidden" name="next" value="{{.Here}}"><button class="link small">{{t "totp_hint_dismiss"}}</button></form></div>{{end}}
 {{if and .Req.Proxy (not .Req.Session) .Req.User}}<div class="banner info">{{t "proxy_identity"}} <b>{{.Req.Proxy}}</b> ({{roleName .Req.User.Role}})</div>{{end}}
 {{if .Nav}}
 {{if gt (len .Zones) 1}}

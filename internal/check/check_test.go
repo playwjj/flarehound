@@ -26,6 +26,7 @@ type window struct {
 	origin               *cfapi.OriginStats
 	calls                int64
 	cpu                  float64
+	cpu99                float64
 	ua, asn              []cfapi.Face
 	// totalAfterSettle, when set, is what a re-read of Total returns.
 	totalAfterSettle int64
@@ -175,9 +176,9 @@ func (f *fakeAPI) Capabilities(context.Context, string) (cfapi.Caps, error) {
 	return cfapi.AllCaps(), nil
 }
 
-func (f *fakeAPI) WorkerStats(_ context.Context, _, _ string, from, _ time.Time) (int64, float64, error) {
+func (f *fakeAPI) WorkerStats(_ context.Context, _, _ string, from, _ time.Time) (cfapi.WorkerStat, error) {
 	w := f.w(from)
-	return w.calls, w.cpu, nil
+	return cfapi.WorkerStat{Requests: w.calls, CPUP50ms: w.cpu, CPUP99ms: w.cpu99}, nil
 }
 
 type sink struct {

@@ -13,7 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/playwjj/flarehound/internal/block"
 	"github.com/playwjj/flarehound/internal/block/fakecf"
+	"github.com/playwjj/flarehound/internal/blockcli"
 	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/store"
 )
@@ -41,6 +43,10 @@ func (fakeLive) FirewallTop(_ context.Context, _ string, _, _ time.Time, _, _ st
 }
 func (fakeLive) Top(_ context.Context, _ string, from, _ time.Time, _ string, _ int, _ cfapi.Filter) ([]cfapi.Face, error) {
 	return []cfapi.Face{{Name: "200", Count: 40_000}, {Name: "403", Count: 5_000}}, nil
+}
+
+func (fakeLive) Minutes(_ context.Context, _ string, _ bool, _, to time.Time, _ string, _ cfapi.Filter, _ int) ([]cfapi.MinuteCount, error) {
+	return []cfapi.MinuteCount{{At: to.Add(-4 * time.Minute).Truncate(time.Minute), Face: cfapi.Face{Name: "AS24940", ASN: 24940, Count: 6}}}, nil
 }
 
 type writeEnv struct {
@@ -426,5 +432,109 @@ func TestBlocksAttemptsAsync(t *testing.T) {
 	e.srv.attemptsMu.Unlock()
 	if n != 1 {
 		t.Fatalf("cache keys are not stable across loads: %d entries for one block", n)
+	}
+}
+
+// The console lifts expired blocks itself: the rule leaves Cloudflare,
+// both audit logs record system:expiry, and the expiry heartbeat is fresh.
+func TestConsoleLiftsExpiredBlocks(t *testing.T) {
+	e := newWriteEnv(t, true)
+	now := time.Now()
+	e.srv.Now = func() time.Time { return now }
+	env := e.srv.env(e.srv.Cfg.Cloudflare.Zones[0], nil)
+	tg, _ := block.Parse("asn", "24940")
+	prep, err := env.Prepare(context.Background(), tg, blockcli.BlockOpts{Action: block.Block, TTL: 2 * time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.Execute(context.Background(), prep); err != nil {
+		t.Fatal(err)
+	}
+	e.srv.EnforceExpiry(context.Background()) // not yet due
+	if _, ok := e.cf.Rule("flarehound-asn-block"); !ok {
+		t.Fatal("lifted before expiry")
+	}
+	now = now.Add(3 * time.Minute)
+	e.srv.EnforceExpiry(context.Background())
+	if _, ok := e.cf.Rule("flarehound-asn-block"); ok {
+		t.Fatal("expired block still in Cloudflare")
+	}
+	ev, ok, err := e.st.LatestBlockEvent(e.srv.Cfg.Cloudflare.Zones[0].ZoneID, "asn", "24940")
+	if err != nil || !ok || ev.Op != "expire" || ev.Actor != ExpiryActor {
+		t.Fatalf("block log: %+v %v", ev, err)
+	}
+	entries, _ := e.db.AuditLog(10)
+	found := false
+	for _, a := range entries {
+		if a.Action == "block_expired" && a.Actor == ExpiryActor {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("console audit lacks the expiry: %+v", entries)
+	}
+	if _, body, _ := e.admin.do("GET", "/blocks", nil, nil); strings.Contains(body, "nothing is lifting expired blocks") {
+		t.Fatal("expiry heartbeat should be fresh")
+	}
+}
+
+func TestBlocksPageLiveCheck(t *testing.T) {
+	e := newWriteEnv(t, true)
+	env := e.srv.env(e.srv.Cfg.Cloudflare.Zones[0], nil)
+	tg, _ := block.Parse("asn", "24940")
+	prep, err := env.Prepare(context.Background(), tg, blockcli.BlockOpts{Action: block.Block})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.Execute(context.Background(), prep); err != nil {
+		t.Fatal(err)
+	}
+	e.admin.do("GET", "/blocks", nil, nil)
+	e.srv.attemptsWG.Wait()
+	_, body, _ := e.admin.do("GET", "/blocks", nil, nil)
+	if !strings.Contains(body, "last 15 min: 6 stopped") || !strings.Contains(body, "last knock") {
+		t.Fatalf("live check missing:\n%s", body)
+	}
+}
+
+// Review discloses the rule's position and flags a skip rule ahead that
+// lets the target through.
+func TestBlockReviewPosition(t *testing.T) {
+	e := newWriteEnv(t, true)
+	e.cf.UserRuleAction("partner network", "skip", `ip.geoip.asnum in {24940}`)
+	e.cf.UserRuleAction("Protected Pages", "managed_challenge", `http.request.uri.path eq "/login"`)
+	body, _, _ := e.review(t, e.admin, url.Values{"type": {"asn"}, "value": {"24940"}, "action": {"block"}, "for": {"24h"}})
+	for _, want := range []string{"inserted at #2, after «partner network» (skip) and before «Protected Pages» (managed_challenge)",
+		"banner err", "let through by skip rule #1 «partner network» (skip)"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("review lacks %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestTOTPHint(t *testing.T) {
+	e := newWriteEnv(t, true)
+	_, body, _ := e.admin.do("GET", "/blocks", nil, nil)
+	if !strings.Contains(body, "require_totp") {
+		t.Fatal("admin of a writing console without require_totp must see the hint")
+	}
+	viewer := e.login(t, "viewer", "viewer-password-1")
+	if _, vb, _ := viewer.do("GET", "/blocks", nil, nil); strings.Contains(vb, "totp-hint") {
+		t.Fatal("viewers do not see the hint")
+	}
+	if code, _, _ := e.admin.do("POST", "/totp-hint/dismiss", url.Values{"csrf": {csrfOf(t, body)}, "next": {"/blocks"}}, nil); code != http.StatusSeeOther {
+		t.Fatalf("dismiss: %d", code)
+	}
+	if _, body, _ := e.admin.do("GET", "/blocks", nil, nil); strings.Contains(body, "totp-hint") {
+		t.Fatal("dismissed hint still shown")
+	}
+	entries, _ := e.db.AuditLog(5)
+	if len(entries) == 0 || entries[0].Action != "totp_hint_dismissed" || entries[0].Actor != "admin" {
+		t.Fatalf("dismissal not audited: %+v", entries)
+	}
+	// Read-only consoles cannot change Cloudflare: no hint.
+	ro := newWriteEnv(t, false)
+	if _, body, _ := ro.admin.do("GET", "/blocks", nil, nil); strings.Contains(body, "totp-hint") {
+		t.Fatal("read-only console shows the hint")
 	}
 }

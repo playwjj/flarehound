@@ -10,7 +10,7 @@
 
 Cloudflare 给你数据，FlareHound 给你结论。
 
-> 状态：**v1.15.0**——面向 VPS 站的源站视角（源站不可达 52x、源站延迟 P95、5xx 比率与状态拆分）；IP 榜（谁在持续敲门：最近一小时与 24 小时；已验证机器人折叠、网段合并汇总）、下钻中显示客户端 IP；「现在什么在涨」：被封锁榜、与昨天对比的趋势带、实时面孔；SMTP 端口被封时改走 HTTPS 发邮件（Resend）；按 zone 的 WAF 审计覆盖；跨 zone 首页、日报中的封锁裁决、被规则覆盖的面孔标记、审计/规则快照；控制台内设置（通知渠道带测试发送、告警线带回放预览、已知面孔、网络命名）；控制台支持英文与中文；WAF 基础、规则配方与大白话规则说明；实时小时与涨跌榜下钻；Web 控制台内封锁、撤销、封前/封后对比、只读快照，以及 Google / GitHub 登录；「标为已知」改为紧凑链接。文档：**https://playwjj.github.io/flarehound/** · 更新日志：[CHANGELOG.md](CHANGELOG.md)
+> 状态：**v1.16.0**——到期封锁由控制台自动解除；封锁规则插在 skip 规则之后、挑战规则之前，审阅时提示可能被 skip 放行；每条封锁的 15 分钟实时核对、Free 套餐的近似尝试量；Worker CPU 告警自带辨伪（P50 / P99 / 调用量）；面向 VPS 站的源站视角（源站不可达 52x、源站延迟 P95、5xx 比率与状态拆分）；IP 榜（谁在持续敲门：最近一小时与 24 小时；已验证机器人折叠、网段合并汇总）、下钻中显示客户端 IP；「现在什么在涨」：被封锁榜、与昨天对比的趋势带、实时面孔；SMTP 端口被封时改走 HTTPS 发邮件（Resend）；按 zone 的 WAF 审计覆盖；跨 zone 首页、日报中的封锁裁决、被规则覆盖的面孔标记、审计/规则快照；控制台内设置（通知渠道带测试发送、告警线带回放预览、已知面孔、网络命名）；控制台支持英文与中文；WAF 基础、规则配方与大白话规则说明；实时小时与涨跌榜下钻；Web 控制台内封锁、撤销、封前/封后对比、只读快照，以及 Google / GitHub 登录；「标为已知」改为紧凑链接。文档：**https://playwjj.github.io/flarehound/** · 更新日志：[CHANGELOG.md](CHANGELOG.md)
 >
 > **方向：** 内置 Web 控制台（自 v1.3 起）是产品的中心——实时涨跌、新面孔、对照长期基线的历史、WAF 审计与规则、设置，以及带按账号审计的控制台内封锁。通知退为提醒层，把你带到控制台来。见 [Web 控制台改版说明](docs/web-console-revision.md)。
 >
@@ -144,12 +144,12 @@ flarehound block country XX --action challenge
 flarehound block ua "BadBot/1.0" --for 7d --reason "scraper, 11-17 incident"
 flarehound unblock asn 207990
 flarehound blocks            # everything blocked, with 7-day attempts and expiry
-flarehound enforce           # long-running: lifts blocks whose --for has passed
+flarehound enforce           # 可选：没有控制台时负责解除到期封锁
 ```
 
 任何变更之前，你先看到确切的方案——它要改的那条规则与改后的表达式、自定义规则配额、目标在最近一小时超额流量里实测的占比、以及全部警告——然后确认一次。FlareHound 只动它自己的对象（名为 `flarehound-…` 的规则、IP 名单 `flarehound_block`），每种目标类型合并进一条规则，几乎不占你的配额；在 ASN 与国家规则上始终放行已验证的搜索机器人；改完读回验证。它拒绝封 Cloudflare 的地址段、你的源站 IP（来自 DNS）、私有地址段，以及 `blocking.never_block` 名单里的一切。封住宅/骨干 ASN 或整个国家，需要重新输入一遍 ASN 或国家代码确认。每个动作都写进只追加的审计日志，日报会列出每条封锁的尝试次数——尝试停了就解除封锁，而不是等它安静下来。
 
-在 Docker 里：`docker compose --profile admin up -d` 会带着写令牌启动执行器，`docker compose run --rm flarehound-admin block …` 用来跑命令。
+持有写令牌的控制台会自行解除到期封锁（每 5 分钟一轮）；没有控制台时运行 `flarehound enforce`——在 Docker 里 `docker compose --profile admin up -d` 会带着写令牌启动它，`docker compose run --rm flarehound-admin block …` 用来跑命令。
 
 ## WAF 基础与配方
 

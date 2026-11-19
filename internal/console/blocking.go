@@ -253,12 +253,13 @@ func (s *Server) blockApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Audit first: nothing reaches Cloudflare without a record.
-	detail := fmt.Sprintf("zone %s; action %s; ttl %s; mechanism: %s; measured: %s; warnings: %d; strong: %v; reason: %s",
-		f.Zone.Name, prep.Opts.Action, orDash(f.For), prep.Plan.Note, orDash(prep.Measured), len(prep.Warnings), prep.Strong, orDash(f.Reason))
+	detail := fmt.Sprintf("zone %s; action %s; ttl %s; mechanism: %s; position: %s; measured: %s; warnings: %d; bypass warnings: %d; strong: %v; reason: %s",
+		f.Zone.Name, prep.Opts.Action, orDash(f.For), prep.Plan.Note, orDash(prep.Where), orDash(prep.Measured), len(prep.Warnings), len(prep.Bypass), prep.Strong, orDash(f.Reason))
 	if err := s.DB.Audit(s.actor(rq), rq.IP, "block_requested", t.String(), detail); err != nil {
 		s.fail(w, r, fmt.Errorf("audit log unavailable, nothing changed: %w", err))
 		return
 	}
+	notes := len(prep.Notes)
 	entry, err := env.Execute(ctx, prep)
 	if err != nil && !errors.Is(err, blockcli.ErrAuditFailed) {
 		s.audit(r, "block_failed", t.String(), err.Error())
@@ -269,6 +270,9 @@ func (s *Server) blockApply(w http.ResponseWriter, r *http.Request) {
 	msg := fmt.Sprintf(s.L(r).t("block_done"), t.String(), prep.Opts.Action)
 	if err != nil {
 		msg += " — " + err.Error()
+	}
+	for _, n := range prep.Notes[notes:] {
+		msg += " — " + n
 	}
 	http.Redirect(w, r, "/blocks?z="+url.QueryEscape(f.Zone.Name)+"&ok="+url.QueryEscape(msg), http.StatusSeeOther)
 }
@@ -500,7 +504,23 @@ type BlockRow struct {
 	AttemptsKnown   bool
 	AttemptsPending bool // being computed in the background
 	AttemptsFrom    time.Time
+	// Approx: attempts approximated from the archived IP board (zones
+	// without firewall events); nil otherwise.
+	Approx *block.Approx
+	// Live check: the last minutes, queried live.
+	Live        block.Live
+	LiveKnown   bool
+	LivePending bool
 }
+
+type blockLiveEntry struct {
+	at time.Time
+	l  block.Live
+	ok bool
+}
+
+// blockLiveTTL: a block's live check is re-run at most this often.
+const blockLiveTTL = 2 * time.Minute
 
 type attemptsEntry struct {
 	at time.Time
@@ -555,7 +575,11 @@ func (s *Server) loadLive(ctx context.Context, z config.Zone) liveBlocks {
 		if !(caps.Probed && !caps.FirewallEnabled) {
 			row.Attempts, row.AttemptsKnown, row.AttemptsPending = s.attemptsAsync(z, x, from)
 			lb.Pending = lb.Pending || row.AttemptsPending
+		} else if a, ok, err := s.env(z, nil).ApproxAttempts(x.Target, from, now); err == nil && ok && a.Hours > 0 {
+			row.Approx = &a
 		}
+		row.Live, row.LiveKnown, row.LivePending = s.liveAsync(z, x, caps)
+		lb.Pending = lb.Pending || row.LivePending
 		lb.Rows = append(lb.Rows, row)
 	}
 	for t, ev := range audit {
@@ -608,6 +632,37 @@ func (s *Server) attemptsAsync(z config.Zone, x block.Entry, from time.Time) (n 
 		return e.n, e.ok, false
 	}
 	return 0, false, true
+}
+
+// liveAsync returns a block's live check from the cache, refreshing it in
+// the background like attemptsAsync. known is false for targets the
+// check cannot select (or when the query failed).
+func (s *Server) liveAsync(z config.Zone, x block.Entry, caps cfapi.Caps) (l block.Live, known, pending bool) {
+	key := "live|" + z.ZoneID + "|" + x.RuleID + "|" + x.Target.String()
+	s.attemptsMu.Lock()
+	defer s.attemptsMu.Unlock()
+	e, ok := s.blockLive[key]
+	if ok && s.Now().Sub(e.at) < blockLiveTTL {
+		return e.l, e.ok, false
+	}
+	if !s.attemptsBusy[key] {
+		s.attemptsBusy[key] = true
+		s.attemptsWG.Add(1)
+		go func() {
+			defer s.attemptsWG.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), writeTO)
+			defer cancel()
+			l, ok, err := s.env(z, nil).LiveCheck(ctx, x, caps)
+			s.attemptsMu.Lock()
+			s.blockLive[key] = blockLiveEntry{at: s.Now(), l: l, ok: ok && err == nil}
+			delete(s.attemptsBusy, key)
+			s.attemptsMu.Unlock()
+		}()
+	}
+	if ok {
+		return e.l, e.ok, false
+	}
+	return block.Live{}, false, true
 }
 
 // warmBlocks refreshes every zone's block list and attempts in the
@@ -729,4 +784,91 @@ func (s *Server) warmPages(ctx context.Context) {
 			s.cachedAudit(ctx, z, false)
 		}
 	}
+}
+
+// --- expiry (v1.16) ---
+
+// ExpiryActor is the audit subject of the expiries the console carries out.
+const ExpiryActor = "system:expiry"
+
+// ExpiryEvery is how often the console looks for expired blocks.
+const ExpiryEvery = 5 * time.Minute
+
+// EnforceExpiry lifts every block whose expiry has passed, in every zone,
+// through the same path as an unblock (read-back verified, block log),
+// recorded as ExpiryActor in both audit logs. The console is the one
+// long-running process that holds the write token, so expiry is its job:
+// without it a block "expires" in FlareHound's list and keeps blocking in
+// Cloudflare. It writes the expiry heartbeat the blocks page and doctor
+// read.
+func (s *Server) EnforceExpiry(ctx context.Context) {
+	if !s.CanWrite() {
+		return
+	}
+	var errs []string
+	for _, z := range s.Cfg.Cloudflare.Zones {
+		if ctx.Err() != nil {
+			return
+		}
+		env := s.env(z, nil)
+		env.Actor = ExpiryActor
+		cctx, cancel := context.WithTimeout(ctx, writeTO)
+		done, err := env.ExpireTargets(cctx)
+		cancel()
+		for _, t := range done {
+			log.Printf("console: zone %s: %s expired, lifted", z.Name, t)
+			_ = s.DB.Audit(ExpiryActor, "local", "block_expired", t.String(), "zone "+z.Name+"; expiry reached; removed, verified by read-back")
+		}
+		if err != nil {
+			log.Printf("console: zone %s: expiry: %v", z.Name, err)
+			_ = s.DB.Audit(ExpiryActor, "local", "expire_failed", z.Name, err.Error())
+			errs = append(errs, z.Name+": "+err.Error())
+		}
+	}
+	now := s.Now()
+	b := health.Beat{At: now.UTC(), Version: s.Version, Role: "console-expiry", Zones: len(s.Cfg.Cloudflare.Zones), Errors: errs, Next: now.Add(ExpiryEvery)}
+	if err := health.Write(s.Cfg.DataDir(), health.EnforceFile, b); err != nil {
+		log.Printf("console: expiry heartbeat: %v", err)
+	}
+}
+
+// ExpiryLoop runs EnforceExpiry now and every ExpiryEvery until ctx ends.
+func (s *Server) ExpiryLoop(ctx context.Context) {
+	t := time.NewTicker(ExpiryEvery)
+	defer t.Stop()
+	for {
+		s.EnforceExpiry(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+// --- two-factor hint (v1.16) ---
+
+// totpHintFlag records an admin's explicit "keep require_totp off".
+const totpHintFlag = "totp_hint_dismissed"
+
+// totpHint reports whether admins should see the two-factor hint: the
+// console holds the write token (it can change Cloudflare) but does not
+// require two-factor sign-in, and no admin has dismissed the hint.
+func (s *Server) totpHint() bool {
+	if !s.CanWrite() || s.Cfg.Console.RequireTOTP {
+		return false
+	}
+	_, dismissed, err := s.DB.Flag(totpHintFlag)
+	return err == nil && !dismissed
+}
+
+// totpHintDismiss hides the hint for good; the choice is audited.
+func (s *Server) totpHintDismiss(w http.ResponseWriter, r *http.Request) {
+	rq := reqOf(r)
+	if err := s.DB.SetFlag(totpHintFlag, rq.User.Username); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.audit(r, "totp_hint_dismissed", "console.require_totp", "kept off by an admin; the hint is no longer shown")
+	http.Redirect(w, r, localPath(r.PostFormValue("next")), http.StatusSeeOther)
 }
