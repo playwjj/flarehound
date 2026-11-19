@@ -4,6 +4,8 @@
 
 # FlareHound
 
+English | [中文](README.zh.md)
+
 **A self-hosted traffic console and watchdog for websites behind Cloudflare.** It polls the Cloudflare Analytics API with a read-only token, detects traffic anomalies hour by hour, breaks them down by path / ASN / user agent / cache status, and sends you a short, plain-language report — conclusion first, with the evidence and a suggested action — only when something actually needs your attention.
 
 Cloudflare gives you data. FlareHound gives you the conclusion.
