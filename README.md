@@ -14,7 +14,7 @@ Cloudflare gives you data. FlareHound gives you the conclusion.
 >
 > **Direction:** the built-in web console (since v1.3) is the centre of the product — live movers, new faces, history against the long-term baseline, the WAF audit and rules, settings, and in-console blocking with per-account audit. Notifications are the alerting layer that brings you to the console. See the [web console revision note](docs/web-console-revision.md).
 >
-> The detection model, thresholds and alert discipline are ported from a real incident response (a residential-proxy crawler flood, 2026-11-17). See [SPEC.md](SPEC.md) (in Chinese) for the full design.
+> The detection model, thresholds and alert discipline are ported from a real incident response (a residential-proxy crawler flood, 2026-11-17).
 
 ## Why
 
@@ -246,7 +246,6 @@ The primary form factor is a single Go binary in a Docker container, running on 
 - ~~v1.11~~ — WAF audit coverage per zone (each zone's own hosts and sensitive paths) ✅
 - ~~v1.12~~ — e-mail over HTTPS (Resend) where outbound SMTP is blocked ✅
 
-Full specification: [SPEC.md](SPEC.md) (Chinese).
 
 ## Limitations
 
