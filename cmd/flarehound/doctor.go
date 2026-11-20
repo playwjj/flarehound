@@ -23,6 +23,7 @@ import (
 	"github.com/playwjj/flarehound/internal/config"
 	"github.com/playwjj/flarehound/internal/console"
 	"github.com/playwjj/flarehound/internal/control"
+	"github.com/playwjj/flarehound/internal/geoip"
 	"github.com/playwjj/flarehound/internal/health"
 	"github.com/playwjj/flarehound/internal/schedule"
 	"github.com/playwjj/flarehound/internal/state"
@@ -94,6 +95,7 @@ func runDoctor(ctx context.Context, cfg *config.Config, cfgPath string, out io.W
 	} else {
 		d.warn("no heartbeat ping URL (notify.heartbeat_url_env): nobody outside notices if the watchdog dies")
 	}
+	doctorGeoIP(d, cfg)
 
 	read := cfapi.New(cfg.APIToken)
 	wt := os.Getenv(cfg.Blocking.WriteTokenEnv)
@@ -466,4 +468,27 @@ func doctorSettings(d *doctorOut, cfg *config.Config, now time.Time) {
 		}
 	}
 	d.warn("channel variables are checked in the process running doctor; the console's notification settings show what the watch itself sees, and can send a test through it")
+}
+
+// doctorGeoIP reports the IP-location library: loaded (with its date and
+// size), not found (the feature is simply off), or unreadable (an error).
+func doctorGeoIP(d *doctorOut, cfg *config.Config) {
+	st := geoip.Load(cfg.GeoIPCandidates())
+	switch {
+	case st.DB != nil:
+		defer st.DB.Close()
+		in := st.DB.Info()
+		file := ""
+		if fi, err := os.Stat(st.Path); err == nil {
+			file = ", file " + fi.ModTime().In(cfg.Location).Format("2006-01-02")
+		}
+		d.ok("IP location: %s loaded — %s, built %s%s, %s networks", st.Path, in.Type, in.Built.Format("2006-01-02"), file, fmtInt(int64(in.Networks)))
+		if age := time.Since(in.Built); age > 180*24*time.Hour {
+			d.warn("IP location library is %d days old (country assignments change slowly; `flarehound geoip update` refreshes it)", int(age.Hours()/24))
+		}
+	case st.Err != nil:
+		d.bad("IP location off: %s cannot be used: %v — replace it (`flarehound geoip update`) or remove it", st.Path, st.Err)
+	default:
+		d.warn("IP location off: no country library (looked for %s) — `flarehound geoip update` downloads one", strings.Join(st.Tried, ", "))
+	}
 }

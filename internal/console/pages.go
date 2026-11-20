@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"html"
 	"html/template"
 	"log"
 	"math"
@@ -17,6 +18,7 @@ import (
 	"github.com/playwjj/flarehound/internal/blockcli"
 	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/config"
+	"github.com/playwjj/flarehound/internal/geoip"
 	"github.com/playwjj/flarehound/internal/report"
 	"github.com/playwjj/flarehound/internal/ruleexec"
 	"github.com/playwjj/flarehound/internal/store"
@@ -141,6 +143,16 @@ type auditView struct {
 	Fixes    []wafkit.Fix
 }
 
+// geoTag is the console's compact IP location: " (IN)" with the
+// country's name as a tooltip.
+func geoTag(ip string, l lang) template.HTML {
+	code := geoip.Country(ip)
+	if code == "" {
+		return ""
+	}
+	return template.HTML(` <span class="geo" title="` + html.EscapeString(l.t("ip_location")+": "+geoip.Name(code, string(l))) + `">(` + html.EscapeString(code) + `)</span>`)
+}
+
 func urlQuery(s string) string { return url.QueryEscape(s) }
 
 func (s *Server) funcs(l lang) template.FuncMap {
@@ -205,8 +217,19 @@ func (s *Server) funcs(l lang) template.FuncMap {
 			}
 			return strings.Join(parts, " · ")
 		},
-		"tf":  func(k string, a ...any) string { return fmt.Sprintf(l.t(k), a...) },
-		"num": fmtNum,
+		// geo follows an address (or CIDR) with its IP location, "(IN)",
+		// the country's name on hover; nothing without a library.
+		"geo": func(ip string) template.HTML { return geoTag(ip, l) },
+		// geoOf is geo for a block target: IP targets only.
+		"geoOf": func(typ any, value string) template.HTML {
+			if fmt.Sprint(typ) != "ip" {
+				return ""
+			}
+			return geoTag(value, l)
+		},
+		"geoLabel": func(code string) string { return geoip.Label(code, string(l)) },
+		"tf":       func(k string, a ...any) string { return fmt.Sprintf(l.t(k), a...) },
+		"num":      fmtNum,
 		"numf": func(v float64, unit string) string {
 			if unit == "ms" {
 				return fmt.Sprintf("%.1f ms", v)

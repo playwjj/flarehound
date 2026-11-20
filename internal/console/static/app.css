@@ -217,6 +217,7 @@ ul.known li { margin-bottom: .3rem; }
 .row { display: flex; flex-wrap: wrap; gap: .3rem; }
 
 .asnname { font-size: .82rem; color: var(--muted); }
+.geo { font-size: .78rem; color: var(--muted); white-space: nowrap; cursor: help; }
 .net { border-radius: 4px; padding: 0 .3rem; }
 .net-hosting { background: var(--alert-bg); color: var(--fg); }
 .net-eyeball { background: var(--ok-bg); color: var(--fg); }

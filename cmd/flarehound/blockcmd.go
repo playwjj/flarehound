@@ -17,6 +17,7 @@ import (
 	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/check"
 	"github.com/playwjj/flarehound/internal/config"
+	"github.com/playwjj/flarehound/internal/geoip"
 	"github.com/playwjj/flarehound/internal/health"
 	"github.com/playwjj/flarehound/internal/logx"
 	"github.com/playwjj/flarehound/internal/report"
@@ -31,6 +32,7 @@ const blockUsage = `Commands:
   flarehound doctor                                self-check: config, what each token can do, capabilities, archive, heartbeat
   flarehound health [--file heartbeat]             exit 0 if the watch loop's heartbeat is fresh (Docker HEALTHCHECK)
   flarehound console [help]                        the web console (see "flarehound console help")
+  flarehound geoip update [-o PATH]                download the newest DB-IP country library (IP location)
 
 Blocking commands (separate write token, see README):
 
@@ -156,6 +158,7 @@ func runSubcommand(ctx context.Context, cfgPath, verb string, args []string, red
 		return 1
 	}
 	redactor.Add(cfg.Secrets()...)
+	geoip.Setup(cfg.GeoIPCandidates()) // IP location in CLI output; off without a library
 
 	fail := func(err error) int {
 		if errors.Is(err, blockcli.ErrAborted) {

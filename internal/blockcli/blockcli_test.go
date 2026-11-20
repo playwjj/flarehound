@@ -14,6 +14,7 @@ import (
 	"github.com/playwjj/flarehound/internal/block/fakecf"
 	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/config"
+	"github.com/playwjj/flarehound/internal/geoip"
 	"github.com/playwjj/flarehound/internal/store"
 )
 
@@ -240,5 +241,45 @@ func TestLiveText(t *testing.T) {
 	}
 	if got := LiveText(block.Live{Count: 493, Last: time.Date(2026, 11, 19, 13, 2, 0, 0, loc)}, n, loc); got != "493 (last 13:02)" {
 		t.Fatal(got)
+	}
+}
+
+// topRead adds the Top read the IP profile uses.
+type topRead struct{ fakeRead }
+
+func (topRead) Top(_ context.Context, _ string, _, _ time.Time, dim string, _ int, f cfapi.Filter) ([]cfapi.Face, error) {
+	if dim == cfapi.DimASN && f.ClientIP == "106.201.104.211" {
+		return []cfapi.Face{{Name: "AS4134", ASN: 4134, Count: 1200}}, nil
+	}
+	return nil, nil
+}
+
+// An IP block's review shows the IP location, its network and its last
+// 24 hours; the blocks list follows the IP with its location.
+func TestIPLocationInCLI(t *testing.T) {
+	geoip.UseFunc(func(s string) string {
+		if s == "106.201.104.211" {
+			return "IN"
+		}
+		return ""
+	})
+	defer geoip.Reset()
+	e, _, out := newEnv(t, "")
+	e.Read = topRead{}
+	ctx := context.Background()
+	if err := e.Block(ctx, target(t, "ip", "106.201.104.211"), BlockOpts{Yes: true}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"IP location: IN · India (registered/routed location", "Network:    AS4134 (CHINANET-BACKBONE) — eyeball network", "Last 24 h:  1200 requests"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("review lacks %q:\n%s", want, out)
+		}
+	}
+	out.Reset()
+	if err := e.List(ctx, 7); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "106.201.104.211 [IN · India]") {
+		t.Errorf("list lacks the IP location:\n%s", out)
 	}
 }

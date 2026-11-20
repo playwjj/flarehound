@@ -31,6 +31,7 @@ Rule quotas also differ by plan (custom rules Free 5 / Pro 20 / Business 100 / E
 - **Baseline problems.** If yesterday itself was abnormal, the comparison is distorted. The 4-week median baseline (once the archive has enough samples) reduces this, but a long-lasting anomaly can still become the new normal.
 - **No semantics.** Rules cannot know whether a new ASN is a crawler fleet or your own new service. Register known sources under `known_faces`.
 - **Per-country and per-range shares** are not measured when blocking; FlareHound says so in the plan.
+- **IP location is a library's reading, not a fact.** It is the registered/routed country of an address — a residential proxy shows its exit, a data-centre address its data centre — and libraries disagree at the edges (DB-IP lite places Google's IPv6 resolver `2001:4860:4860::8888` in CA, GeoLite2 in US). There is deliberately no per-country traffic view built from it: countries inferred from the top IPs would be a heavily biased sample.
 - No AI in the detection path: findings are deterministic and reproducible from the same data.
 
 ## Scope

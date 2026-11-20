@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/playwjj/flarehound/internal/analyze"
+	"github.com/playwjj/flarehound/internal/cfapi"
+	"github.com/playwjj/flarehound/internal/geoip"
 	"github.com/playwjj/flarehound/internal/schedule"
 	"github.com/playwjj/flarehound/internal/state"
 )
@@ -162,5 +164,47 @@ func TestDailyBaselineAccumulating(t *testing.T) {
 	d.Archive.Warming = nil
 	if strings.Contains(Daily("zh", d), "基线积累中") {
 		t.Fatal("note repeated without a newly accumulating line")
+	}
+}
+
+// IP lines carry the IP location when a library is loaded, in the
+// report's language, and are unchanged without one.
+func TestIPLocationInReports(t *testing.T) {
+	in := func(s string) string {
+		if s == "106.201.104.211" || s == "106.201.104.0/24" {
+			return "IN"
+		}
+		return ""
+	}
+	alert := IntradayData{Zone: "z", Window: w, Decision: state.DecAlert,
+		Findings: []analyze.Finding{{Rule: analyze.RuleTotalUp, Cur: 60_000, Base: 30_000, Pct: 100}},
+		Attr:     analyze.Attribution{TopIPs: []cfapi.Face{{Name: "106.201.104.211", Count: 9000}, {Name: "10.1.2.3", Count: 5}}},
+		Block:    analyze.BlockAdvice{Candidates: []analyze.IPShare{{IP: "106.201.104.211", Count: 9000, Share: 0.4}}},
+	}
+	day := schedule.Window{From: w.From.Add(-23 * time.Hour), To: w.To}
+	daily := DailyData{Zone: "z", Window: day, Loc: time.UTC,
+		MitigatedIPs: []cfapi.Face{{Name: "106.201.104.211", Count: 700}},
+		Blocks: []BlockStatus{{Target: "106.201.104.0/24", Action: "block", Attempts: 3, Since: day.From, ExpiresAt: day.To.Add(48 * time.Hour)},
+			{Target: "AS45102", Action: "block", Since: day.From}},
+	}
+
+	off := Intraday("en", alert) + Daily("en", daily)
+	if strings.Contains(off, "[IN") {
+		t.Fatalf("no library, yet a location:\n%s", off)
+	}
+
+	geoip.UseFunc(in)
+	defer geoip.Reset()
+	en := Intraday("en", alert)
+	for _, want := range []string{"top client IPs: 106.201.104.211 [IN · India] 9,000, 10.1.2.3 5", "- IP 106.201.104.211 [IN · India]: 9,000 requests"} {
+		if !strings.Contains(en, want) {
+			t.Errorf("alert lacks %q:\n%s", want, en)
+		}
+	}
+	zh := Daily("zh", daily)
+	for _, want := range []string{"  106.201.104.211 [印度 (IN)]: 700", "  106.201.104.0/24 [印度 (IN)] (block): 3", "106.201.104.0/24 [印度 (IN)]（block）", "  AS45102 (block)"} {
+		if !strings.Contains(zh, want) {
+			t.Errorf("daily lacks %q:\n%s", want, zh)
+		}
 	}
 }

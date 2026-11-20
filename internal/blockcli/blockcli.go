@@ -18,6 +18,7 @@ import (
 	"github.com/playwjj/flarehound/internal/block"
 	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/config"
+	"github.com/playwjj/flarehound/internal/geoip"
 	"github.com/playwjj/flarehound/internal/schedule"
 	"github.com/playwjj/flarehound/internal/store"
 	"github.com/playwjj/flarehound/internal/suggest"
@@ -164,6 +165,15 @@ type Prepared struct {
 	// that let this target through — the block may then do nothing.
 	Where  string
 	Bypass []string
+	// IP targets: the IP location (country code, "" when the library is
+	// off or does not place it) and, for a single address, its network
+	// and requests over the last 24 hours. Display only.
+	Country   string
+	IPASN     int
+	IPASNName string
+	IPNetwork string // hosting | eyeball | unknown ("" when IPASN is 0)
+	Day       int64
+	DayKnown  bool
 
 	state block.State
 }
@@ -217,6 +227,10 @@ func (e *Env) Prepare(ctx context.Context, t block.Target, o BlockOpts) (*Prepar
 		}
 		p.Label += " — " + p.Network + " network"
 	}
+	if t.Type == block.IP {
+		p.Country = geoip.Country(t.Value)
+		e.ipProfile(ctx, t, p)
+	}
 	_, p.Share, p.Measured, p.ShareKnown = e.measure(ctx, t)
 	p.Warnings = block.Warnings(t, o.Action, p.Network, p.Share, p.ShareKnown)
 	if !p.Plan.Place.Ignored {
@@ -256,6 +270,44 @@ func (e *Env) profile(ctx context.Context, t block.Target) []cfapi.Face {
 		return nil
 	}
 	return fs
+}
+
+// ipProfile fills a single address's network and its requests over the
+// last 24 hours (one Top query by ASN, filtered to the address; the name
+// best-effort). Left empty when the read API cannot tell.
+func (e *Env) ipProfile(ctx context.Context, t block.Target, p *Prepared) {
+	tp, ok := e.Read.(topAPI)
+	if !ok {
+		return
+	}
+	f, ok := FilterFor(t)
+	if !ok {
+		return
+	}
+	to := e.now().UTC().Truncate(time.Minute)
+	from := to.Add(-24 * time.Hour)
+	fs, err := tp.Top(ctx, e.Zone.ZoneID, from, to, cfapi.DimASN, 3, f)
+	if err != nil {
+		return
+	}
+	p.DayKnown = true
+	for _, x := range fs {
+		p.Day += x.Count
+	}
+	if len(fs) > 0 && fs[0].ASN > 0 {
+		p.IPASN = fs[0].ASN
+		p.IPASNName, _ = e.Read.ASNName(ctx, e.Zone.ZoneID, from, to, p.IPASN)
+		p.IPNetwork = string(suggest.Classify(p.IPASN, p.IPASNName))
+	}
+}
+
+// TargetText is a target as text, an IP target followed by its IP
+// location: "203.0.113.7 [IN · India]".
+func TargetText(t block.Target, lang string) string {
+	if t.Type == block.IP {
+		return t.String() + geoip.Suffix(t.Value, lang)
+	}
+	return t.String()
 }
 
 // Execute applies a prepared block (verified by read-back) and appends
@@ -367,6 +419,21 @@ func (e *Env) Block(ctx context.Context, t block.Target, o BlockOpts) error {
 	}
 	if p.Where != "" {
 		e.printf("Position:   rule %s %s\n", p.Plan.RuleRef, p.Where)
+	}
+	if t.Type == block.IP {
+		if loc := geoip.Label(p.Country, "en"); loc != "" {
+			e.printf("IP location: %s (registered/routed location, not the operator's; reference only)\n", loc)
+		}
+		if p.IPASN > 0 {
+			name := ""
+			if p.IPASNName != "" {
+				name = " (" + p.IPASNName + ")"
+			}
+			e.printf("Network:    AS%d%s — %s network\n", p.IPASN, name, p.IPNetwork)
+		}
+		if p.DayKnown {
+			e.printf("Last 24 h:  %d requests\n", p.Day)
+		}
 	}
 	if p.ShareKnown {
 		e.printf("Measured:   %s\n", p.Measured)
@@ -561,11 +628,11 @@ func (e *Env) List(ctx context.Context, days int) error {
 				expires = ev.ExpiresAt.In(e.loc()).Format("2006-01-02 15:04")
 			}
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", x.Target, x.Action, x.Mechanism, attempts, live, since, expires, reason)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", TargetText(x.Target, "en"), x.Action, x.Mechanism, attempts, live, since, expires, reason)
 	}
 	for t, ev := range audit {
 		if !seen[t] {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t-\t-\t%s\t-\tMISSING in Cloudflare (removed by hand?)\n", t, ev.Action, ev.Mechanism, ev.At.In(e.loc()).Format("2006-01-02 15:04"))
+			fmt.Fprintf(tw, "%s\t%s\t%s\t-\t-\t%s\t-\tMISSING in Cloudflare (removed by hand?)\n", TargetText(t, "en"), ev.Action, ev.Mechanism, ev.At.In(e.loc()).Format("2006-01-02 15:04"))
 		}
 	}
 	return tw.Flush()

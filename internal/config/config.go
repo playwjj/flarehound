@@ -15,7 +15,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	_ "time/tzdata" // the alpine image ships no zoneinfo
+	_ "time/tzdata"
+
+	"github.com/playwjj/flarehound/internal/geoip" // the alpine image ships no zoneinfo
 )
 
 type Zone struct {
@@ -329,6 +331,15 @@ type Config struct {
 	} `json:"archive"`
 
 	Console Console `json:"console"`
+
+	// GeoIP shows each listed IP's country ("IP location") from a local
+	// MMDB country library. Display only: it never takes part in alerts,
+	// scoring or block plans. Missing or unreadable: off, silently.
+	GeoIP struct {
+		// CountryDB is the library's path. Empty: <data dir>/country.mmdb,
+		// then the one the Docker image ships.
+		CountryDB string `json:"country_db"`
+	} `json:"geoip"`
 
 	// Overlay is the console-managed layer applied at load (nil: none).
 	Overlay     *Overlay `json:"-"`
@@ -657,6 +668,16 @@ func dur(s string, def time.Duration) time.Duration {
 	}
 	return d
 }
+
+// GeoIPCandidates are the country library files tried, in order.
+func (c *Config) GeoIPCandidates() []string {
+	return geoip.Candidates(c.GeoIP.CountryDB, c.DataDir())
+}
+
+// GeoIPUpdatePath is where `flarehound geoip update` writes: the
+// configured path, else the data directory (which outranks the image's
+// built-in library).
+func (c *Config) GeoIPUpdatePath() string { return c.GeoIPCandidates()[0] }
 
 // DataDir is the directory holding the state file; per-zone state,
 // the notification outbox and future archives live next to it.

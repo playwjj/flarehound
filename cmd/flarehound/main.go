@@ -19,6 +19,7 @@ import (
 	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/check"
 	"github.com/playwjj/flarehound/internal/config"
+	"github.com/playwjj/flarehound/internal/geoip"
 	"github.com/playwjj/flarehound/internal/health"
 	"github.com/playwjj/flarehound/internal/logx"
 	"github.com/playwjj/flarehound/internal/notify"
@@ -51,6 +52,12 @@ func main() {
 	// Blocking commands: they alone may read the write token.
 	if flag.NArg() > 0 {
 		verb := flag.Arg(0)
+		if verb == "geoip" { // country library maintenance: needs no token
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			code := runGeoIP(ctx, *cfgPath, flag.Args()[1:])
+			stop()
+			os.Exit(code)
+		}
 		if verb == "console" { // the web console: its own process and flags
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			code := runConsole(ctx, *cfgPath, flag.Args()[1:], redactor)
@@ -83,6 +90,7 @@ func main() {
 		cfg, rejected = base, err
 	}
 	redactor.Add(cfg.Secrets()...)
+	geoip.Setup(cfg.GeoIPCandidates()) // IP location in reports; off without a library
 	sw := &settingsWatch{cfgPath: *cfgPath, dataDir: cfg.DataDir(), redactor: redactor}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

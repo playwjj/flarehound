@@ -41,7 +41,7 @@ The same actions are available in the [web console](console.md#blocking-from-the
 
 ## The confirmation step
 
-Before anything changes, FlareHound prints the plan: zone, target (for ASNs with network type and name), action, mechanism and quota, the rule expression afterwards, the target's measured share of the last settled hour's excess over the same hour yesterday (IPs, ASNs and UAs; ranges and countries cannot be measured), the expiry, and every warning. Then it asks `Apply? [y/N]` once.
+Before anything changes, FlareHound prints the plan: zone, target (for ASNs with network type and name; for IPs their [IP location](configuration.md#geoip), and for a single address its network and requests over the last 24 hours), action, mechanism and quota, the rule expression afterwards, the target's measured share of the last settled hour's excess over the same hour yesterday (IPs, ASNs and UAs; ranges and countries cannot be measured), the expiry, and every warning. Then it asks `Apply? [y/N]` once.
 
 Guard rails:
 
@@ -86,7 +86,7 @@ One-click commands in alerts default to `--for 24h`. Without `--for`, a block is
 
 ## Listing and attempts
 
-`flarehound blocks [--days 7]` lists every FlareHound block with action, mechanism, attempts over the last N days, start, expiry and reason. It reconciles Cloudflare with the audit log and flags blocks created by hand (no audit record). The daily report lists each block's attempts in its window too. Attempts come from firewall events. Where that dataset is unavailable (Free plan), IP blocks' attempts are approximated from the archived IP board — each hour's top 50 IPs stopped at the edge — and marked "≈ … (approx.)" with the last hour the IP made the list (an IP outside the top 50 adds nothing that hour); other target types show "n/a". Lift a block when the attempts stop, not when it gets quiet.
+`flarehound blocks [--days 7]` lists every FlareHound block (IPs followed by their IP location, `203.0.113.7 [IN · India]`) with action, mechanism, attempts over the last N days, start, expiry and reason. It reconciles Cloudflare with the audit log and flags blocks created by hand (no audit record). The daily report lists each block's attempts in its window too. Attempts come from firewall events. Where that dataset is unavailable (Free plan), IP blocks' attempts are approximated from the archived IP board — each hour's top 50 IPs stopped at the edge — and marked "≈ … (approx.)" with the last hour the IP made the list (an IP outside the top 50 adds nothing that hour); other target types show "n/a". Lift a block when the attempts stop, not when it gets quiet.
 
 **Live check** (v1.16): the `LIVE 1h` column — and the blocks page — shows the last hour queried live, with the last attempt's time ("4 (last 09:07)"). When the hour is empty it looks back 3 hours for the last block instead of showing a bare 0 ("none landed yet; last 12:58 (33m ago)", or "none in 3h"). Paid plans count firewall events on the block's own rule — they can reach the dataset 30–60 minutes late, so the check also says how far the event data reaches ("data to 12:59"); Free counts the target's requests stopped at the edge by any rule.
 

@@ -47,6 +47,7 @@ flarehound -config config.json -backfill 28
 | `console users` | — | List console accounts |
 | `console reset-password --user NAME` | — | New password, unlock, end all sessions (local recovery) |
 | `console reset-totp --user NAME` | — | Turn off two-factor sign-in for an account (local recovery) |
+| `geoip update [-o PATH]` | — | Download the newest DB-IP country library for [IP location](configuration.md#geoip) and replace it atomically (`-o` writes elsewhere; needs no config token) |
 | `help` | — | Print command usage |
 
 ### `flarehound doctor`
@@ -56,7 +57,8 @@ Run it first after installing. It prints, read-only:
 - the version and whether the configuration validates; configured channels; whether a heartbeat URL is set;
 - per zone: analytics reachable (with the last hour's request count), the plan's capabilities (ASN breakdown, firewall events and how long they are kept), Worker metrics;
 - a **capability matrix** — hourly watch, WAF audit, calibration, one-click blocking, rule changes, cache rules — each ✓ or ✗ **with the missing permission named**;
-- the last evaluated window, any open anomaly, the next hourly round and daily report, the heartbeat age, the archive span, the measured samples behind each newer metric's baseline (and how many days a line still accumulating has to go), and pending outbox messages.
+- the last evaluated window, any open anomaly, the next hourly round and daily report, the heartbeat age, the archive span, the measured samples behind each newer metric's baseline (and how many days a line still accumulating has to go), and pending outbox messages;
+- the [IP location](configuration.md#geoip) library: loaded (type, build date, file date, networks), not found (the feature is off — not a problem), or present but unusable (✗).
 
 Exit code 1 when something required is missing. Write permissions are probed with read-only calls, so an edit right is only proven by a real change.
 

@@ -17,6 +17,7 @@ import (
 	"github.com/playwjj/flarehound/internal/block"
 	"github.com/playwjj/flarehound/internal/calibrate"
 	"github.com/playwjj/flarehound/internal/cfapi"
+	"github.com/playwjj/flarehound/internal/geoip"
 	"github.com/playwjj/flarehound/internal/schedule"
 	"github.com/playwjj/flarehound/internal/state"
 	"github.com/playwjj/flarehound/internal/suggest"
@@ -422,6 +423,23 @@ func faceList(fs []cfapi.Face, max int) string {
 	return strings.Join(parts, ", ")
 }
 
+// ip is an address (or CIDR) followed by its IP location —
+// "106.201.104.211 [IN · India]", "106.201.104.211 [印度 (IN)]" — or
+// the text unchanged when it is not an address or the library is off.
+func (l lang) ip(s string) string { return s + geoip.Suffix(s, string(l)) }
+
+// ipList is faceList for client IPs, each with its IP location.
+func (l lang) ipList(fs []cfapi.Face, max int) string {
+	var parts []string
+	for i, f := range fs {
+		if i >= max {
+			break
+		}
+		parts = append(parts, fmt.Sprintf("%s %s", l.ip(clip(f.Name, 60)), n(f.Count)))
+	}
+	return strings.Join(parts, ", ")
+}
+
 func (l lang) hypothesis(h analyze.Hypothesis) (claim, falsifier string) {
 	switch h.ID {
 	case analyze.HypNewFaceSurge:
@@ -620,7 +638,7 @@ func Intraday(language string, d IntradayData) string {
 		attr = append(attr, l.t("origin work by path: ", "回源请求按路径：")+faceList(a.OriginPaths, 5))
 	}
 	if len(a.TopIPs) > 0 {
-		attr = append(attr, l.t("top client IPs: ", "客户端 IP Top：")+faceList(a.TopIPs, 5))
+		attr = append(attr, l.t("top client IPs: ", "客户端 IP Top：")+l.ipList(a.TopIPs, 5))
 	}
 	if len(a.Firewall) > 0 {
 		attr = append(attr, l.t("firewall events: ", "防火墙事件：")+faceList(a.Firewall, 5))
@@ -654,7 +672,7 @@ func Intraday(language string, d IntradayData) string {
 	if len(d.Block.Candidates) > 0 {
 		b.WriteString("\n" + l.t("Block candidates:\n", "封锁候选：\n"))
 		for _, c := range d.Block.Candidates {
-			fmt.Fprintf(&b, l.t("- IP %s: %s requests, ~%s of the excess\n", "- IP %s：%s 次，约占增量 %s\n"), c.IP, n(c.Count), share(c.Share))
+			fmt.Fprintf(&b, l.t("- IP %s: %s requests, ~%s of the excess\n", "- IP %s：%s 次，约占增量 %s\n"), l.ip(c.IP), n(c.Count), share(c.Share))
 			if t, err := block.Parse("ip", c.IP); err == nil {
 				fmt.Fprintf(&b, "  %s %s\n", l.t("one-click:", "一键执行："), block.Command(t, block.Block, "24h", ""))
 			}
@@ -669,10 +687,10 @@ func Intraday(language string, d IntradayData) string {
 			if c.Cloudflare {
 				fmt.Fprintf(&b, l.t("- IP %s: %s requests, ~%s of the excess — Cloudflare's own address (%s). This is Worker egress: a Worker (yours, or another zone's) fetching this site. Find the calling Worker; blocking would cut off your own services.\n",
 					"- IP %s：%s 次，约占增量 %s——Cloudflare 自有地址（%s）。这是 Worker 出口：某个 Worker（你自己的或其他 zone 的）在调用本站。应去找调用方 Worker；封它会切断自家服务。\n"),
-					c.IP, n(c.Count), share(c.Share), c.Protected)
+					l.ip(c.IP), n(c.Count), share(c.Share), c.Protected)
 			} else {
 				fmt.Fprintf(&b, l.t("- IP %s: %s requests, ~%s of the excess — protected: %s\n", "- IP %s：%s 次，约占增量 %s——受保护：%s\n"),
-					c.IP, n(c.Count), share(c.Share), c.Protected)
+					l.ip(c.IP), n(c.Count), share(c.Share), c.Protected)
 			}
 		}
 	}
@@ -852,7 +870,7 @@ func Daily(language string, d DailyData) string {
 		b.WriteString(l.t("- IPs most often blocked/challenged (all rules; are blocked IPs still knocking?):\n",
 			"- 被拦截 / 挑战最多的 IP（所有规则；被封的 IP 还在敲门吗）：\n"))
 		for _, f := range d.MitigatedIPs {
-			fmt.Fprintf(&b, "  %s: %s\n", f.Name, n(f.Count))
+			fmt.Fprintf(&b, "  %s: %s\n", l.ip(f.Name), n(f.Count))
 		}
 	}
 	if len(d.Blocks) > 0 {
@@ -864,7 +882,7 @@ func Daily(language string, d DailyData) string {
 			if !x.ExpiresAt.IsZero() {
 				exp = l.t("expires ", "到期 ") + x.ExpiresAt.In(locOr(d.Loc)).Format("01-02 15:04")
 			}
-			fmt.Fprintf(&b, "  %s (%s): %s; %s %s; %s\n", x.Target, x.Action, att,
+			fmt.Fprintf(&b, "  %s (%s): %s; %s %s; %s\n", l.ip(x.Target), x.Action, att,
 				l.t("since", "始于"), x.Since.In(locOr(d.Loc)).Format("01-02 15:04"), exp)
 		}
 		l.expiring(&b, d)
@@ -960,7 +978,7 @@ func (l lang) expiring(b *strings.Builder, d DailyData) {
 		default:
 			verdict = l.t("quiet in the window — it will be lifted automatically", "窗口内已无尝试——到期将自动解除")
 		}
-		out = append(out, fmt.Sprintf(l.t("  %s (%s) expires %s: %s\n", "  %s（%s）%s 到期：%s\n"), x.Target, x.Action, when, verdict))
+		out = append(out, fmt.Sprintf(l.t("  %s (%s) expires %s: %s\n", "  %s（%s）%s 到期：%s\n"), l.ip(x.Target), x.Action, when, verdict))
 	}
 	if len(out) == 0 {
 		return

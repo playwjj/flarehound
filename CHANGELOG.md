@@ -2,17 +2,16 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
-## v1.16.2 — 2026-11-19
+## v1.17.0 — 2026-11-20
 
-- **A line whose baseline is still growing does not alert.** 52x became a metric in v1.15 (12:36). Within hours skoolopedia paged "origin unreachable" twice — `26 vs 0 (+999%)`, then `48 vs 3 (+1500%)` — for its ordinary 530/522 trickle (12–48 an hour, the origin serving throughout), and starngage's tile stayed red against "baseline 0". v1.16.1 stopped counting unmeasured hours as 0, but a median resting on one or two measured hours, or none, still let any normal hour clear "≥ 10 and ≥ 2× baseline". The same shape returns with every new metric (origin latency in v1.15, the CPU P99 in v1.16). Now every line read against the archive's same-hour median knows how many **measured** hours stand behind it:
-  - **Immature baseline** — fewer than `thresholds.baseline_min_samples` (default **3**) earlier days measured the same hour: `origin_unreachable` (plain and bookkeeping rule alike) and `origin_slow` **do not fire** — also on a fresh archive where only yesterday's hour would decide. The watch logs "held: baseline accumulating (1/3 measured same-hour samples)". The CPU check treats an immature P99 as not measured, instead of judging it against one hour.
-  - **Console**: such a tile is neutral — *baseline accumulating (1/3 days of this hour measured)* — neither red nor green, and does not count towards "needs attention".
-  - **Daily report**: one line, in the first report after a metric started to be measured — "Baseline accumulating: edge 52x (origin unreachable) — newly measured; these lines stay quiet until 3 days of the same hour are measured (from about 11-22), then take over on their own." — not repeated afterwards.
-  - **`doctor`**: per zone, the measured samples behind each newer metric for the newest hour ("baseline skoolopedia.com @15:00: accumulating, these lines stay quiet: unreachable 1/3 (~2 more day(s))").
-  - **Takes over by itself**: the round the baseline has its samples, the line is judged by the current rules — starngage's tile then turns into *Edge 52x (bookkeeping background)* without clearing any state.
-  - **Earlier false alarms are traced, not counted**: an archived alert that rested only on such lines while their baseline was immature (the v1.16.1 pages above) is left out of the console's alerts of the last 24 h and appears on the timeline as *alert on an immature baseline (not an anomaly)*.
-- Archived hours now record what they measured, so a **measured 0** of 52x is a baseline sample and an unmeasured hour is not (hours from v1.15–v1.16.1 are still read by what they hold).
-- Zones and metrics with enough samples behave exactly as before; comparisons made from two live windows (yesterday's same hour, the daily report's two days) are not affected. Without an archive (`archive.disabled`) there is nothing to measure maturity by, and the lines keep their old behaviour.
+- **IP location.** Every IP FlareHound shows now carries the country it is registered or routed in — the cheapest piece of context a block decision was missing (a residential address and a data-centre address call for different handling). Display only: it takes no part in detection, alerts, severity or block plans, and it is looked up when shown, never archived.
+  - **Block review** (console and CLI): *IP location* next to the address's network (ASN and type) and its requests over the last 24 hours, with the measured share as before, and a small-print note: the location is where the address is registered/routed, not where its operator is — a residential proxy's exit country says nothing about who drives it, a data-centre address shows the data centre.
+  - **IP board, drill-down, blocks page and block log**: `106.201.104.211 (IN)`, the country's name on hover (in the console's language).
+  - **Alerts, daily report, every channel and `flarehound blocks`**: `106.201.104.211 [IN · India]`, with `report.language: zh` `106.201.104.211 [印度 (IN)]` — block candidates, top client IPs, most-blocked IPs, FlareHound blocks and the blocks expiring this week.
+  - **Local library, no new data channel**: DB-IP's free country library (`dbip-country-lite`, MMDB, monthly, CC BY 4.0 — IP geolocation by DB-IP), read in-process (IPv4 and IPv6) with no third-party lookups. The Docker image bundles the month it was built in; `geoip.country_db` points at another file (GeoLite2-Country works too, bring your own); otherwise `<data dir>/country.mmdb` is used ahead of the image's copy.
+  - **`flarehound geoip update`** downloads the newest lite library, checks it reads as a country library and replaces the file atomically (no token needed). Watch and console pick it up within 10 minutes.
+  - **No library, or a broken one: nothing changes** — every IP is shown as before. `flarehound doctor` reports the library (type, build date, file date, networks), that none was found, or why a file is unusable.
+- Changelog: the v1.16.2 entry appeared twice.
 
 ## v1.16.2 — 2026-11-19
 

@@ -177,6 +177,19 @@ With several zones, each zone probes only the `waf_audit.hosts` that belong to i
 | `archive.file` | string | `<data dir>/archive.db` | Archive path. |
 | `archive.hourly_retention_days` | int | `400` | Days to keep hourly snapshots (about 13 months). Minimum 30. Daily snapshots, faces and alerts are kept forever. |
 
+## geoip
+
+**IP location** (v1.17): each IP FlareHound shows — the IP board, the drill-down, the block review, the blocks list, alerts, the daily report and `flarehound blocks` — is followed by the country it is registered or routed in, read from a local MMDB country library. Display only: the country never takes part in detection, alerts, severity or block plans, and it is looked up when shown, never archived (a newer library may place an address differently).
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `geoip.country_db` | string | — | Path of the country library (MMDB). Empty: `<data dir>/country.mmdb`, then the library the Docker image ships (`/usr/share/flarehound/country.mmdb`). |
+
+- **Library.** The default is DB-IP's free [IP to Country Lite](https://db-ip.com/db/download/ip-to-country-lite) (monthly, CC BY 4.0 — IP geolocation by DB-IP); the Docker image bundles the month it was built in. MaxMind's GeoLite2-Country also works, but its licence does not allow FlareHound to ship it: download it yourself and point `geoip.country_db` at it. IPv4 and IPv6 are both covered.
+- **Updating.** `flarehound geoip update` downloads the newest DB-IP lite file, checks that it reads as a country library, and atomically replaces `geoip.country_db` (or `<data dir>/country.mmdb`, which outranks the image's copy). It needs no token. Running processes pick the new file up within 10 minutes. Country assignments change slowly: a library a few months old is fine, and nothing forces an update.
+- **Missing or broken library:** the feature is off, silently — every IP is shown exactly as before and nothing else changes. `flarehound doctor` says which library is loaded (type, build date, file date, networks), that none was found, or why a file could not be used.
+- **What it means.** *IP location* is where the address is registered or routed, not where its operator is: a residential proxy's exit country says nothing about who drives it, and a data-centre address shows the data centre. It is one cheap piece of context next to the network (ASN) and the volume, not a verdict.
+
 ## console
 
 The web console (v1.3, read-only) — see [Web console](console.md).

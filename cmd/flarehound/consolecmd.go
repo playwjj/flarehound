@@ -26,6 +26,7 @@ import (
 	"github.com/playwjj/flarehound/internal/check"
 	"github.com/playwjj/flarehound/internal/config"
 	"github.com/playwjj/flarehound/internal/console"
+	"github.com/playwjj/flarehound/internal/geoip"
 	"github.com/playwjj/flarehound/internal/health"
 	"github.com/playwjj/flarehound/internal/logx"
 	"github.com/playwjj/flarehound/internal/notify"
@@ -69,6 +70,7 @@ func runConsole(ctx context.Context, cfgPath string, args []string, redactor *lo
 		return 1
 	}
 	redactor.Add(cfg.Secrets()...)
+	geoip.Setup(cfg.GeoIPCandidates()) // IP location on the console; off without a library
 	if *listen != "" {
 		cfg.Console.Listen = *listen
 	}

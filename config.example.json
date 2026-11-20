@@ -79,6 +79,9 @@
     "file": "data/archive.db",
     "hourly_retention_days": 400
   },
+  "geoip": {
+    "country_db": ""
+  },
   "console": {
     "enabled": false,
     "listen": "127.0.0.1:8640",

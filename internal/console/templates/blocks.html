@@ -10,7 +10,7 @@
   <table class="list rsp">
   <thead><tr><th>{{t "value"}}</th><th>{{t "action"}}</th><th class="r">{{t "attempts"}}</th><th>{{t "expires"}}</th><th>{{t "actions"}}</th></tr></thead>
   <tbody>{{range .Rows}}<tr>
-    <td data-label="{{t "value"}}"><span class="mono">{{.Target}}</span><br><small class="muted">{{.Mechanism}}{{if .HasEvent}} · {{when .Event.At}} · {{.Event.Actor}}{{end}}</small>
+    <td data-label="{{t "value"}}"><span class="mono">{{.Target}}</span>{{geoOf .Target.Type .Target.Value}}<br><small class="muted">{{.Mechanism}}{{if .HasEvent}} · {{when .Event.At}} · {{.Event.Actor}}{{end}}</small>
       {{if .Missing}}<br><span class="bad">{{t "missing_cf"}}</span>{{else if not .HasEvent}}<br><small class="muted">{{t "no_audit"}}</small>{{end}}
       {{if and .HasEvent .Event.Reason}}<br><small class="muted">{{.Event.Reason}}</small>{{end}}</td>
     <td data-label="{{t "action"}}">{{.Action}}</td>
@@ -32,7 +32,7 @@
 <table class="list rsp">
 <thead><tr><th>{{t "type"}}</th><th>{{t "value"}}</th><th>{{t "action"}}</th><th>{{t "expires"}}</th><th>{{t "reason"}}</th></tr></thead>
 <tbody>{{range $.Active}}<tr>
-  <td data-label="{{t "type"}}">{{.Type}}</td><td data-label="{{t "value"}}" class="mono">{{.Value}}</td><td data-label="{{t "action"}}">{{.Action}}</td>
+  <td data-label="{{t "type"}}">{{.Type}}</td><td data-label="{{t "value"}}"><span class="mono">{{.Value}}</span>{{geoOf .Type .Value}}</td><td data-label="{{t "action"}}">{{.Action}}</td>
   <td data-label="{{t "expires"}}" class="nowrap">{{if .ExpiresAt.IsZero}}{{t "permanent"}}{{else}}{{when .ExpiresAt}}{{end}}</td>
   <td data-label="{{t "reason"}}" class="muted">{{.Reason}}<br><small>{{when .At}} · {{.Actor}}</small></td>
 </tr>{{end}}</tbody></table>{{end}}
@@ -44,7 +44,7 @@
 <thead><tr><th>{{t "time"}}</th><th>{{t "op"}}</th><th>{{t "value"}}</th><th>{{t "actor"}}</th><th></th></tr></thead>
 <tbody>{{range .Log}}<tr>
   <td data-label="{{t "time"}}" class="nowrap">{{when .At}}<br><small class="muted">#{{.ID}}</small></td><td data-label="{{t "op"}}"><span class="ev ev-{{.Op}}">{{evName .Op}}</span> {{.Action}}{{if and (eq .Op "renew") (not .ExpiresAt.IsZero)}}<br><small class="muted">→ {{when .ExpiresAt}}</small>{{end}}</td>
-  <td data-label="{{t "value"}}"><span class="mono">{{.Type}} {{.Value}}</span>{{if .Reason}}<br><small class="muted">{{.Reason}}</small>{{end}}</td><td data-label="{{t "actor"}}">{{.Actor}}</td>
+  <td data-label="{{t "value"}}"><span class="mono">{{.Type}} {{.Value}}</span>{{geoOf .Type .Value}}{{if .Reason}}<br><small class="muted">{{.Reason}}</small>{{end}}</td><td data-label="{{t "actor"}}">{{.Actor}}</td>
   <td class="acts">{{if $.WriteOn}}{{if eq .Op "block"}}<a class="act" href="/blocks/effect/{{.ID}}?z={{zq $z}}">{{t "effect"}}</a> {{end}}{{if $can}}<a class="act" href="/blocks/undo/{{.ID}}?z={{zq $z}}">{{t "undo"}}</a>{{end}}{{end}}</td>
 </tr>{{end}}</tbody></table>
 {{if $.WriteOn}}<p class="note">{{t "undo_note"}}</p>{{end}}{{end}}
@@ -94,6 +94,9 @@
   {{if .AlreadyDone}}<div class="banner info">{{.Plan.Note}}</div>{{else}}
   <dl class="kv">
     <dt>{{t "value"}}</dt><dd class="mono">{{.Label}}</dd>
+    {{if .Country}}<dt>{{t "ip_location"}}</dt><dd><b>{{geoLabel .Country}}</b><br><small class="muted">{{t "ip_location_note"}} {{t "ip_location_by"}} <a href="https://db-ip.com" rel="noopener">DB-IP</a>.</small></dd>{{end}}
+    {{if .IPASN}}<dt>{{t "ip_network"}}</dt><dd><span class="mono">AS{{.IPASN}}</span>{{if .IPASNName}} · {{.IPASNName}}{{end}} · <span class="net net-{{.IPNetwork}}">{{t (print "net_" .IPNetwork)}}</span></dd>{{end}}
+    {{if .DayKnown}}<dt>{{t "ip_last_24h"}}</dt><dd>{{tf "ip_requests_24h" (num .Day)}}</dd>{{end}}
     <dt>{{t "action"}}</dt><dd><b>{{.Opts.Action}}</b></dd>
     <dt>{{t "mechanism"}}</dt><dd>{{.Plan.Note}}</dd>
     {{if .Plan.Expression}}<dt>{{t "rule_after"}}</dt><dd><code class="wrap">{{.Plan.Expression}}</code></dd>{{end}}
@@ -125,7 +128,7 @@
 {{define "unblockreview"}}{{template "head" .}}
 <section class="card">
 <h1>{{t "unblock_review"}} · {{.Zone.Name}}</h1>
-<p class="mono">{{.Target}}</p>
+<p><span class="mono">{{.Target}}</span>{{geoOf .Target.Type .Target.Value}}</p>
 {{if .Entries}}<ul>{{range .Entries}}<li>{{.Action}} — {{.Mechanism}}</li>{{end}}</ul>{{end}}
 {{if .Token}}
 <form method="post" action="/blocks/unblock/apply" class="stack confirm">
@@ -143,7 +146,7 @@
 {{define "renewreview"}}{{template "head" .}}
 <section class="card">
 <h1>{{t "renew_review"}} · {{.Zone.Name}}</h1>
-<p class="mono">{{.Target}}</p>
+<p><span class="mono">{{.Target}}</span>{{geoOf .Target.Type .Target.Value}}</p>
 {{if .Event.ID}}<dl class="kv">
   <dt>{{t "expires_now"}}</dt><dd>{{if .Event.ExpiresAt.IsZero}}{{t "permanent"}}{{else}}{{when .Event.ExpiresAt}}{{end}}</dd>
   <dt>{{t "expires_new"}}</dt><dd><b>{{if .Until}}{{when .UntilTime}}{{else}}{{t "permanent"}}{{end}}</b></dd>
@@ -165,7 +168,7 @@
 {{define "effect"}}{{template "head" .}}
 <section class="card">
 <h1>{{t "effect_title"}}</h1>
-<p><span class="mono">{{.Effect.Target}}</span> · {{.Event.Action}} · {{when .Effect.At}} · #{{.Event.ID}}</p>
+<p><span class="mono">{{.Effect.Target}}</span>{{geoOf .Event.Type .Event.Value}} · {{.Event.Action}} · {{when .Effect.At}} · #{{.Event.ID}}</p>
 {{with .Effect}}
 {{if .Err}}<div class="banner warn">{{t "effect_err"}} {{.Err}}</div>{{end}}
 <p class="verdict v-{{verdictKind .}}"><b>{{verdict .}}</b></p>

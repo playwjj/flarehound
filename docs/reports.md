@@ -69,6 +69,7 @@ Produced by fixed rules, for example:
 
 - Shares are of the **excess** (current − baseline). No excess, no candidates: a CPU, 5xx or collapse anomaly with flat traffic never proposes IP blocks.
 - A single IP carrying ≥ 5% of the excess is listed with a one-click command (`flarehound block ip … --for 24h`).
+- Every IP line — block candidates, top client IPs, the daily report's most-blocked IPs and FlareHound blocks — carries its [IP location](configuration.md#geoip) when a country library is loaded: `106.201.104.211 [IN · India]`, or with `report.language: zh` `106.201.104.211 [印度 (IN)]`. It is the registered/routed country, not the operator's, and it never changes what is reported.
 - If the largest blockable IP carries < 1%, sources are **dispersed**: the message says per-IP blocking will not help and points to ASN or path-level action.
 - Cloudflare's own ranges (typically a Worker calling your site), private / reserved ranges and `blocking.never_block` entries are listed separately as "concentrated but not blockable", with the reason.
 - UAs that claim to be a known crawler and fail verification are named as **impostors**.
