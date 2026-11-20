@@ -119,7 +119,7 @@ func TestTranslateFreePlan(t *testing.T) {
 	if c.httpOK || len(c.bad) != 1 || c.bad[0].Why != whyPlan || c.bad[0].Dim != "clientAsn" {
 		t.Fatalf("got %+v", c.bad)
 	}
-	if !strings.Contains(ReasonText(c.bad[0], "zh"), "该区无 ASN 维度") {
+	if !strings.Contains(ReasonText(c.bad[0], "zh"), "该站点无 ASN 维度") {
 		t.Fatalf("reason: %s", ReasonText(c.bad[0], "zh"))
 	}
 }
@@ -236,7 +236,7 @@ func TestRunExemptionGap(t *testing.T) {
 		t.Fatalf("verdict %s (%+v)", r.Verdict, r.Warnings)
 	}
 	v := r.VerdictText("zh")
-	for _, want := range []string{"毛命中 147,300", "已验证机器人 111,493", "净新增可拦 ≈ 35,800", "建议降级为挑战或不处理"} {
+	for _, want := range []string{"总匹配 147,300", "已验证机器人 111,493", "新增拦截 ≈ 35,800", "建议降级为挑战或不处理"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("verdict %q lacks %q", v, want)
 		}
@@ -320,7 +320,7 @@ func TestRunUpperBound(t *testing.T) {
 		t.Fatalf("confidence %s widened %+v", r.Confidence, r.Widened)
 	}
 	txt := r.Text("zh", time.UTC)
-	if !strings.Contains(txt, "上界") || !strings.Contains(txt, "≤ 29,266") || !strings.Contains(r.VerdictText("en"), "≤ 29,266") {
+	if !strings.Contains(txt, "最多值") || !strings.Contains(txt, "≤ 29,266") || !strings.Contains(r.VerdictText("en"), "≤ 29,266") {
 		t.Fatalf("upper bound not labelled:\n%s\n%s", txt, r.VerdictText("en"))
 	}
 	if strings.Contains(r.VerdictText("en"), " 29,266 ") && !strings.Contains(r.VerdictText("en"), "≤ 29,266") {
@@ -338,7 +338,7 @@ func TestRunFreeZone(t *testing.T) {
 		t.Fatalf("free zone: %+v (calls %d)", r, api.calls)
 	}
 	txt := r.Text("zh", time.UTC)
-	if !strings.Contains(txt, "该区无 ASN 维度（clientAsn），不可评估") || !strings.Contains(txt, "不给数") {
+	if !strings.Contains(txt, "该站点无 ASN 维度（clientAsn），无法计算") || !strings.Contains(txt, "不给数") {
 		t.Fatalf("text:\n%s", txt)
 	}
 }
@@ -359,7 +359,7 @@ func TestRunNoFirewall(t *testing.T) {
 	if r.NetKnown || r.NetWhy != "no_firewall" || r.Confidence != Approx {
 		t.Fatalf("net: %+v", r)
 	}
-	if !strings.Contains(r.Text("zh", nil), "净新增不可用") {
+	if !strings.Contains(r.Text("zh", nil), "新增拦截不可用") {
 		t.Fatal("no-firewall not said")
 	}
 }

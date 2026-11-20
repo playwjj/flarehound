@@ -45,11 +45,11 @@ func TestPartialConjunction(t *testing.T) {
 		t.Fatalf("terms: %+v", r.Terms)
 	}
 	v := r.VerdictText("zh")
-	if !strings.Contains(v, "命中介于 0 与 ≤ 10,000 之间") || !strings.Contains(v, "净新增可拦 ≤ 10,000") {
+	if !strings.Contains(v, "命中介于 0 与 ≤ 10,000 之间") || !strings.Contains(v, "新增拦截 ≤ 10,000") {
 		t.Fatalf("verdict: %s", v)
 	}
 	txt := r.Text("zh", time.UTC)
-	for _, want := range []string{"子项标注", "✓ ip.geoip.asnum eq 30633", "? http.cookie contains \"sess\"", "上界按命中计，下界按不命中计", "至少：        0"} {
+	for _, want := range []string{"逐项说明", "✓ ip.geoip.asnum eq 30633", "? http.cookie contains \"sess\"", "算最多值时当作匹配，算最少值时当作不匹配", "至少：        0"} {
 		if !strings.Contains(txt, want) {
 			t.Errorf("text lacks %q:\n%s", want, txt)
 		}

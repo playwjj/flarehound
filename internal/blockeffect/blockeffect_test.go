@@ -78,7 +78,7 @@ func TestPredictionLine(t *testing.T) {
 		t.Fatal("a line without a prediction")
 	}
 	e.Predict(&sim.Report{Evaluable: true, NetKnown: true, Net: 1490 * 24, From: time.Unix(0, 0), To: time.Unix(24*3600, 0)})
-	if got := e.PredictionLine("zh"); got != "预测净新增 ≈ 1,490 次/小时（确认时的模拟）；实际封禁后一小时拦截 1,320 次 (-11%)" {
+	if got := e.PredictionLine("zh"); got != "预测新增拦截 ≈ 1,490 次/小时（确认时的模拟）；实际封禁后一小时拦截 1,320 次 (-11%)" {
 		t.Fatalf("got %q", got)
 	}
 	e.AttemptsKnown = false

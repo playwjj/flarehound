@@ -2,6 +2,11 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.25.0 — 2026-11-20
+
+- **The rule simulator speaks plainly in Chinese**, in the vocabulary of v1.23.0 / v1.24.0 — CLI, console and block review alike: 毛命中 → 总匹配, 豁免 / 豁免拆分 → 规则自带的例外（被例外放过）, 净新增（可拦） → 新增拦截, 上界 / 下界 → 最多值 / 最少值, 不可评估 → 无法计算, 子项标注 → 逐项说明, 构成拆分 → 匹配到的都是谁, 置信 → 可信度, 裁决 → 结论, 窗口 → 时间, 未落定 → 还没到齐, 空 UA 条目（Worker 内部记账） → 没有标识的请求（Worker 内部记录）; the footer counts "queries to Cloudflare" instead of GraphQL queries. The block-effect line reads "预测新增拦截". English is unchanged (gross, net new and upper bound are the usual terms).
+- The console's plain-words test now covers the simulator strings too. Docs: simulator, console, blocking, limitations and reports (zh) follow.
+
 ## v1.24.0 — 2026-11-20
 
 - **The console speaks plainly too**, in the vocabulary v1.23.0 gave the notifications:

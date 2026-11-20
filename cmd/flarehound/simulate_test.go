@@ -44,7 +44,7 @@ func TestSimulateCommand(t *testing.T) {
 	now := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
 	var out bytes.Buffer
 	code := simulate(context.Background(), cfg, z, nil, simAPI{}, nil, simArgs{expr: "ip.geoip.asnum eq 45102", days: 7}, &out, now)
-	if code != 0 || !strings.Contains(out.String(), "该区无 ASN 维度（clientAsn），不可评估") || strings.Contains(out.String(), "毛命中") {
+	if code != 0 || !strings.Contains(out.String(), "该站点无 ASN 维度（clientAsn），无法计算") || strings.Contains(out.String(), "总匹配") {
 		t.Fatalf("free zone: %d\n%s", code, out.String())
 	}
 	out.Reset()

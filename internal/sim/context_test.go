@@ -188,7 +188,7 @@ func TestNetPartialCoverage(t *testing.T) {
 		t.Fatalf("head %q verdict %q", head, r.VerdictText("zh"))
 	}
 	foot := r.NetFoot("zh", time.UTC)
-	if !strings.Contains(foot, "这一段的净新增为 ≈ "+N(r.Net)) || !strings.Contains(foot, "日值据此外推") {
+	if !strings.Contains(foot, "这一段的新增拦截为 ≈ "+N(r.Net)) || !strings.Contains(foot, "日值据此外推") {
 		t.Fatalf("foot %q", foot)
 	}
 }

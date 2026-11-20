@@ -68,7 +68,7 @@ func (e Effect) PredictionLine(lang string) string {
 	if e.PredictedUpper {
 		mark = "≤"
 	}
-	pred := fmt.Sprintf(t(lang, "predicted net new %s %s/h (simulation at review)", "预测净新增 %s %s 次/小时（确认时的模拟）"), mark, n(int64(e.Predicted+0.5)))
+	pred := fmt.Sprintf(t(lang, "predicted net new %s %s/h (simulation at review)", "预测新增拦截 %s %s 次/小时（确认时的模拟）"), mark, n(int64(e.Predicted+0.5)))
 	switch {
 	case !e.Settled:
 		return pred + t(lang, "; actual: the hour after has not settled", "；实际：封禁后一小时的数据还没到齐")

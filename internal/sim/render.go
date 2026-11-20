@@ -88,7 +88,7 @@ func (r *Report) NetFoot(lang string, loc *time.Location) string {
 		loc = time.UTC
 	}
 	return fmt.Sprintf(t(lang, "firewall events reach back only to %s: over %s → %s the net new is %s %s; the daily figure is that, extrapolated",
-		"防火墙事件只覆盖到 %s：%s → %s 这一段的净新增为 %s %s；日值据此外推"),
+		"防火墙事件只覆盖到 %s：%s → %s 这一段的新增拦截为 %s %s；日值据此外推"),
 		r.NetFrom.In(loc).Format("01-02 15:04"), r.NetFrom.In(loc).Format("01-02 15:04"), r.To.In(loc).Format("01-02 15:04"), r.NetMark(), N(r.Net))
 }
 
@@ -100,11 +100,11 @@ func LabelText(conf, lang string) string {
 	case ApproxJoined:
 		return t(lang, "approximate (includes a cross-dataset estimate)", "近似（含数据集拼接估计）")
 	case UpperBound:
-		return t(lang, "upper bound (includes sub-expressions that cannot be evaluated exactly)", "上界（含不可精确评估的子表达式）")
+		return t(lang, "upper bound (includes sub-expressions that cannot be evaluated exactly)", "最多值（含无法精确计算的部分）")
 	case "":
-		return t(lang, "not evaluable", "不可评估")
+		return t(lang, "not evaluable", "无法计算")
 	}
-	return t(lang, "not evaluable", "不可评估")
+	return t(lang, "not evaluable", "无法计算")
 }
 
 // ReasonText says why a sub-expression cannot be evaluated, or how it
@@ -124,19 +124,19 @@ func ReasonText(it Item, lang string) string {
 		return t(lang, "IP ranges (CIDR) cannot be filtered in analytics; list single addresses", "分析数据无法按网段（CIDR）过滤；请列出单个地址")
 	case whyPlan:
 		if it.Dim == "clientAsn" {
-			return t(lang, "this zone's plan has no ASN dimension (clientAsn) — cannot be evaluated here", "该区无 ASN 维度（clientAsn），不可评估")
+			return t(lang, "this zone's plan has no ASN dimension (clientAsn) — cannot be evaluated here", "该站点无 ASN 维度（clientAsn），无法计算")
 		}
-		return fmt.Sprintf(t(lang, "this zone's plan does not expose the %s dimension — cannot be evaluated here", "该区数据不提供 %s 维度，不可评估"), it.Dim)
+		return fmt.Sprintf(t(lang, "this zone's plan does not expose the %s dimension — cannot be evaluated here", "该站点数据不提供 %s 维度，无法计算"), it.Dim)
 	case whyWildcard:
 		return t(lang, "the value contains %, which analytics would read as a wildcard", "取值含 %，分析查询会把它当作通配符")
 	case whyRefNeg:
 		return t(lang, "the referer can only be read by its host; under a negation that widening gives neither a count nor an upper bound",
-			"referer 只能按 host 评估；处于否定之下时，放宽后既不是精确值也不是上界")
+			"referer 只能按 host 评估；处于否定之下时，放宽后既不是精确值也不是最多值")
 	case whyRefHost:
 		return t(lang, "the referer can only be read by its host, and this comparison does not pin one down", "referer 只能按 host 评估，而这个比较无法确定 host")
 	case whyRefWiden:
 		return fmt.Sprintf(t(lang, "the referer can only be read by its host: counted as every referer from %s (an upper bound)",
-			"referer 只能按 host 评估：按来自 %s 的全部 referer 计（上界）"), it.Dim)
+			"referer 只能按 host 评估：按来自 %s 的全部 referer 计（最多值）"), it.Dim)
 	case whyValue:
 		return t(lang, "the value is not valid for this field", "取值与字段类型不符")
 	case whyListManaged:
@@ -162,11 +162,11 @@ func ReasonText(it Item, lang string) string {
 func NetWhyText(why, lang string) string {
 	switch why {
 	case "no_firewall":
-		return t(lang, "this zone has no firewall-events dataset (plan) — net new is not available here", "该区无防火墙事件数据集（套餐限制），净新增不可用")
+		return t(lang, "this zone has no firewall-events dataset (plan) — net new is not available here", "该站点无防火墙事件数据集（套餐限制），新增拦截不可用")
 	case "firewall_fields":
 		return t(lang, "the firewall-events dataset cannot filter on every field of this expression", "防火墙事件数据集无法按此表达式的全部字段过滤")
 	case "firewall_retention":
-		return t(lang, "the firewall events do not reach back into this window", "防火墙事件数据不覆盖此窗口")
+		return t(lang, "the firewall events do not reach back into this window", "防火墙事件数据不覆盖这段时间")
 	case "firewall_error":
 		return t(lang, "the firewall-events query failed", "防火墙事件查询失败")
 	}
@@ -177,13 +177,13 @@ func NetWhyText(why, lang string) string {
 func (r *Report) WarnText(w Warn, lang string) string {
 	switch w.Code {
 	case WarnNoHits:
-		return t(lang, "the rule matched nothing in the window: it would have no effect", "窗口内没有任何命中：这条规则不会起作用")
+		return t(lang, "the rule matched nothing in the window: it would have no effect", "这段时间没有任何匹配：这条规则不会起作用")
 	case WarnEyeball:
 		return fmt.Sprintf(t(lang, "%s is a residential/mobile/backbone network and carries %s of the matches: real people browse from it — challenge, not block",
 			"%s 是住宅/移动/骨干网络，占命中的 %s：有真人从这里访问——宜挑战，不宜封锁"), w.S, Pct(w.Share))
 	case WarnKnown:
 		return fmt.Sprintf(t(lang, "it hits a known source you registered: %s (%s in the window, ~%s a day) — exempt it (and not … contains \"%s\") or narrow the rule",
-			"会波及已登记的已知来源：%s（窗口内 %s 次，约 %s 次/日）——加豁免分支（and not … contains \"%s\"）或收窄规则"),
+			"会波及已登记的已知来源：%s（这段时间 %s 次，约 %s 次/日）——把它排除在外（and not … contains \"%s\"）或收窄规则"),
 			w.S, N(w.N), N(r.perDay(w.N)), w.S)
 	case WarnBots:
 		return fmt.Sprintf(t(lang, "verified bots are %s of the matches (%s): add `and not cf.client.bot` unless you mean to stop them",
@@ -191,7 +191,7 @@ func (r *Report) WarnText(w Warn, lang string) string {
 	case WarnTiny:
 		return fmt.Sprintf(t(lang, "what it adds is %s of all traffic (under 1%%): blocking it will not change much", "新增拦截只占总量 %s（低于 1%%）：拦了作用不大"), Pct(w.Share))
 	case WarnGap:
-		return fmt.Sprintf(t(lang, "%s of what looked blockable is exempted by the rule itself or already stopped by existing rules", "看起来可拦的量中有 %s 被规则自身豁免或已被现有规则处理"), Pct(w.Share))
+		return fmt.Sprintf(t(lang, "%s of what looked blockable is exempted by the rule itself or already stopped by existing rules", "看起来可拦的量中有 %s 被规则自带的例外放过，或已被现有规则处理"), Pct(w.Share))
 	case WarnBlockAll:
 		s := t(lang, "block: people who would pass a challenge are blocked too — if real browsers may be among the matches, challenge first and watch",
 			"封锁：能通过挑战的真人浏览器也会被全拦——若命中里可能有真人，先用挑战观察")
@@ -235,16 +235,16 @@ func (r *Report) BotExempted() (int64, bool) {
 func (r *Report) VerdictText(lang string) string {
 	if !r.Evaluable {
 		return fmt.Sprintf(t(lang, "Cannot be evaluated: %d sub-expression(s) have no analytics equivalent — no numbers are given.",
-			"不可评估：%d 个子表达式在分析数据中没有对应——不给数。"), len(r.Unevaluable))
+			"无法计算：%d 个条件在分析数据中没有对应——不给数。"), len(r.Unevaluable))
 	}
 	var b strings.Builder
 	if r.HasCore {
-		fmt.Fprintf(&b, t(lang, "Gross %s", "毛命中 %s"), r.Bound(r.Gross))
+		fmt.Fprintf(&b, t(lang, "Gross %s", "总匹配 %s"), r.Bound(r.Gross))
 		if r.Exempted > 0 {
 			if n, ok := r.BotExempted(); ok && n > 0 {
-				fmt.Fprintf(&b, t(lang, ", of which %s exempted (verified bots %s)", "，其中豁免 %s（已验证机器人 %s）"), r.Bound(r.Exempted), r.Bound(n))
+				fmt.Fprintf(&b, t(lang, ", of which %s exempted (verified bots %s)", "，其中被例外放过 %s（已验证机器人 %s）"), r.Bound(r.Exempted), r.Bound(n))
 			} else {
-				fmt.Fprintf(&b, t(lang, ", of which %s exempted", "，其中豁免 %s"), r.Bound(r.Exempted))
+				fmt.Fprintf(&b, t(lang, ", of which %s exempted", "，其中被例外放过 %s"), r.Bound(r.Exempted))
 			}
 		}
 	} else {
@@ -256,13 +256,13 @@ func (r *Report) VerdictText(lang string) string {
 	}
 	if r.NetKnown {
 		if r.NetFrom.IsZero() {
-			fmt.Fprintf(&b, t(lang, ", net new %s (%s of all traffic)", "，净新增可拦 %s（占总量 %s）"), r.NetHead(lang), Pct(r.NetShare()))
+			fmt.Fprintf(&b, t(lang, ", net new %s (%s of all traffic)", "，新增拦截 %s（占总量 %s）"), r.NetHead(lang), Pct(r.NetShare()))
 		} else {
 			fmt.Fprintf(&b, t(lang, ", net new %s %s a day (extrapolated from the part the firewall events cover; %s of all traffic)",
-				"，净新增可拦 %s %s 次/日（按防火墙事件覆盖段外推，占总量 %s）"), r.NetMark(), N(int64(r.NetPerDay())), Pct(r.NetShare()))
+				"，新增拦截 %s %s 次/日（按防火墙事件覆盖段外推，占总量 %s）"), r.NetMark(), N(int64(r.NetPerDay())), Pct(r.NetShare()))
 		}
 	} else {
-		fmt.Fprintf(&b, t(lang, ", rule matches %s (%s of all traffic); net new not available", "，规则命中 %s（占总量 %s）；净新增不可用"), r.Bound(r.Matched), Pct(r.Share(r.Matched)))
+		fmt.Fprintf(&b, t(lang, ", rule matches %s (%s of all traffic); net new not available", "，规则命中 %s（占总量 %s）；新增拦截不可用"), r.Bound(r.Matched), Pct(r.Share(r.Matched)))
 	}
 	b.WriteString(t(lang, " — ", "——"))
 	var rec string
@@ -279,13 +279,13 @@ func (r *Report) VerdictText(lang string) string {
 	case WarnEyeball:
 		rec = fmt.Sprintf(t(lang, "%s is a residential network with real people: challenge, not block.", "%s 是有真人的住宅网络：宜挑战，不宜封锁。"), w.S)
 	case WarnKnown:
-		rec = fmt.Sprintf(t(lang, "it hits the known source %s: exempt it or narrow the rule first.", "会波及已知来源 %s：先加豁免或收窄规则。"), w.S)
+		rec = fmt.Sprintf(t(lang, "it hits the known source %s: exempt it or narrow the rule first.", "会波及已知来源 %s：先把它排除在外或收窄规则。"), w.S)
 	case WarnBots:
 		rec = t(lang, "verified bots are a large part of it: add `and not cf.client.bot`.", "已验证机器人占比过高：加上 `and not cf.client.bot`。")
 	case WarnTiny:
 		rec = t(lang, "consider a challenge, or no action.", "建议降级为挑战或不处理。")
 	case WarnGap:
-		rec = t(lang, "far less than it looked — weigh it on the net number.", "远少于表面量级——请按净新增判断。")
+		rec = t(lang, "far less than it looked — weigh it on the net number.", "远少于表面量级——请按新增拦截判断。")
 	default:
 		rec = t(lang, "a measurable new stop; apply it through the usual block review.", "有可观的新增拦截；按常规封锁确认流程执行。")
 	}
@@ -311,9 +311,9 @@ func (r *Report) Text(lang string, loc *time.Location) string {
 	p(t(lang, "Rule simulation — %s\n", "规则模拟 —— %s\n"), r.Zone)
 	p(t(lang, "Expression: %s\n", "表达式：%s\n"), r.Expr)
 	p(t(lang, "Action:     %s\n", "动作：    %s\n"), r.Action)
-	p(t(lang, "Window:     %s → %s (%.0f h; the last hour is left out: data still landing)\n", "窗口：    %s → %s（%.0f 小时；最近 1 小时数据未落定，不计）\n"),
+	p(t(lang, "Window:     %s → %s (%.0f h; the last hour is left out: data still landing)\n", "时间：    %s → %s（%.0f 小时；最近 1 小时数据还没到齐，不计）\n"),
 		r.From.In(loc).Format("2006-01-02 15:04"), r.To.In(loc).Format("2006-01-02 15:04 MST"), r.Hours())
-	p(t(lang, "Confidence: %s\n", "置信：    %s\n"), LabelText(r.Confidence, lang))
+	p(t(lang, "Confidence: %s\n", "可信度：  %s\n"), LabelText(r.Confidence, lang))
 	if !r.Evaluable {
 		p("\n%s\n", r.VerdictText(lang))
 		for _, it := range r.Unevaluable {
@@ -336,25 +336,25 @@ func (r *Report) Text(lang string, loc *time.Location) string {
 		p(t(lang, "  $%s expanded: %s list, %d item(s)\n", "  已展开 $%s：%s 列表，%d 项\n"), l.Name, l.Kind, l.Items)
 	}
 
-	b.WriteString(t(lang, "\n1. Gross matches\n", "\n1. 毛命中\n"))
+	b.WriteString(t(lang, "\n1. Gross matches\n", "\n1. 总匹配\n"))
 	if r.HasCore {
-		p(t(lang, "   without its exemptions: %s, %s of all traffic\n", "   不计豁免分支：%s，占总量 %s\n"), r.Num(r.Gross, lang), Pct(r.Share(r.Gross)))
+		p(t(lang, "   without its exemptions: %s, %s of all traffic\n", "   不算规则自带的例外：%s，占总量 %s\n"), r.Num(r.Gross, lang), Pct(r.Share(r.Gross)))
 	}
 	p(t(lang, "   rule matches:           %s, %s of all traffic", "   规则命中：    %s，占总量 %s"), r.Num(r.Matched, lang), Pct(r.Share(r.Matched)))
 	if r.Partial {
 		if r.LowKnown {
-			p(t(lang, "\n   at least:               %s (the unknown terms taken as not matching)", "\n   至少：        %s（不可评估子项按不命中计）"), N(r.MatchedLow))
+			p(t(lang, "\n   at least:               %s (the unknown terms taken as not matching)", "\n   至少：        %s（无法计算的条件按不匹配计）"), N(r.MatchedLow))
 		} else {
 			b.WriteString(t(lang, "\n   at least:               not measured", "\n   至少：        未能测得"))
 		}
 	}
 	if r.DynamicKnown && r.Dynamic > 0 {
-		p(t(lang, ", %s of the dynamic (origin) traffic", "，占 dynamic（回源）%s"), Pct(r.DynShare()))
+		p(t(lang, ", %s of the dynamic (origin) traffic", "，占需源站处理的请求%s"), Pct(r.DynShare()))
 	}
 	p("\n")
-	p(t(lang, "   zone total %s", "   该区总量 %s"), N(r.Total))
+	p(t(lang, "   zone total %s", "   该站点总量 %s"), N(r.Total))
 	if r.CleanEmptyUA {
-		p(t(lang, " — empty-UA entries (Worker bookkeeping) left out everywhere; this rule's share of them: %s", "——空 UA 条目（Worker 内部记账）一律不计；本规则涉及 %s 条"), N(r.EmptyUA))
+		p(t(lang, " — empty-UA entries (Worker bookkeeping) left out everywhere; this rule's share of them: %s", "——没有标识的请求（Worker 内部记录）一律不计；本规则涉及 %s 条"), N(r.EmptyUA))
 	}
 	p("\n")
 	if len(r.Days) > 0 {
@@ -368,9 +368,9 @@ func (r *Report) Text(lang string, loc *time.Location) string {
 		}
 	}
 
-	b.WriteString(t(lang, "\n2. Exemptions\n", "\n2. 豁免拆分\n"))
+	b.WriteString(t(lang, "\n2. Exemptions\n", "\n2. 规则自带的例外\n"))
 	if r.HasCore {
-		p(t(lang, "   exempted by the rule itself: %s (gross − matches)\n", "   被规则自身豁免：%s（毛命中 − 规则命中）\n"), r.Bound(r.Exempted))
+		p(t(lang, "   exempted by the rule itself: %s (gross − matches)\n", "   被规则自带的例外放过：%s（总匹配 − 规则命中）\n"), r.Bound(r.Exempted))
 		for _, br := range r.Branches {
 			p(t(lang, "     and not %s: %s\n", "     and not %s：%s\n"), br.Expr, r.Bound(br.Count))
 		}
@@ -378,10 +378,10 @@ func (r *Report) Text(lang string, loc *time.Location) string {
 		b.WriteString(t(lang, "   no top-level `and not …` branch to split out\n", "   没有可单列的顶层 `and not …` 分支\n"))
 	}
 	if r.BotsKnown {
-		p(t(lang, "   verified bots among the matches: %s (%s)\n", "   命中中的已验证机器人：%s（%s）\n"), r.Bound(r.Bots), Pct(share(r.Bots, r.Matched)))
+		p(t(lang, "   verified bots among the matches: %s (%s)\n", "   匹配到的已验证机器人：%s（%s）\n"), r.Bound(r.Bots), Pct(share(r.Bots, r.Matched)))
 	}
 
-	b.WriteString(t(lang, "\n3. Net new (the number that counts)\n", "\n3. 净新增（核心数字）\n"))
+	b.WriteString(t(lang, "\n3. Net new (the number that counts)\n", "\n3. 新增拦截（最该看的数字）\n"))
 	if r.NetKnown {
 		if r.NetFrom.IsZero() {
 			p(t(lang, "   %s, %s of all traffic (~%s a day)\n", "   %s，占总量 %s（约 %s 次/日）\n"), r.NetHead(lang), Pct(r.NetShare()), N(int64(r.NetPerDay())))
@@ -400,7 +400,7 @@ func (r *Report) Text(lang string, loc *time.Location) string {
 			switch {
 			case s.Unknown:
 				p(t(lang, "     #%d %s: logs nothing and cannot be translated — not counted; net new is an upper bound\n",
-					"     #%d %s：不记录日志且无法翻译——未计入；净新增为上界\n"), s.Pos, s.Label)
+					"     #%d %s：不记录日志且无法翻译——未计入；新增拦截是最多值\n"), s.Pos, s.Label)
 			case s.NoLog:
 				p(t(lang, "     #%d %s: %s (logs nothing: counted from its expression)\n", "     #%d %s：%s（不记录日志：按其表达式计）\n"), s.Pos, s.Label, N(s.Count))
 			default:
@@ -409,7 +409,7 @@ func (r *Report) Text(lang string, loc *time.Location) string {
 		}
 		if r.PositionKnown {
 			b.WriteString(t(lang, "   estimate: matches come from the HTTP requests dataset, \"already stopped\" and \"skipped ahead\" from the firewall events — two datasets, sampled differently\n",
-				"   估计值：命中来自 HTTP 请求数据集，已处理与前置跳过来自防火墙事件数据集——两套数据采样口径不同\n"))
+				"   估计值：命中来自 HTTP 请求数据集，已处理与被前面规则放行来自防火墙事件数据集——两套数据采样口径不同\n"))
 		} else {
 			b.WriteString(t(lang, "   estimate: matches come from the HTTP requests dataset, \"already stopped\" from the firewall events — two datasets, sampled differently; counted against the whole rule set, not this rule's position\n",
 				"   估计值：命中来自 HTTP 请求数据集，已处理量来自防火墙事件数据集——两套数据采样口径不同；按全规则集口径估计，未计规则插入位置\n"))
@@ -418,7 +418,7 @@ func (r *Report) Text(lang string, loc *time.Location) string {
 		p("   %s\n", NetWhyText(r.NetWhy, lang))
 	}
 
-	b.WriteString(t(lang, "\n4. Composition of the matches\n", "\n4. 构成拆分\n"))
+	b.WriteString(t(lang, "\n4. Composition of the matches\n", "\n4. 匹配到的都是谁\n"))
 	section := func(title string, rows []Row, label func(Row) string) {
 		if len(rows) == 0 {
 			return
@@ -431,7 +431,7 @@ func (r *Report) Text(lang string, loc *time.Location) string {
 	section(t(lang, "paths:", "路径："), r.Paths, func(x Row) string { return x.Name })
 	section(t(lang, "user agents:", "UA："), r.UAs, func(x Row) string {
 		if x.Name == "" {
-			return t(lang, "(empty UA)", "(空 UA)")
+			return t(lang, "(empty UA)", "（无标识）")
 		}
 		return x.Name
 	})
@@ -462,13 +462,13 @@ func (r *Report) Text(lang string, loc *time.Location) string {
 		})
 	}
 	if len(r.Known) > 0 {
-		b.WriteString(t(lang, "   known sources (known_faces) among the matches:\n", "   命中中的已知来源（known_faces）：\n"))
+		b.WriteString(t(lang, "   known sources (known_faces) among the matches:\n", "   匹配到的已知来源（known_faces）：\n"))
 		for _, k := range r.Known {
 			p("     %-60s %12s\n", clip(k.Pattern, 60), r.Bound(k.Count))
 		}
 	}
 
-	b.WriteString(t(lang, "\n5. Verdict\n", "\n5. 裁决\n"))
+	b.WriteString(t(lang, "\n5. Verdict\n", "\n5. 结论\n"))
 	p("   %s\n", r.VerdictText(lang))
 	for _, w := range r.Warnings {
 		if w.Code == r.Verdict {
@@ -483,7 +483,7 @@ func (r *Report) Text(lang string, loc *time.Location) string {
 		p(t(lang, "   (left out by the %d-query budget: %s)\n", "   （超出 %d 次查询预算而略去：%s）\n"), MaxQueries, strings.Join(r.Skipped, ", "))
 	}
 	p(t(lang, "\n%d GraphQL queries. Sampled, aggregated analytics: the precision limit is the sampling, not a per-request replay.\n",
-		"\n共 %d 次 GraphQL 查询。采样聚合数据：精度上限就是采样，不是逐请求回放。\n"), r.Queries)
+		"\n共查询 Cloudflare %d 次。数据是采样汇总，精度以采样为限，不是逐条请求回放。\n"), r.Queries)
 	return b.String()
 }
 
@@ -558,7 +558,7 @@ func TermText(status, lang string) string {
 		return t(lang, "evaluated as a superset", "按放宽的超集评估")
 	case TermUnknown:
 		return t(lang, "cannot be evaluated: counted as matching for the upper bound, as not matching for the lower bound",
-			"不可评估：上界按命中计，下界按不命中计")
+			"无法计算：算最多值时当作匹配，算最少值时当作不匹配")
 	}
 	return t(lang, "not supported here: no numbers", "此处不支持：不给数")
 }
@@ -567,7 +567,7 @@ func (r *Report) termsText(b *strings.Builder, lang string) {
 	if len(r.Terms) == 0 {
 		return
 	}
-	b.WriteString(t(lang, "\nTerm by term:\n", "\n子项标注：\n"))
+	b.WriteString(t(lang, "\nTerm by term:\n", "\n逐项说明：\n"))
 	for _, tm := range r.Terms {
 		fmt.Fprintf(b, "  %s %s\n      %s\n", TermMark(tm.Status), tm.Expr, TermText(tm.Status, lang))
 		for _, it := range tm.Items {
