@@ -151,3 +151,25 @@ func TestBlockReviewWithoutSim(t *testing.T) {
 		t.Fatalf("fallback review:\n%s", body)
 	}
 }
+
+// Known faces added in the console's settings (the overlay) reach the
+// simulator without a restart.
+func TestSimulateKnownFromOverlay(t *testing.T) {
+	e := newWriteEnv(t, false)
+	e.srv.Analytics = simLive{}
+	q := url.Values{"expr": {"(ip.geoip.asnum eq 24940 and not cf.client.bot)"}}
+	_, body, _ := e.admin.do("GET", "/simulate?"+q.Encode(), nil, nil)
+	if strings.Contains(body, "known source") {
+		t.Fatal("known source flagged before it was registered")
+	}
+	eff := *e.srv.Cfg
+	eff.KnownFaces.UserAgents = []string{"scraper"}
+	e.srv.effMu.Lock()
+	e.srv.effCfg = &eff
+	e.srv.effMu.Unlock()
+	q.Set("days", "1") // a different window: not the cached report
+	_, body, _ = e.admin.do("GET", "/simulate?"+q.Encode(), nil, nil)
+	if !strings.Contains(body, "it hits the known source scraper") {
+		t.Fatalf("overlay known face not used:\n%s", body)
+	}
+}

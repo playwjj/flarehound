@@ -57,6 +57,10 @@ type Env struct {
 	Sims *sim.Cache
 	// NoSim turns the review's rule simulation off.
 	NoSim bool
+	// SimCfg, when set, supplies what the simulation reads from settings
+	// that the console can change at run time (known faces, rule names);
+	// the console passes its configuration with the settings overlay.
+	SimCfg *config.Config
 
 	in *bufio.Reader
 }
@@ -270,9 +274,13 @@ func (e *Env) Prepare(ctx context.Context, t block.Target, o BlockOpts) (*Prepar
 // SimInput is a simulation of expr on this zone with the zone's cleaning,
 // calibration and known sources; days 0 is the default window.
 func (e *Env) SimInput(expr, action string, days int) sim.Input {
+	c := e.Cfg
+	if e.SimCfg != nil {
+		c = e.SimCfg
+	}
 	in := sim.Input{ZoneID: e.Zone.ZoneID, ZoneName: e.Zone.Name, Expr: expr, Action: action, Days: days, Now: e.now(),
-		Workers: len(e.Zone.Workers) > 0, Loc: e.loc(), RuleNames: e.Cfg.RuleNames,
-		KnownUAs: e.Cfg.KnownFaces.UserAgents, KnownASNs: e.Cfg.KnownFaces.ASNs}
+		Workers: len(e.Zone.Workers) > 0, Loc: e.loc(), RuleNames: c.RuleNames,
+		KnownUAs: c.KnownFaces.UserAgents, KnownASNs: c.KnownFaces.ASNs}
 	if e.Store != nil {
 		if rows, err := e.Store.CalibrationDays(e.Zone.ZoneID, 7); err == nil {
 			in.DashRatio = calibrate.Ratio(rows)

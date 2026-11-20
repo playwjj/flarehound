@@ -299,7 +299,7 @@ func TestRunKnownSource(t *testing.T) {
 	if len(r.Known) != 0 || r.Verdict == WarnKnown {
 		t.Fatalf("after the exemption: %+v verdict %s", r.Known, r.Verdict)
 	}
-	if len(r.Branches) != 2 {
+	if len(r.Branches) != 2 || r.Branches[0].Count == 0 || r.Branches[1].Count == 0 {
 		t.Fatalf("branches: %+v", r.Branches)
 	}
 }

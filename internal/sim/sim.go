@@ -464,6 +464,9 @@ func Run(ctx context.Context, api API, in Input) (*Report, error) {
 			r.HasCore = true
 			coreG = cc.http
 			x.do("gross", func() (err error) { r.Gross, err = api.Count(ctx, x.zone, from, to, httpF(coreG)); return })
+			// The branch list is complete before any query starts: the
+			// queries write into it, so it must not grow under them.
+			var filters []gnode
 			for i, e := range exempt {
 				if i >= maxBranches {
 					break
@@ -475,8 +478,9 @@ func Run(ctx context.Context, api API, in Input) (*Report, error) {
 				b := Branch{Expr: e.String(), Bot: isBot(e)}
 				botExempt = botExempt || b.Bot
 				r.Branches = append(r.Branches, b)
-				idx := len(r.Branches) - 1
-				g := and(coreG, ce.http)
+				filters = append(filters, and(coreG, ce.http))
+			}
+			for idx, g := range filters {
 				x.do("exemption", func() error {
 					n, err := api.Count(ctx, x.zone, from, to, httpF(g))
 					x.mu.Lock()

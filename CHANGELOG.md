@@ -2,6 +2,11 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.19.1 — 2026-11-20
+
+- **Rule simulator: two or more `and not …` branches could lose a count.** The branch list grew while the first branch's query was already writing into it, so one branch could come back as 0 (e.g. `… and not cf.client.bot and not (http.user_agent contains "rednote")`). The list is now complete before any query starts.
+- **Console: known faces from the settings page reach the simulator at once.** The Simulate tab and the block review read `known_faces` (and `rule_names`) from `config.json` only; faces registered in the console's settings were seen after a restart. They now use the configuration with the settings overlay, like the rest of the console. The CLI already did.
+
 ## v1.19.0 — 2026-11-20
 
 - **Rule simulator: what a rule would do, before it exists.** The block review answered for one target (its volume, its share); a real decision is an expression — ASNs, a country, a user agent, paths and the exemptions that keep verified crawlers out — and its consequences were estimated by hand. Three misses in a week on a live zone: AS30633 sized at ~147,000 a day when ~111,000 of it was a verified bot the rule exempts (~36,000 blockable); rednote caught by an AS45102 rule and exempted afterwards; a referer branch sized only after it went live. The simulator replays a draft expression against the last 7 days (or 24 hours) of real traffic and reports. It only reads: no rule, no block plan, no new token, no new setting.

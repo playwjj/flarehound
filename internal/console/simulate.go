@@ -28,7 +28,7 @@ type simForm struct {
 // simInput builds a simulation with the zone's cleaning, calibration and
 // known sources (the same as the block review's).
 func (s *Server) simInput(z config.Zone, f simForm) sim.Input {
-	env := &blockcli.Env{Cfg: s.Cfg, Zone: z, Store: s.Store, Now: s.Now}
+	env := &blockcli.Env{Cfg: s.Cfg, Zone: z, Store: s.Store, Now: s.Now, SimCfg: s.eff()}
 	return env.SimInput(f.Expr, f.Action, f.Days)
 }
 

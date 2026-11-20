@@ -70,7 +70,7 @@ func (s *Server) env(z config.Zone, rq *Req) *blockcli.Env {
 		actor = s.actor(rq)
 	}
 	return &blockcli.Env{Cfg: s.Cfg, Zone: z, Read: s.Live, Write: s.Write, Store: s.Store,
-		In: strings.NewReader(""), Out: io.Discard, Now: s.Now, Actor: actor, Sims: s.sims}
+		In: strings.NewReader(""), Out: io.Discard, Now: s.Now, Actor: actor, Sims: s.sims, SimCfg: s.eff()}
 }
 
 // --- review tokens ---
