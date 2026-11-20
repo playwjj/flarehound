@@ -26,7 +26,7 @@ func TestRecoveryIsOneLine(t *testing.T) {
 func TestNoHypothesisSaysSo(t *testing.T) {
 	msg := Intraday("zh", IntradayData{Zone: "z", Window: w, Decision: state.DecAlert,
 		Findings: []analyze.Finding{{Rule: analyze.RuleOrigin5xx, Cur: 300, Base: 0}}})
-	if !strings.Contains(msg, "证据不足") || !strings.Contains(msg, "×∞") {
+	if !strings.Contains(msg, "证据还不足") || !strings.Contains(msg, "源站返回错误（5xx）的次数：300（昨日同时段 0，新出现）。") {
 		t.Fatalf("got:\n%s", msg)
 	}
 }
@@ -38,7 +38,7 @@ func TestHypothesisCarriesFalsifier(t *testing.T) {
 		Hypotheses: []analyze.Hypothesis{{ID: analyze.HypSlowPath, Confidence: analyze.Medium, Subject: "web"}},
 		Block:      analyze.BlockAdvice{Candidates: []analyze.IPShare{{IP: "203.0.113.7", Count: 9000, Share: 0.4}}},
 	})
-	for _, want := range []string{"ESCALATED", "episode since", "[medium]", "Falsified if", "203.0.113.7", "~40%"} {
+	for _, want := range []string{"got worse", "started 11-17 08:00", "[possible]", "Not this if: ", "203.0.113.7", "~40%"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("lacks %q:\n%s", want, msg)
 		}
@@ -63,8 +63,8 @@ func TestEdgeAbsorbedFloodAndDashboardTerms(t *testing.T) {
 		Severity:  analyze.Severity{Level: analyze.SevLow, Kind: analyze.EdgeAbsorbed, DynPct: 1.0},
 		DashRatio: 2.04,
 	})
-	for _, want := range []string{"低严重度：边缘吸收的流量洪水", "增量在边缘被吸收：真实渲染 +1.0%",
-		"【ALIBABA-CN-NET，机房/云网络】", "（≈ 面板 36,926 次）", "（≈ 面板 171,078 次）"} {
+	for _, want := range []string{"轻微：流量突增，但被缓存挡住了", "增量被缓存挡住了：需要源站处理的请求 +1.0%",
+		"▶ 出现新的来源网络：ALIBABA-CN-NET (AS45102)", "这是机房 / 云服务器网络", "（按 Cloudflare 面板口径约 36,926 次）", "（按 Cloudflare 面板口径约 171,078 次）"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("lacks %q:\n%s", want, msg)
 		}
@@ -99,7 +99,7 @@ func TestCPUAlertCarriesCheck(t *testing.T) {
 	fs := []analyze.Finding{{Rule: analyze.RuleCPUUp, Subject: "web", Cur: 3.01, Base: 2, Pct: 50.5}}
 	msg := Intraday("zh", IntradayData{Zone: "z", Window: w, Decision: state.DecAlert, Cur: cur, Base: base, Findings: fs,
 		Hypotheses: analyze.Hypothesize(cur, base, fs, analyze.Attribution{}), Severity: analyze.Assess(cur, base, fs)})
-	for _, want := range []string{"低严重度：Worker CPU 构成变化", "辨伪：P50 +50.5%，P99 +12.0%，调用量 -18.0%", "构成变化而非变贵", "P99 28.0 vs 25.0 ms"} {
+	for _, want := range []string{"轻微：请求构成变化导致 Worker CPU 波动", "最慢 1% 调用（P99）的耗时 +12.0%，调用量 -18.0%", "并非真的变贵", "→ 建议：暂不需要处理", "最慢 1%（P99）28.0 ms（昨日同时段 25.0 ms，+12%）"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("missing %q in:\n%s", want, msg)
 		}
@@ -115,8 +115,8 @@ func TestDailyExpiringThisWeek(t *testing.T) {
 		{Target: "ua BadBot", Action: "block", Since: day.From},
 	}}
 	msg := Daily("zh", d)
-	for _, want := range []string{"- 本周到期：", "ip 106.201.104.211（block）11-20 09:00 到期：仍在敲门（窗口内 55,435 次）——建议续期",
-		"asn 45102（block）11-22 09:00 到期：窗口内已无尝试——到期将自动解除", "≈415（近似值，来自 IP 榜归档；最近上榜 11-17 08:00）"} {
+	for _, want := range []string{"- 本周到期：", "ip 106.201.104.211（block）11-20 09:00 到期：仍在尝试（这段时间 55,435 次）——建议续期",
+		"asn 45102（block）11-22 09:00 到期：这段时间已无尝试——到期会自动解除", "≈415（近似值，来自 IP 榜归档；最近上榜 11-17 08:00）"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("missing %q in:\n%s", want, msg)
 		}
@@ -130,11 +130,11 @@ func TestUnreachableFootnote(t *testing.T) {
 	base := analyze.Metrics{Origin5xx: 220, Unreachable: 9_800, UnreachableBy: map[string]int64{"522": 6_600, "524": 3_200}, Origin: &analyze.OriginMetrics{Requests: 400_000}}
 	cur := analyze.Metrics{Origin5xx: 213, Unreachable: 10_377, UnreachableBy: map[string]int64{"522": 7_007, "524": 3_341, "520": 29}, Origin: &analyze.OriginMetrics{Requests: 410_000}}
 	msg := Daily("zh", DailyData{Zone: "z", Window: w, Cur: cur, Base: base})
-	if !strings.Contains(msg, "判别：记账底量，非源站故障——522/524 占 99.7%，与基线同量级（×1.1），源站照常回源") {
+	if !strings.Contains(msg, "判断：这是 Cloudflare 日常就有的 522/524 记录，不是源站故障——522/524 占 99.7%，与平时同量级（1.1 倍），源站照常回应") {
 		t.Fatalf("got:\n%s", msg)
 	}
 	cur.Origin = &analyze.OriginMetrics{Requests: 10_000}
-	if msg := Daily("zh", DailyData{Zone: "z", Window: w, Cur: cur, Base: base}); strings.Contains(msg, "判别：记账底量") || !strings.Contains(msg, "源站回源量 -97.5%") {
+	if msg := Daily("zh", DailyData{Zone: "z", Window: w, Cur: cur, Base: base}); strings.Contains(msg, "不是源站故障") || !strings.Contains(msg, "源站回应的请求 -97.5%") {
 		t.Fatalf("no footnote when the origin stopped answering:\n%s", msg)
 	}
 }
@@ -146,7 +146,7 @@ func TestUnreachableAlertCarriesCheck(t *testing.T) {
 	cur := analyze.Metrics{Unreachable: 1_900, UnreachableBy: map[string]int64{"522": 300, "524": 200, "521": 1_400}, Origin: &analyze.OriginMetrics{Requests: 4_000}}
 	fs := analyze.Evaluate(cur, base, analyze.Thresholds{UnreachableMin: 10, CollapseDownPct: 90}, analyze.Known{})
 	msg := Intraday("zh", IntradayData{Zone: "z", Window: w, Decision: state.DecAlert, Cur: cur, Base: base, Findings: fs, UnreachableMin: 10})
-	for _, want := range []string{"源站不可达：边缘 52x 1,900 次 vs 460", "构成：521 ×1,400, 522 ×300, 524 ×200；判别：偏离 522/524 记账底量——量级为底量的 ×4.1；非 522/524 状态 1,400 次（占 74%）；源站回源量 -76.5%"} {
+	for _, want := range []string{"Cloudflare 没能从源站拿到回应（52x 错误）的次数：1,900（昨日同时段 460，约 4.1 倍）。", "构成：521 ×1,400, 522 ×300, 524 ×200；判断：超出 Cloudflare 日常的 522/524 记录——是平时的 4.1 倍；非 522/524 状态 1,400 次（占 74%）；源站回应的请求 -76.5%"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("missing %q in:\n%s", want, msg)
 		}
@@ -158,11 +158,11 @@ func TestDailyBaselineAccumulating(t *testing.T) {
 	d := DailyData{Zone: "z", Window: day, Loc: time.UTC, Archive: &ArchiveInfo{Hours: 600, Days: 25, LongSamples: 25,
 		Warming: []analyze.Maturity{{Metric: analyze.MetricUnreachable, Need: 3}}}}
 	msg := Daily("zh", d)
-	if want := "基线积累中：边缘 52x（源站不可达）——新近开始采集；同时段实测满 3 天前这些线不报警（约 " + day.To.Add(72*time.Hour).Format("01-02") + " 起）"; !strings.Contains(msg, want) {
+	if want := "正在学习平时水平：52x 错误（Cloudflare 连不上源站）——刚开始采集；同时段满 3 天前不报警（约 " + day.To.Add(72*time.Hour).Format("01-02") + " 起）"; !strings.Contains(msg, want) {
 		t.Fatalf("missing %q in:\n%s", want, msg)
 	}
 	d.Archive.Warming = nil
-	if strings.Contains(Daily("zh", d), "基线积累中") {
+	if strings.Contains(Daily("zh", d), "正在学习平时水平") {
 		t.Fatal("note repeated without a newly accumulating line")
 	}
 }

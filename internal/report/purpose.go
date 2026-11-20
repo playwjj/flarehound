@@ -81,18 +81,17 @@ func (l lang) purposeShifts(p *PurposeData) string {
 }
 
 // purposeSection renders "traffic by purpose".
-func (l lang) purposeSection(b *strings.Builder, p *PurposeData) {
+// asnNote says that undeclared automation is not judged without ASN data;
+// the daily report leaves it to its system status, which says why.
+func (l lang) purposeSection(b *strings.Builder, p *PurposeData, asnNote bool) {
 	if p == nil {
 		return
 	}
-	fmt.Fprintf(b, "\n"+l.t("Traffic by purpose (table %s", "流量按用途（映射表 %s 版"), p.Version)
-	if p.Overrides > 0 {
-		fmt.Fprintf(b, l.t(", %d override(s)", "，覆盖 %d 条"), p.Overrides)
-	}
+	b.WriteString("\n" + l.t("Why they come (AI training, search, …)", "访问目的（AI 训练、搜索等）"))
 	if p.CurTotal > 0 {
-		fmt.Fprintf(b, l.t("; the UA groups read cover %.0f%% of requests", "；所读 UA 分组覆盖 %.0f%% 的请求"), pctOf(p.Cur.Rows, p.CurTotal))
+		fmt.Fprintf(b, l.t(" — from the clients that make up %.0f%% of requests", "——基于占总请求 %.0f%% 的主要访问者"), pctOf(p.Cur.Rows, p.CurTotal))
 	}
-	b.WriteString(l.t("):\n", "）：\n"))
+	b.WriteString(l.t(":\n", "：\n"))
 	any := false
 	for _, c := range purpose.Classes {
 		cur, base := p.Cur.Count(c), p.Base.Count(c)
@@ -122,7 +121,7 @@ func (l lang) purposeSection(b *strings.Builder, p *PurposeData) {
 	if !any {
 		b.WriteString(l.t("- nothing AI-related or undeclared automation tagged in the window\n", "- 窗口内没有被标记的 AI 相关流量或未申报自动化\n"))
 	}
-	if !p.Cur.HasASN {
+	if asnNote && !p.Cur.HasASN {
 		b.WriteString(l.t("- undeclared automation not judged: the plan exposes no ASN dimension; named classes only\n",
 			"- 未申报自动化未判定：本套餐不提供 ASN 维度，本节仅含具名类别\n"))
 	}
@@ -184,7 +183,7 @@ func (l lang) purposeTag(p *purpose.Label) string {
 
 // recordedFace is a new training crawler: listed, not alerted on.
 func (l lang) recordedFace(f analyze.Finding) string {
-	return fmt.Sprintf(l.t("new training crawler (recorded, not alerted): %q, %s requests%s", "新训练爬虫面孔（只记录、不报警）：%q，%s 次%s"),
+	return fmt.Sprintf(l.t("new training crawler (recorded, not alerted): %q, %s requests%s", "新出现的 AI 训练爬虫（只记录、不报警）：%q，%s 次%s"),
 		l.uaName(f.Subject, 70), n(int64(f.Cur)), l.purposeTag(f.Purpose))
 }
 
@@ -196,7 +195,7 @@ func Purpose(language string, p PurposeData) string {
 	if s := l.purposeShifts(&p); s != "" {
 		b.WriteString(s)
 	}
-	l.purposeSection(&b, &p)
+	l.purposeSection(&b, &p, true)
 	return strings.TrimSpace(b.String())
 }
 

@@ -896,6 +896,11 @@ func (r *Runner) Daily(ctx context.Context, zone config.Zone) error {
 		d.Calibration = &s
 	}
 	d.Firewall = r.labelRules(zone, d.Firewall)
+	// System status (plan limits, archive, counting basis) is not news:
+	// said when it changes, and weekly.
+	notePath := strings.TrimSuffix(StatePath(cfg, zone), ".json") + "-status.json"
+	statusKey := report.StatusKey(d)
+	d.HideStatus = !state.LoadNote(notePath).Due(statusKey, r.now())
 	text := report.Daily(cfg.Report.Language, d)
 	imgs, cs := r.charts(ctx, zone, w.To, 0, true)
 	htmlBody := ""
@@ -903,8 +908,16 @@ func (r *Runner) Daily(ctx context.Context, zone config.Zone) error {
 		htmlBody = report.DailyHTML(cfg.Report.Language, d, text, cs)
 	}
 	log.Printf("zone %s: daily report %s (findings=%d)", zone.Name, w, len(d.Findings))
-	return r.Sender.Send(ctx, r.withConsoleLink(notify.Message{Kind: "daily", Zone: zone.Name,
-		WindowFrom: w.From, WindowTo: w.To, Rules: keys(d.Findings), Text: text, HTML: htmlBody, Images: imgs}, "/"))
+	if err := r.Sender.Send(ctx, r.withConsoleLink(notify.Message{Kind: "daily", Zone: zone.Name,
+		WindowFrom: w.From, WindowTo: w.To, Rules: keys(d.Findings), Text: text, HTML: htmlBody, Images: imgs}, "/")); err != nil {
+		return err
+	}
+	if !d.HideStatus {
+		if err := (state.StatusNote{Key: statusKey, ShownAt: r.now()}).Save(notePath); err != nil {
+			log.Printf("zone %s: daily status note: %v", zone.Name, err)
+		}
+	}
+	return nil
 }
 
 // withConsoleLink appends a deep link to the matching console view when

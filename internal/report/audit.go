@@ -211,7 +211,7 @@ func (l lang) auditBody(b *strings.Builder, d AuditData, full bool) {
 	} else {
 		if r.HitsDays < 30 {
 			fmt.Fprintf(b, l.t("Hit statistics cover only %d day(s) (the zone's firewall-event retention): no zombie-rule verdicts.\n",
-				"命中统计仅覆盖 %d 天（该 zone 的防火墙事件保留期），不判定僵尸规则。\n"), r.HitsDays)
+				"命中统计仅覆盖 %d 天（该站点的防火墙事件保留期），不判定僵尸规则。\n"), r.HitsDays)
 		}
 		if full {
 			if r.HitsDays < 7 {

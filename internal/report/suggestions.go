@@ -91,7 +91,7 @@ func (l lang) suggestion(s suggest.Suggestion) (title, where, why, gain, impact,
 	undo := l.t("disable or delete the rule (takes effect in seconds)", "停用或删除该规则（秒级生效）")
 	excess := fmt.Sprintf(l.t("%s requests vs %s yesterday, ~%s of the excess", "%s 次，昨日 %s 次，约占增量 %s"), n(s.Count), n(s.Base), share(s.Share))
 	if s.Kind == suggest.ChallengePath || s.Kind == suggest.RateLimit {
-		excess = fmt.Sprintf(l.t("%s uncached requests vs %s yesterday, ~%s of the dynamic excess", "%s 次未缓存请求，昨日 %s 次，约占 dynamic 增量 %s"), n(s.Count), n(s.Base), share(s.Share))
+		excess = fmt.Sprintf(l.t("%s uncached requests (yesterday %s), ~%s of the increase in requests that reach the origin", "%s 次未缓存请求，昨日 %s 次，约占回源请求增量的 %s"), n(s.Count), n(s.Base), share(s.Share))
 	}
 	switch s.Kind {
 	case suggest.BlockASN:

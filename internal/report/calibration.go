@@ -23,8 +23,8 @@ func (l lang) verdict(s calibrate.Summary) string {
 
 // calibrationLine is the daily report's one-liner.
 func (l lang) calibrationLine(s calibrate.Summary) string {
-	return fmt.Sprintf(l.t("Calibration: FlareHound ≈ %.2f× the dashboard's request count (median of %d day(s)); min_count %s ≈ %s dashboard requests.",
-		"口径：FlareHound 请求数 ≈ 面板的 %.2f 倍（%d 天中位数）；min_count %s ≈ 面板 %s 次。"),
+	return fmt.Sprintf(l.t("counting basis: FlareHound counts about %.2f× the requests the Cloudflare dashboard shows (median of %d day(s); the two count differently, this is expected); the alert floor min_count %s ≈ %s dashboard requests.",
+		"计数口径：FlareHound 统计的请求数约为 Cloudflare 面板的 %.2f 倍（%d 天中位数；两边统计方式不同，属正常）；报警门槛 min_count %s ≈ 面板 %s 次。"),
 		s.Requests, len(s.Days), n(s.MinCountAdapt), n(s.MinCountDash))
 }
 

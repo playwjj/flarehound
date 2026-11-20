@@ -266,7 +266,7 @@ func TestIncidentReplay(t *testing.T) {
 	}
 	alert := out.msgs[0]
 	t.Logf("alert:\n%s", alert)
-	for _, want := range []string{"anomaly", "Worker web calls", "AS207990", "Hypotheses", "per-IP blocking will not help", "/rank",
+	for _, want := range []string{"something is off", "Worker web calls", "AS207990", "Likely causes", "blocking IPs one by one will not help", "/rank",
 		"Block AS207990 (EXAMPLE-HOSTING-AS, hosting network)", "(ip.geoip.asnum in {207990}) and not cf.client.bot", "Rate-limit /rank", "rollback:",
 		"one-click: flarehound block asn 207990 --action block --for 24h",
 		"one-click: flarehound ratelimit add --path /rank --requests 20 --period 10"} {
@@ -285,12 +285,12 @@ func TestIncidentReplay(t *testing.T) {
 		t.Fatalf("duplicate alert: %v", out.msgs[1:])
 	}
 	run(11) // worker calls 100k >= 76k * 1.25: escalate
-	if len(out.msgs) != 2 || !strings.Contains(out.msgs[1], "ESCALATED") {
+	if len(out.msgs) != 2 || !strings.Contains(out.msgs[1], "got worse") {
 		t.Fatalf("want escalation, got %v", out.msgs)
 	}
 	run(12)
 	run(13)
-	if len(out.msgs) != 3 || !strings.Contains(out.msgs[2], "recovered") {
+	if len(out.msgs) != 3 || !strings.Contains(out.msgs[2], "back to normal") {
 		t.Fatalf("want recovery after two clean rounds, got %d msgs", len(out.msgs))
 	}
 }
@@ -323,7 +323,7 @@ func TestUnsettledCollapseIsWithheld(t *testing.T) {
 	if err := r.Intraday(context.Background(), cfg.Cloudflare.Zones[0]); err != nil {
 		t.Fatal(err)
 	}
-	if len(out.msgs) != 1 || !strings.Contains(out.msgs[0], "COLLAPSED") {
+	if len(out.msgs) != 1 || !strings.Contains(out.msgs[0], "Traffic dropped sharply") {
 		t.Fatalf("settled collapse missed: %v", out.msgs)
 	}
 }
@@ -365,7 +365,7 @@ func TestDailyReport(t *testing.T) {
 	}
 	msg := out.msgs[0]
 	t.Logf("daily:\n%s", msg)
-	for _, want := range []string{"FlareHound 日报", "越线", "AS207990 45,000 [新]", "固定检查点", "登录", "口径：FlareHound 请求数 ≈ 面板的 1.33 倍"} {
+	for _, want := range []string{"FlareHound 日报", "⚠️ 需要关注：", "▶ 出现新的来源网络", "AS207990 45,000 【新】", "例行检查", "登录：70,000 次请求打到源站（上限 0）", "计数口径：FlareHound 统计的请求数约为 Cloudflare 面板的 1.33 倍"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("daily lacks %q:\n%s", want, msg)
 		}
@@ -457,7 +457,7 @@ func TestArchiveAnnotatesAndRecords(t *testing.T) {
 	if err := r.Intraday(context.Background(), zone); err != nil {
 		t.Fatal(err)
 	}
-	if len(out.msgs) != 1 || !strings.Contains(out.msgs[0], "first-seen not judged") {
+	if len(out.msgs) != 1 || !strings.Contains(out.msgs[0], "whether it came before is not judged yet") {
 		t.Fatalf("got %v", out.msgs)
 	}
 	as, _ := st.Alerts(zone.ZoneID, from, from.Add(2*time.Hour))
@@ -538,15 +538,22 @@ func TestFreePlanDegrades(t *testing.T) {
 	if api.asnUsed {
 		t.Fatal("queried clientAsn on a plan without it")
 	}
-	if len(out.msgs) != 1 || strings.Contains(out.msgs[0], "New user agent") || !strings.Contains(out.msgs[0], "verified crawlers") {
+	if len(out.msgs) != 1 || strings.Contains(out.msgs[0], "New client") || !strings.Contains(out.msgs[0], "verified crawlers") {
 		t.Fatalf("got %v", out.msgs)
 	}
 	out.msgs = nil
 	if err := r.Daily(context.Background(), cfg.Cloudflare.Zones[0]); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.msgs[0], "not available on this plan") || !strings.Contains(out.msgs[0], "unavailable (plan or token permission)") {
+	if !strings.Contains(out.msgs[0], "System status") || !strings.Contains(out.msgs[0], "no network (ASN) data") || !strings.Contains(out.msgs[0], "firewall events cannot be read") {
 		t.Fatalf("daily:\n%s", out.msgs[0])
+	}
+	// The plan limits are not news: the next day leaves them out.
+	if err := r.Daily(context.Background(), cfg.Cloudflare.Zones[0]); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.msgs[1], "System status") || strings.Contains(out.msgs[1], "no network (ASN) data") {
+		t.Fatalf("unchanged status repeated:\n%s", out.msgs[1])
 	}
 }
 
@@ -572,10 +579,10 @@ func TestImpostorAndYoungArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	msg := out.msgs[0]
-	if !strings.Contains(msg, "IMPOSTOR") || !strings.Contains(msg, "claims to be Bingbot") {
+	if !strings.Contains(msg, "FAKE CRAWLER") || !strings.Contains(msg, "claims to be Bingbot") {
 		t.Errorf("impostor not named:\n%s", msg)
 	}
-	if strings.Contains(msg, "never seen before") || !strings.Contains(msg, "first-seen not judged") {
+	if strings.Contains(msg, "never seen before") || !strings.Contains(msg, "whether it came before is not judged yet") {
 		t.Errorf("young archive still claims first-seen:\n%s", msg)
 	}
 }
@@ -1045,7 +1052,7 @@ func TestDailySimAccuracy(t *testing.T) {
 		t.Fatal(err)
 	}
 	msg := out.msgs[0]
-	if !strings.Contains(msg, "1 block(s) confirmed with a net-new prediction, 1 measured") || !strings.Contains(msg, "median +20%") || !strings.Contains(msg, "(AS207990)") {
+	if !strings.Contains(msg, "1 block(s) came with a prediction of how much they would newly stop, 1 measured") || !strings.Contains(msg, "typically +20%") || !strings.Contains(msg, "(AS207990)") {
 		t.Fatalf("accuracy line:\n%s", msg)
 	}
 	outs, _ := st.SimOutcomes(zone.ZoneID, end.Add(-30*24*time.Hour))

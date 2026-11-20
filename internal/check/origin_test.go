@@ -51,7 +51,7 @@ func TestVPSOriginDownThenSlow(t *testing.T) {
 	if len(out.msgs) != 1 {
 		t.Fatalf("want the outage alert, got %d", len(out.msgs))
 	}
-	for _, want := range []string{"Origin UNREACHABLE: 340", "522 ×340", "origin is down or unreachable", "origin P95: first byte 600 ms"} {
+	for _, want := range []string{"Cloudflare cannot reach the origin", "Cloudflare got no answer from the origin (52x errors): 340", "522 ×340", "origin is down or unreachable", "(P95): first byte 600 ms"} {
 		if !strings.Contains(out.msgs[0], want) {
 			t.Errorf("outage alert lacks %q:\n%s", want, out.msgs[0])
 		}
@@ -62,13 +62,13 @@ func TestVPSOriginDownThenSlow(t *testing.T) {
 	run(12) // two clean rounds: recovered
 	run(13) // the 12:00 hour: up, but slow
 	last := out.msgs[len(out.msgs)-1]
-	for _, want := range []string{"Origin time-to-first-byte P95 2.4 s vs 464 ms", "computes slower with load flat", "origin work by path"} {
+	for _, want := range []string{"▶ Origin slower", "time to first byte for the slowest 5% of requests (P95) is 2.4 s (same hour yesterday 464 ms, 5.2×)", "computes slower with load flat", "origin requests by path"} {
 		if !strings.Contains(last, want) {
 			t.Errorf("slow alert lacks %q:\n%s", want, last)
 		}
 	}
 	t.Logf("slow alert:\n%s", last)
-	if strings.Contains(last, "UNREACHABLE") {
+	if strings.Contains(last, "cannot reach the origin") {
 		t.Errorf("a slow origin is not an unreachable one:\n%s", last)
 	}
 }

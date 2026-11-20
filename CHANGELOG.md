@@ -2,24 +2,21 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.23.0 — 2026-11-20
+
+- **Notifications speak plainly.** Alerts and daily reports read like a note from a colleague, not detector output. Every message follows one order — conclusion, evidence, details:
+  - **Line 2 says what needs a look** in plain titles ("⚠️ Needs a look: Origin errors up", "✅ All normal"), most consequential first.
+  - **One block per finding**: a title, the number with what it was (*"137 (previous day 37, 3.7×)"*), what it most likely means — errors with flat traffic point at the origin itself; volume with flat origin work was absorbed by the cache; a slower Worker median with a flat P99 and fewer calls is a mix change, not a cost rise — and **→ Next:** one concrete step. The separate "lines crossed" list is gone (its rule-cover notes, 52x judgement and dashboard equivalents moved into the blocks).
+  - **One vocabulary**: *above normal* for "line crossed", *normal level* for "baseline", *requests the origin has to handle* for `dynamic`, *main clients / main source networks* for Top UA / ASN, *likely causes / not this if* for hypotheses / falsifiers, *routine checks* for checkpoints; comparisons always as "value (was, change)", with "N×", "flat" and "new" instead of "+383.3%" or "×∞". The glossary is in [Alerts & reports](https://playwjj.github.io/flarehound/reports/#how-a-message-reads); a test keeps the old jargon out of Chinese messages.
+  - **Clients get names**: "Go program (Go-http-client/1.1)", "Chrome 131 · Windows", "crawler Googlebot", "no user agent (scripts, health checks)", and a browser shell without a browser version is called out as "incomplete browser user agent (usually a script posing as a browser)".
+  - **System status is not news**: plan limits (no ASN, no firewall events), local history and 4-week baseline progress, the counting basis and the purpose-table version move to a *System status* block that the daily report shows when it changes, and weekly otherwise (`*-status.json` next to the state file). Data gaps are still said every time.
+  - HTML email tiles and headings use the same words; the daily report no longer repeats the uncached count in its cache line.
+- No detection, threshold, query or structured-field (`kind`, `rules`, `severity`) changes: only the words.
+- Changelog: removed duplicated v1.22.1 and v1.22.0 entries.
+
 ## v1.22.1 — 2026-11-20
 
 - **Console home: "loudest now" lists 8 networks.** User agents wrap to two or three lines while networks fit on one, so five of each left the ASN column half as tall as the UA column. The ASN column now shows 8 (the hour's Top 10 is already measured — no extra query); user agents stay at 5.
-
-## v1.22.1 — 2026-11-20
-
-- **Console home: "loudest now" lists 8 networks.** User agents wrap to two or three lines while networks fit on one, so five of each left the ASN column half as tall as the UA column. The ASN column now shows 8 (the hour's Top 10 is already measured — no extra query); user agents stay at 5.
-
-## v1.22.0 — 2026-11-20
-
-- **Traffic by purpose: why the traffic comes.** FlareHound split traffic by user agent, network, IP and path, but not by the one property that decides the response: a training crawler, a fetch a person triggered in an assistant and a fetch API serving its customers can be the same size and need opposite answers. Telling them apart took hand knowledge — "is AS45102 Qwen calling the site?" needed a manual breakdown to answer *no: 98 % is a headless Chrome fleet on Alibaba Cloud machines, 1.3 % rednote, no verified bots*. Six classes: **training**, **search**, **user-triggered**, **fetch tools**, **mixed** (Googlebot, Bingbot) and **undeclared automation**. No new data source, no new token, no write path; it never acts.
-  - **Built-in table** (a release snapshot of the community ai.robots.txt list: UA → operator → purpose), never fetched at run time; **overrides** in `purposes` (config) or the console (Settings → Network names → Traffic purposes), audited. Applied when shown, never stored: the archive keeps raw user agents and the report names the table version.
-  - **Trust with every label**: *verified* (≥ 90 % pass `cf.client.bot`), *self-declared*, or *by traits*. **Undeclared automation** is a browser user agent from a hosting / cloud network, or a headless browser — described by its traits, never as an AI operator. It needs the ASN dimension (not judged on Free, and the report says so).
-  - **Daily report**: a *Traffic by purpose* section — each class's share, count, yesterday's share and change, top 3 user agents with trust; a class moving ≥ 10 percentage points is named in the conclusion line. Two extra GraphQL queries per report.
-  - **Alerts**: new user agents carry their purpose. A new **training** crawler that is verified (or that the plan cannot verify) is recorded, not alerted on — archived, logged and listed in the daily report; an unverified self-declared one alerts as before. No threshold changes.
-  - **Console**: purpose badges on user agents (movers, new faces, live faces, blocked board, drill-down); a purpose filter on the movers and new-faces pages; the drill-down shows a user agent's label with trust and a network's traffic split by purpose.
-  - **`flarehound purpose [--hours 24] [--asn N]`** (read token) prints the section for the zone or one network. **`doctor`** shows the table version, entries and overrides; a broken table turns the facet off and everything behaves as before.
-- Docs: [Traffic by purpose](https://playwjj.github.io/flarehound/purpose/).
 
 ## v1.22.0 — 2026-11-20
 

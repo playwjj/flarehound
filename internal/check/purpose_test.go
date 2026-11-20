@@ -65,7 +65,7 @@ func TestDailyPurposeSection(t *testing.T) {
 	}
 	msg := out.msgs[0]
 	t.Logf("daily:\n%s", msg)
-	for _, want := range []string{"流量按用途（映射表", "未申报自动化 40.8%", "Chrome/157.0.0.0 (X11; Linux x86_64) 62,000（AS45102 100%）", "GPTBot 6,000 [已验证]", "训练 3.9%", "[已验证]", "工具代客", "[自报]",
+	for _, want := range []string{"访问目的（AI 训练、搜索等）", "未申报自动化 40.8%", "Chrome/157.0.0.0 (X11; Linux x86_64) 62,000（AS45102 100%）", "GPTBot 6,000 [已验证]", "训练 3.9%", "[已验证]", "工具代客", "[自报]",
 		"用途占比变化：未申报自动化 20% → 41%（+21 个百分点）"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("daily lacks %q", want)

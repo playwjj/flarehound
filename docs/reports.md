@@ -8,47 +8,80 @@ Every message is plain text, conclusion first, in English or Chinese (`report.la
 | `daily` | Every day at `schedule.daily_report_at` |
 | `audit` | The custom-rules ruleset changed and the re-audit found problems ([WAF audit](audit.md)) |
 
+## How a message reads
+
+Every message follows one order: **conclusion → evidence → details**. One sentence says what happened and whether to act, then the key numbers, then the technical details (or the console).
+
+- A comparison is always *"value (what it was, change)"*: "137 (previous day 37, 3.7×)". Doubling or more reads "N×", under 1% "flat", from zero "new".
+- Clients get names a person recognises: "Go program (Go-http-client/1.1)", "Chrome 131 · Windows", "crawler Googlebot"; a browser shell without a browser version is called out as "incomplete browser user agent (usually a script posing as a browser)".
+- FlareHound's own status (plan limits, token permissions, local history, counting basis) is not news: the daily report shows it **when it changes**, and weekly otherwise. Failed queries (data gaps) are said every time.
+
+Words used (earlier versions → now):
+
+| Before | Now |
+|---|---|
+| line crossed | above normal / needs a look |
+| baseline | normal level (same hour over 4 weeks, or the previous day) |
+| dynamic | requests the origin has to handle (not cached) |
+| zone requests | total requests |
+| Top UA / Top ASN | main clients / main source networks |
+| new face | new client / new source network |
+| hypotheses, falsified if | likely causes, not this if |
+| block candidates | IPs you could block |
+| checkpoints | routine checks |
+| bookkeeping background | Cloudflare's everyday 522/524 background |
+
 ## Intraday alert
 
 ```
-FlareHound · example.com — anomaly
-Worker web calls +52.0%, Worker web CPU P50 +50.0%, dynamic +75.0%, zone requests +52.0% (+1 more)
+FlareHound · example.com — something is off
+⚠️ Needs a look: Worker web calls up, Worker web runs slower per call, More requests reach the origin and 2 more
 Window 2026-11-17 08:00–09:00 (Asia/Shanghai)
 
-Attribution:
-- expensive (Worker/origin) 40,000 → 70,000 (+30,000); cheap (edge cache) 60,000 → 82,000 (+22,000)
-- top dynamic paths: /rank 35,000 (was 20,000)
-- AS207990 hits: /rank 35,000
+▶ More requests reach the origin
+Requests not served from cache (the origin or Worker has to build them): 70,000 (same hour yesterday 40,000, +75%).
+→ Next: see "Paths that reach the origin" below for the pages that missed the cache.
 
-Hypotheses:
-- [high] Crawler/bot surge: new source AS207990 carries ~87% of the excess.
-  Falsified if its path mix matches normal visitors and it comes from residential/mobile networks …
+▶ New source network: EXAMPLE-HOSTING-AS (AS207990)
+45,000 requests; it was not among yesterday's top 25. It is a hosting / cloud network: real people rarely browse from there.
+→ Next: unless it is your own service or a partner, consider a challenge or a block (see the suggestions below).
+
+Traffic (compared with the same hour yesterday):
+- total requests: 152,000 (same hour yesterday 100,000, +52%)
+- requests the origin has to handle (not cached): 70,000 (same hour yesterday 40,000, +75%)
+- origin errors (5xx): 5 (same hour yesterday 5, flat); 502 ×5
+
+Where it comes from:
+- paths that reach the origin most: /rank 35,000 (yesterday 20,000)
+- AS207990 mostly fetches: /rank 35,000
+
+Likely causes:
+- [likely] Crawler/bot surge: new source AS207990 carries ~87% of the excess.
+  Not this if: its path mix matches normal visitors and it comes from residential/mobile networks …
 
 Suggestions (read-only — FlareHound never applies them; do it in the Cloudflare dashboard):
 1. Block AS207990 (EXAMPLE-HOSTING-AS, hosting network)
-   where: Security → WAF → Custom rules, action Block
-   expression: (ip.geoip.asnum in {207990}) and not cf.client.bot
    ...
 ```
 
 The parts, in order:
 
-1. **Headline** — which lines were crossed and by how much (up to four; collapse, 5xx, expensive, total and new faces first).
-2. **Two-window comparison** — total, Worker invocations and CPU P50 / P99, dynamic, origin 5xx (with its share of origin answers and the 502/503/504 split), origin unreachable (52x, when any, with its status split and — against a 522/524 background — a one-line judgement: bookkeeping, or a departure and why), origin latency P95 (first byte / full response); plus the long baseline when it is active.
-3. **Attribution** — collected only when a message is going out (quiet rounds cost no extra queries). A failed attribution query never blocks the alert.
-4. **Hypotheses** — each with confidence and a falsifier. With no supported hypothesis the message says it reports numbers only.
-5. **Block candidates** — see below.
-6. **Suggestions** — see below. Recovery messages carry no suggestions.
+1. **Lines 1–2** — the zone and the kind of message, then *what needs a look* in plain titles (most consequential first: outages and errors, then cost, then volume, then new clients).
+2. **One block per finding** — a title, the number with what it was (*"137 (previous day 37, 3.7×)"*), what it most likely means (errors with flat traffic point at the origin itself; volume with flat origin work was absorbed by the cache …) and **→ Next:** one concrete step. Up to five; more are listed one line each.
+3. **Traffic** — total, requests that reach the origin, origin errors (5xx, with their share of origin answers and status split), Cloudflare unable to reach the origin (52x, with the 522/524 judgement), origin response time (P95), each Worker; plus the 4-week normal level when it is active.
+4. **Where it comes from** — collected only when a message is going out. A failed query never blocks the alert.
+5. **Likely causes** — each with how likely it is and what would rule it out. With none supported, the message says it reports numbers only.
+6. **IPs you could block** and **suggestions** — see below. Recovery messages are one line.
 
 Email gets the same report as HTML with charts, and Telegram, Discord and WeCom get the charts as images — see [charts and HTML](channels.md#charts-and-html-reportvisuals-default-on).
 
 ### Severity: is it loud, or does it hurt?
 
-A flood that the edge absorbs — zone requests or Worker calls up, new faces, but **real rendering (`dynamic`) up less than 15%** and no dynamic, CPU, origin 5xx, origin slow/unreachable, collapse or path line crossed — is reported as its own verdict at **low severity**: *"edge-absorbed flood: the extra traffic is absorbed at the edge, real rendering +1.0%, CPU and origin errors unchanged — watch it, no action needed."* A Worker CPU P50 rise that P99 and the call count explain as a **mix change** (and nothing else expensive) is also low severity: *"low severity: Worker CPU mix change"*. Anything expensive or broken makes it **high**. The JSONL record carries `severity: "low" | "high"`.
+A surge the cache absorbs — total requests or Worker calls up, new clients, but **requests that reach the origin (`dynamic`) up less than 15%** and nothing on the origin, CPU, errors, drops or paths above normal — is reported as its own verdict, **minor** (🟡): *"The extra traffic is absorbed by the cache: requests the origin handles +1.0%, CPU and origin errors normal — no pressure on the origin or the Worker. Watch it, nothing to do."* A Worker CPU median rise that P99 and the call count explain as a **change in the request mix** (and nothing else expensive) is also minor: *"minor: Worker CPU moved because the request mix changed"*. Anything expensive or broken makes it **high**. The JSONL record carries `severity: "low" | "high"`.
 
 ### Dashboard terms and network labels
 
-Once [calibration](archive.md#calibration) has data, every count in "lines crossed" carries its dashboard equivalent — *"new user agent … 18,521 requests (≈ 9,080 in dashboard terms)"* — because people think in dashboard numbers. A new ASN is labelled with its registered name and network type — *"AS45102 [ALIBABA-CN-NET, hosting/cloud network]"* — so nobody has to look it up before deciding (name lookup needs the `clientASNDescription` dimension; the built-in table works without it).
+Once [calibration](archive.md#calibration) has data, every request count in a finding carries its dashboard equivalent — *"(about 9,080 as the Cloudflare dashboard counts)"* — because people think in dashboard numbers. A new ASN is labelled with its registered name and network type — *"AS45102 [ALIBABA-CN-NET, hosting/cloud network]"* — so nobody has to look it up before deciding (name lookup needs the `clientASNDescription` dimension; the built-in table works without it).
 
 ### Expensive vs. cheap
 
@@ -99,22 +132,21 @@ Path patterns become expressions as follows: `/x` → `http.request.uri.path eq 
 
 ## Daily report
 
-Sent every day (it is a scheduled report, not an alert). The first line is "All clear" or the conclusion.
+Sent every day (it is a scheduled report, not an alert). The second line is "✅ All normal" or "⚠️ Needs a look: …", followed by one block per finding (title, numbers, meaning, next step), as in the alert.
 
-- Last 24 h vs. the 24 h before: the same lines as the hourly watch (without the state machine), cost split, top dynamic paths.
-- Top ASNs and user agents with new ones marked `[new]`; verified crawlers and impostors.
-- **Checkpoints:**
+- Last 24 h vs. the previous day: the same signals as the hourly watch (without the state machine), the cache split, the paths that reach the origin most.
+- Main source networks and main clients with new ones marked `[new]`; verified crawlers and fake crawlers.
+- **Routine checks:**
     - firewall events by rule (with rule names) and the IPs most often blocked or challenged — or "unavailable" on plans without the dataset, never 0;
     - each FlareHound block with its attempts in the window, start and expiry — lift a block when the attempts stop, not when it gets quiet;
     - blocks made in the window with their before/after verdict and, when confirmed after a [simulation](simulator.md), its predicted net new against what the rule stopped;
-    - the **rule simulator's record** over 30 days: blocks confirmed with a net-new prediction, how many were measured, and the median and widest deviation of actual from predicted (per hour) — "Rule simulator, last 30 days: 4 block(s) confirmed with a net-new prediction, 3 measured — actual vs predicted per hour: median −11%, widest +85% (AS45102)";
+    - the **rule simulator's record** over 30 days: blocks that came with a prediction, how many were measured, and the typical and widest deviation of actual from predicted (per hour) — "Rule simulator accuracy, last 30 days: 4 block(s) came with a prediction of how much they would newly stop, 3 measured — actual vs predicted per hour: typically −11%, at most +85% (AS45102)";
     - `daily.paths`: origin reach per path vs. its `max` (✓ / ⚠);
     - `daily.artifacts`: known accounting artifacts, counted separately from visitor errors.
 - Suggestions (no rate-limit advice: the daily report has no per-IP data).
 - WAF audit summary: one line when clean, details only for what needs attention.
-- An intraday anomaly still open, with its start and signals.
-- Archive status and long-baseline readiness (with a `-backfill 28` hint while it fills).
-- A one-line [calibration](archive.md#calibration) ratio.
-- Data gaps: any query that failed is named instead of silently reported as zero.
+- An intraday anomaly still open, with its start (ahead of the findings).
+- **System status** (when it changes, and weekly): no ASN data on the plan, firewall events unreadable, local history and how far the 4-week normal level has filled (with a `flarehound -backfill 28` hint), the [counting basis](archive.md#calibration), the purpose-table version. What was last shown is kept in `*-status.json` next to the state file.
+- Data gaps: any query that failed is named instead of silently reported as zero (every time).
 
 Run it on demand with `flarehound -daily` (add `-dry-run` to print instead of send).
