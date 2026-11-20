@@ -35,6 +35,7 @@ import (
 	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/config"
 	"github.com/playwjj/flarehound/internal/health"
+	"github.com/playwjj/flarehound/internal/sim"
 	"github.com/playwjj/flarehound/internal/store"
 )
 
@@ -69,7 +70,7 @@ func (s *Server) env(z config.Zone, rq *Req) *blockcli.Env {
 		actor = s.actor(rq)
 	}
 	return &blockcli.Env{Cfg: s.Cfg, Zone: z, Read: s.Live, Write: s.Write, Store: s.Store,
-		In: strings.NewReader(""), Out: io.Discard, Now: s.Now, Actor: actor}
+		In: strings.NewReader(""), Out: io.Discard, Now: s.Now, Actor: actor, Sims: s.sims}
 }
 
 // --- review tokens ---
@@ -688,6 +689,7 @@ func (s *Server) effect(ctx context.Context, z config.Zone, ev store.BlockEvent)
 	if raw, ok, err := s.DB.Effect(z.ZoneID, ev.ID); err == nil && ok {
 		var e Effect
 		if json.Unmarshal(raw, &e) == nil {
+			s.predict(&e, ev.ID)
 			return e
 		}
 	}
@@ -697,7 +699,20 @@ func (s *Server) effect(ctx context.Context, z config.Zone, ev store.BlockEvent)
 			_ = s.DB.PutEffect(z.ZoneID, ev.ID, raw)
 		}
 	}
+	s.predict(&e, ev.ID)
 	return e
+}
+
+// predict adds the prediction of the simulation kept with the block.
+func (s *Server) predict(e *Effect, id int64) {
+	if s.Store == nil {
+		return
+	}
+	if raw, ok, err := s.Store.BlockSim(id); err == nil && ok {
+		if r, err := sim.Decode(raw); err == nil {
+			e.Predict(r)
+		}
+	}
 }
 
 func (s *Server) effectPage(w http.ResponseWriter, r *http.Request) {

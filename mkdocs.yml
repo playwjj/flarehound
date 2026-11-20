@@ -60,6 +60,7 @@ plugins:
             Acting on findings: 处置
             One-click blocking: 一键封锁
             Rule changes: 规则变更
+            Rule simulator: 规则模拟器
             WAF rule audit: WAF 规则体检
             WAF basics: WAF 入门
             Reference: 参考
@@ -93,6 +94,7 @@ nav:
   - Web console: console.md
   - Acting on findings:
       - One-click blocking: blocking.md
+      - Rule simulator: simulator.md
       - Rule changes: rules.md
       - WAF rule audit: audit.md
       - WAF basics: waf-guide.md

@@ -21,6 +21,7 @@ import (
 	"github.com/playwjj/flarehound/internal/geoip"
 	"github.com/playwjj/flarehound/internal/report"
 	"github.com/playwjj/flarehound/internal/ruleexec"
+	"github.com/playwjj/flarehound/internal/sim"
 	"github.com/playwjj/flarehound/internal/store"
 	"github.com/playwjj/flarehound/internal/wafkit"
 )
@@ -88,6 +89,10 @@ type page struct {
 	Until     int64
 	UntilTime time.Time
 	Effect    *Effect
+
+	// rule simulator (v1.19)
+	SimForm *simForm
+	Sim     *sim.Report
 
 	// WAF rules (v1.7)
 	Rules     *rulesView
@@ -227,9 +232,21 @@ func (s *Server) funcs(l lang) template.FuncMap {
 			}
 			return geoTag(value, l)
 		},
-		"geoLabel": func(code string) string { return geoip.Label(code, string(l)) },
-		"tf":       func(k string, a ...any) string { return fmt.Sprintf(l.t(k), a...) },
-		"num":      fmtNum,
+		"geoLabel":   func(code string) string { return geoip.Label(code, string(l)) },
+		"tf":         func(k string, a ...any) string { return fmt.Sprintf(l.t(k), a...) },
+		"simLabel":   func(c string) string { return sim.LabelText(c, string(l)) },
+		"simVerdict": func(r *sim.Report) string { return r.VerdictText(string(l)) },
+		"simWarn":    func(r *sim.Report, w sim.Warn) string { return r.WarnText(w, string(l)) },
+		"simReason":  func(it sim.Item) string { return sim.ReasonText(it, string(l)) },
+		"simNetWhy":  func(why string) string { return sim.NetWhyText(why, string(l)) },
+		"simPct":     sim.Pct,
+		"simNum":     func(r *sim.Report, v int64) string { return r.Num(v, string(l)) },
+		"simBound":   func(r *sim.Report, v int64) string { return r.Bound(v) },
+		"simApprox":  func(r *sim.Report, v int64) string { return r.ApproxNum(v) },
+		"simPerDay":  func(r *sim.Report) int64 { return int64(r.NetPerDay()) },
+		"simLink":    simLink,
+		"prediction": func(e *Effect) string { return e.PredictionLine(string(l)) },
+		"num":        fmtNum,
 		"numf": func(v float64, unit string) string {
 			if unit == "ms" {
 				return fmt.Sprintf("%.1f ms", v)

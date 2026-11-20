@@ -63,7 +63,9 @@ Warnings shown before confirming:
 
 **Strong confirmation:** blocking (action `block`) a non-hosting ASN or any country requires retyping the ASN number or country code. `--confirm VALUE` pre-types it; `--yes` does **not** replace it.
 
-After applying, FlareHound reads Cloudflare back to verify, writes an audit record (`block_events` in the [archive](archive.md)), and prints the undo command.
+**Simulation at review.** For ASN, country and user-agent blocks the review also [simulates](simulator.md) the rule the target becomes over the last 7 days and shows it in place of the measured share: gross matches, what the rule's own `not cf.client.bot` exempts, what existing rules already stop, the net new, its confidence label and a verdict — e.g. *Gross 147,300, of which 111,493 exempted (verified bots 111,493), net new ≈ 35,800 (0.2 % of all traffic) — consider a challenge, or no action.* When the zone cannot evaluate it (Free has no ASN dimension) the review falls back to the measured share. IP blocks keep the light measurement.
+
+After applying, FlareHound reads Cloudflare back to verify, writes an audit record (`block_events` in the [archive](archive.md), with the simulation shown at review), and prints the undo command. The before/after comparison later sets the simulation's predicted net new against what the rule actually stopped.
 
 ## Changing or lifting a block
 

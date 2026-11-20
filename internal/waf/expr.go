@@ -325,6 +325,9 @@ var cmpOps = map[string]string{
 	"eq": "eq", "==": "eq", "ne": "ne", "!=": "ne",
 	"lt": "lt", "<": "lt", "le": "le", "<=": "le", "gt": "gt", ">": "gt", "ge": "ge", ">=": "ge",
 	"contains": "contains", "matches": "matches", "~": "matches", "wildcard": "wildcard", "in": "in",
+	// Infix forms of starts_with()/ends_with(), as people write them in
+	// notes and proposals; Cloudflare itself only takes the function form.
+	"starts_with": "starts_with", "ends_with": "ends_with",
 }
 
 func (p *parser) primary() (Node, error) {

@@ -7,6 +7,7 @@
 package calibrate
 
 import (
+	"encoding/json"
 	"sort"
 	"time"
 )
@@ -113,4 +114,21 @@ func Summarize(days []Day, minCount int64) Summary {
 		s.MinCountDash = int64(float64(minCount) / s.Requests)
 	}
 	return s
+}
+
+// Ratio is the request ratio (FlareHound / dashboard) of stored
+// calibration days (calibrate.Day as JSON); 0 when nothing is calibrated.
+func Ratio(raws [][]byte) float64 {
+	var days []Day
+	for _, raw := range raws {
+		var d Day
+		if json.Unmarshal(raw, &d) == nil {
+			days = append(days, d)
+		}
+	}
+	s := Summarize(days, 0)
+	if s.Verdict == NoData {
+		return 0
+	}
+	return s.Requests
 }

@@ -1,0 +1,69 @@
+{{define "simulate"}}{{template "head" .}}
+<section class="card">
+<h1>{{t "sim_title"}} · {{.Zone.Name}}</h1>
+<p class="note">{{t "sim_intro"}}</p>
+{{with .SimForm}}
+<form method="get" action="/simulate" class="stack">
+  <input type="hidden" name="z" value="{{$.Zone.Name}}">
+  <label>{{t "sim_expr"}}<textarea name="expr" rows="4" maxlength="4096" spellcheck="false" autocapitalize="none" autocomplete="off" class="mono" required>{{.Expr}}</textarea></label>
+  <label>{{t "action"}}<select name="action">{{$a := .Action}}
+    <option value="block"{{if eq $a "block"}} selected{{end}}>{{t "act_block"}}</option>
+    <option value="challenge"{{if eq $a "challenge"}} selected{{end}}>{{t "act_challenge"}}</option>
+  </select></label>
+  <label>{{t "sim_window"}}<select name="days">{{$d := .Days}}
+    <option value="7"{{if eq $d 7}} selected{{end}}>{{t "sim_7d"}}</option>
+    <option value="1"{{if eq $d 1}} selected{{end}}>{{t "sim_24h"}}</option>
+  </select></label>
+  <button>{{t "sim_run"}}</button>
+</form>
+{{end}}
+{{if .Err}}<div class="banner err">{{.Err}}</div>{{end}}
+<p class="note">{{t "sim_readonly"}}</p>
+</section>
+{{with .Sim}}{{template "simreport" (list $ .)}}{{end}}
+{{template "foot" .}}{{end}}
+
+{{define "simreport"}}{{$p := index . 0}}{{$r := index . 1}}{{$z := $p.Zone}}
+<section class="card">
+<h2>{{t "sim_result"}}</h2>
+<p class="meta">{{when $r.From}} → {{when $r.To}} · {{t "sim_settle"}}{{if $r.Cached}} · {{t "sim_cached"}}{{end}}</p>
+<p><span class="tag">{{simLabel $r.Confidence}}</span></p>
+<p class="verdict"><b>{{simVerdict $r}}</b></p>
+{{if not $r.Evaluable}}
+  <ul>{{range $r.Unevaluable}}<li><code class="wrap">{{.Expr}}</code><br><small class="muted">{{simReason .}}</small></li>{{end}}</ul>
+  {{range $r.Warnings}}<div class="banner info">{{simWarn $r .}}</div>{{end}}
+{{else}}
+  {{range $r.Widened}}<div class="banner warn">≤ <code class="wrap">{{.Expr}}</code> — {{simReason .}}</div>{{end}}
+  {{range $r.Warnings}}{{if ne .Code $r.Verdict}}<div class="banner {{if or (eq .Code "eyeball") (eq .Code "known") (eq .Code "bots")}}warn{{else}}info{{end}}">{{simWarn $r .}}</div>{{end}}{{end}}
+  <dl class="kv">
+    {{if $r.HasCore}}<dt>{{t "sim_gross"}}</dt><dd>{{simNum $r $r.Gross}} · {{simPct ($r.Share $r.Gross)}} {{t "sim_of_total"}}</dd>
+    <dt>{{t "sim_exempted"}}</dt><dd>{{simBound $r $r.Exempted}}{{range $r.Branches}}<br><small class="muted">and not <code>{{.Expr}}</code>: {{simBound $r .Count}}</small>{{end}}</dd>{{end}}
+    <dt>{{t "sim_matched"}}</dt><dd>{{simNum $r $r.Matched}} · {{simPct ($r.Share $r.Matched)}} {{t "sim_of_total"}}{{if and $r.DynamicKnown $r.Dynamic}} · {{simPct $r.DynShare}} {{t "sim_of_dynamic"}}{{end}}</dd>
+    {{if $r.BotsKnown}}<dt>{{t "sim_bots"}}</dt><dd>{{simBound $r $r.Bots}}</dd>{{end}}
+    <dt>{{t "sim_net"}}</dt><dd>{{if $r.NetKnown}}<b>{{simApprox $r $r.Net}}</b> · {{simPct $r.NetShare}} {{t "sim_of_total"}} · {{tf "sim_per_day" (num (simPerDay $r))}}
+      <br><small class="muted">{{t "sim_handled"}} {{num $r.Handled}}{{range $r.HandledBy}} · {{.Name}} {{num .Count}}{{end}}{{if not $r.NetFrom.IsZero}} · {{t "sim_net_from"}} {{when $r.NetFrom}}{{end}}</small>
+      <br><small class="muted">{{t "sim_net_note"}}</small>{{else}}<span class="muted">{{simNetWhy $r.NetWhy}}</span>{{end}}</dd>
+    <dt>{{t "m_total"}}</dt><dd>{{num $r.Total}}{{if $r.CleanEmptyUA}}<br><small class="muted">{{tf "sim_empty_ua" (num $r.EmptyUA)}}</small>{{end}}</dd>
+  </dl>
+  {{if $r.Days}}<h3>{{t "sim_days"}}</h3>
+  <table class="list"><tbody>{{range $r.Days}}<tr><td class="mono">{{.Date}}{{if .Part}} <small class="muted">({{t "sim_part"}})</small>{{end}}</td><td class="r">{{simBound $r .Count}}</td></tr>{{end}}</tbody></table>{{end}}
+  <h3>{{t "sim_composition"}}</h3>
+  {{if $r.Paths}}<table class="list"><thead><tr><th>{{t "drill_paths"}}</th><th class="r"></th><th class="r"></th></tr></thead><tbody>{{range $r.Paths}}<tr><td class="name">{{if drillable "path" .Name}}<a class="mono" href="/movers/drill?z={{zq $z}}&amp;dim=path&amp;name={{.Name}}">{{short .Name 80}}</a>{{else}}<span class="mono">{{short .Name 80}}</span>{{end}}</td><td class="r">{{simBound $r .Count}}</td><td class="r">{{simPct .Share}}</td></tr>{{end}}</tbody></table>{{end}}
+  {{if $r.UAs}}<table class="list"><thead><tr><th>{{t "drill_uas"}}</th><th class="r"></th><th class="r"></th></tr></thead><tbody>{{range $r.UAs}}<tr><td class="name">{{if .Name}}{{if drillable "ua" .Name}}<a class="mono" title="{{.Name}}" href="/movers/drill?z={{zq $z}}&amp;dim=ua&amp;name={{.Name}}">{{short .Name 80}}</a>{{else}}<span class="mono">{{short .Name 80}}</span>{{end}}{{else}}<span class="muted">{{t "ua_empty"}}</span>{{end}}</td><td class="r">{{simBound $r .Count}}</td><td class="r">{{simPct .Share}}</td></tr>{{end}}</tbody></table>{{end}}
+  {{if $r.IPs}}<table class="list"><thead><tr><th>{{t "drill_ips"}}</th><th class="r"></th><th class="r"></th></tr></thead><tbody>{{range $r.IPs}}<tr><td class="name">{{if drillable "ip" .Name}}<a class="mono" href="/movers/drill?z={{zq $z}}&amp;dim=ip&amp;name={{.Name}}">{{.Name}}</a>{{else}}<span class="mono">{{.Name}}</span>{{end}}{{geo .Name}}{{if .ASN}} <small class="muted">AS{{.ASN}}</small>{{end}}{{if .Bot}} <span class="tag">{{t "sim_vbot"}}</span>{{end}}</td><td class="r">{{simBound $r .Count}}</td><td class="r">{{simPct .Share}}</td></tr>{{end}}</tbody></table>{{end}}
+  {{if $r.Countries}}<table class="list"><thead><tr><th>{{t "sim_countries"}}</th><th class="r"></th><th class="r"></th></tr></thead><tbody>{{range $r.Countries}}<tr><td class="mono">{{.Name}}</td><td class="r">{{simBound $r .Count}}</td><td class="r">{{simPct .Share}}</td></tr>{{end}}</tbody></table>{{end}}
+  {{if and $r.ASNs (not $r.ASNBound)}}<table class="list"><thead><tr><th>{{t "drill_asns"}}</th><th class="r"></th><th class="r"></th></tr></thead><tbody>{{range $r.ASNs}}<tr><td class="name"><a class="mono" href="/movers/drill?z={{zq $z}}&amp;dim=asn&amp;name={{.Name}}">{{.Name}}</a>{{if .Desc}} · {{.Desc}}{{end}}{{if .Network}} · <span class="net net-{{.Network}}">{{t (print "net_" .Network)}}</span>{{end}}</td><td class="r">{{simBound $r .Count}}</td><td class="r">{{simPct .Share}}</td></tr>{{end}}</tbody></table>{{end}}
+  {{if $r.Known}}<h3>{{t "sim_known"}}</h3><ul>{{range $r.Known}}<li><span class="mono">{{.Pattern}}</span> — {{simBound $r .Count}}</li>{{end}}</ul>{{end}}
+{{end}}
+{{range $r.Errors}}<p class="muted"><small>{{t "sim_section_failed"}} {{.}}</small></p>{{end}}
+{{if $r.Skipped}}<p class="muted"><small>{{t "sim_skipped"}} {{join $r.Skipped}}</small></p>{{end}}
+<p class="note">{{tf "sim_foot" $r.Queries}}</p>
+</section>
+{{end}}
+
+{{define "simbrief"}}{{$p := index . 0}}{{$r := index . 1}}
+<dt>{{t "sim_brief"}}</dt><dd><span class="tag">{{simLabel $r.Confidence}}</span><br><b>{{simVerdict $r}}</b>
+  {{range $r.Widened}}<br><small class="muted">≤ <code>{{.Expr}}</code> — {{simReason .}}</small>{{end}}
+  {{range $r.Warnings}}{{if and (ne .Code $r.Verdict) (or (eq .Code "eyeball") (eq .Code "known") (eq .Code "bots") (eq .Code "gap"))}}<br><small>⚠ {{simWarn $r .}}</small>{{end}}{{end}}
+  <br><small class="muted">{{when $r.From}} → {{when $r.To}} · <a href="{{simLink $p.Zone $r.Expr $r.Action}}">{{t "sim_full"}}</a></small></dd>
+{{end}}

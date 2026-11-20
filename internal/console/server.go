@@ -29,6 +29,7 @@ import (
 	"github.com/playwjj/flarehound/internal/config"
 	"github.com/playwjj/flarehound/internal/report"
 	"github.com/playwjj/flarehound/internal/ruleexec"
+	"github.com/playwjj/flarehound/internal/sim"
 	"github.com/playwjj/flarehound/internal/store"
 )
 
@@ -132,6 +133,7 @@ type Server struct {
 	ipMu         sync.Mutex
 	ipCache      map[string]*ipEntry
 	attemptsWG   sync.WaitGroup // background attempt queries (tests wait on it)
+	sims         *sim.Cache     // rule simulations (review, apply, /simulate)
 }
 
 type auditEntry struct {
@@ -147,7 +149,7 @@ func New(cfg *config.Config, db *DB, arch Archive, auditor Auditor, version stri
 		trusted: cfg.TrustedProxies(), defLang: lang(cfg.Report.Language), limiter: newLimiter(10, time.Minute), totpAcct: newLimiter(20, time.Hour), totpSess: newLimiter(5, preMFATTL),
 		auditCache: map[string]auditEntry{}, attemptsCache: map[string]attemptsEntry{}, attemptsBusy: map[string]bool{}, blockLive: map[string]blockLiveEntry{},
 		liveCache: map[string]*liveEntry{}, drillCache: map[string]*drillEntry{}, rulesCache: map[string]rulesEntry{},
-		blockedCache: map[string]*blockedEntry{}, ipCache: map[string]*ipEntry{}}
+		blockedCache: map[string]*blockedEntry{}, ipCache: map[string]*ipEntry{}, sims: sim.NewCache()}
 	s.OAuth = builtinProviders(cfg.Console)
 	s.reviewKey = make([]byte, 32)
 	if _, err := rand.Read(s.reviewKey); err != nil {
@@ -306,6 +308,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /rules/review", admin(s.requireRules(s.ruleReview)))
 	mux.Handle("POST /rules/apply", admin(s.requireRules(s.ruleApply)))
 	mux.Handle("GET /blocks", user(s.blocksPage))
+	mux.Handle("GET /simulate", user(s.simulatePage))
 	mux.Handle("POST /totp-hint/dismiss", admin(s.totpHintDismiss))
 	mux.Handle("GET /blocks/new", admin(s.requireWrite(s.blockNewPage)))
 	mux.Handle("POST /blocks/review", admin(s.requireWrite(s.blockReview)))

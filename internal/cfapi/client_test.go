@@ -277,3 +277,64 @@ func TestOriginUnreachableFilter(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestSimulatorReads(t *testing.T) {
+	var q string
+	c := server(t, `{"data":{"viewer":{"zones":[{"httpRequestsAdaptiveGroups":[{"count":7}]}]}}}`, &q)
+	if _, err := c.Count(context.Background(), "zone", from, to, Filter{Where: `AND:[{clientAsn:"30633"}]`}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(q, `datetime_lt:"2026-11-17T09:00:00Z",AND:[{clientAsn:"30633"}]`) {
+		t.Fatalf("where not appended: %s", q)
+	}
+	c = server(t, `{"data":{"viewer":{"zones":[{"httpRequestsAdaptiveGroups":[
+		{"count":5,"dimensions":{"clientAsn":"4134","clientASNDescription":"CHINANET-BACKBONE"}},
+		{"count":9,"dimensions":{"clientAsn":"24940","clientASNDescription":"HETZNER-AS"}}]}]}}}`, &q)
+	fs, err := c.Top(context.Background(), "zone", from, to, DimASNNamed, 5, Filter{})
+	if err != nil || len(fs) != 2 || fs[0].ASN != 24940 || fs[0].Desc != "HETZNER-AS" || fs[0].Name != "AS24940" || fs[1].Desc != "CHINANET-BACKBONE" {
+		t.Fatalf("named ASNs: %+v %v", fs, err)
+	}
+	c = server(t, `{"data":{"viewer":{"zones":[{"firewallEventsAdaptiveGroups":[{"count":3,"dimensions":{"action":"block","ruleId":"r1"}}]}]}}}`, &q)
+	fs, err = c.FirewallGroups(context.Background(), "zone", from, to, "action ruleId", 10, Filter{Where: `AND:[{userAgent:"x"}]`})
+	if err != nil || len(fs) != 1 || fs[0].Name != "block r1" || !strings.Contains(q, "firewallEventsAdaptiveGroups") {
+		t.Fatalf("firewall groups: %+v %v %s", fs, err, q)
+	}
+}
+
+func TestCapabilitiesFirewallFields(t *testing.T) {
+	var queries []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var body map[string]string
+		_ = json.Unmarshal(raw, &body)
+		queries = append(queries, body["query"])
+		if strings.Contains(body["query"], "availableFields}}}}}") && !strings.Contains(body["query"], "httpRequestsAdaptiveGroups") {
+			io.WriteString(w, `{"data":{"viewer":{"zones":[{"settings":{"firewallEventsAdaptiveGroups":{"availableFields":["dimensions_action","dimensions_clientAsn"]}}}]}}}`)
+			return
+		}
+		io.WriteString(w, `{"data":{"viewer":{"zones":[{"settings":{
+			"httpRequestsAdaptiveGroups":{"enabled":true,"availableFields":["dimensions_clientAsn"]},
+			"firewallEventsAdaptiveGroups":{"enabled":true,"notOlderThan":2592000}}}]}}}`)
+	}))
+	t.Cleanup(srv.Close)
+	c := New("tok").WithEndpoint(srv.URL)
+	caps, err := c.Capabilities(context.Background(), "zone")
+	if err != nil || !caps.HasDim(DimASN) || !caps.HasFirewallDim("clientAsn") || caps.HasFirewallDim("clientRefererHost") {
+		t.Fatalf("caps: %+v %v (queries %v)", caps, err, queries)
+	}
+	if len(queries) != 2 || strings.Contains(queries[0], "firewallEventsAdaptiveGroups{enabled notOlderThan availableFields") {
+		t.Fatalf("the main probe must not depend on the firewall field list: %v", queries)
+	}
+	// The field list failing leaves the main probe intact.
+	c2 := server(t, `{"data":{"viewer":{"zones":[{"settings":{
+		"httpRequestsAdaptiveGroups":{"enabled":true,"availableFields":["dimensions_clientAsn"]},
+		"firewallEventsAdaptiveGroups":{"enabled":true,"notOlderThan":2592000}}}]}}}`, nil)
+	caps, err = c2.Capabilities(context.Background(), "zone")
+	if err != nil || !caps.Probed || caps.FirewallFields != nil || !caps.HasFirewallDim("clientRefererHost") {
+		t.Fatalf("fallback: %+v %v", caps, err)
+	}
+	free := Caps{Probed: true}
+	if free.HasFirewallDim("action") {
+		t.Fatal("no firewall dataset, but a firewall dimension")
+	}
+}

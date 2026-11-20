@@ -63,7 +63,9 @@ flarehound enforce             # optional without a console: lifts blocks whose 
 
 **强确认：**以拦截（动作 `block`）封非机房 ASN 或任何国家时，需要重新输入一遍 ASN 号码或国家代码。`--confirm VALUE` 可以预先填好；`--yes` **不能**代替它。
 
-应用之后，FlareHound 读回 Cloudflare 进行核验，写入一条审计记录（[归档](archive.md)中的 `block_events`），并打印撤销命令。
+**确认页附带模拟。** 对 ASN、国家与 UA 封锁，确认页还会用过去 7 天[模拟](simulator.md)该目标将生成的规则，并以它取代实测占比：毛命中、规则自身 `not cf.client.bot` 豁免的量、已被现有规则处理的量、净新增、置信标签与裁决——例如 *毛命中 147,300，其中豁免 111,493（已验证机器人 111,493），净新增可拦 ≈ 35,800（占总量 0.2%）——建议降级为挑战或不处理。* 该区无法评估时（Free 没有 ASN 维度），确认页回落到实测占比。IP 封锁维持原有的轻量查询。
+
+应用之后，FlareHound 读回 Cloudflare 进行核验，写入一条审计记录（[归档](archive.md)中的 `block_events`，连同确认时显示的模拟），并打印撤销命令。之后的封前/封后对比会把模拟预测的净新增与规则实际拦截量放在一起。
 
 ## 修改或解除封锁 {#changing-or-lifting-a-block}
 

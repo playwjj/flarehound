@@ -26,6 +26,7 @@ import (
 	"github.com/playwjj/flarehound/internal/notify"
 	"github.com/playwjj/flarehound/internal/report"
 	"github.com/playwjj/flarehound/internal/schedule"
+	"github.com/playwjj/flarehound/internal/sim"
 	"github.com/playwjj/flarehound/internal/state"
 	"github.com/playwjj/flarehound/internal/store"
 	"github.com/playwjj/flarehound/internal/suggest"
@@ -1181,7 +1182,15 @@ func (r *Runner) blockEffects(ctx context.Context, zone config.Zone, from, to ti
 			continue
 		}
 		e := blockeffect.Compute(ctx, r.API, zone.ZoneID, ev, r.now(), r.Cfg.IntradayOffset())
+		if raw, ok, err := r.Store.BlockSim(ev.ID); err == nil && ok {
+			if rep, err := sim.Decode(raw); err == nil {
+				e.Predict(rep)
+			}
+		}
 		_, v := e.Verdict(r.Cfg.Report.Language)
+		if pl := e.PredictionLine(r.Cfg.Report.Language); pl != "" {
+			v += map[bool]string{true: "；", false: "; "}[r.Cfg.Report.Language == "zh"] + pl
+		}
 		target := block.Target{Type: block.Type(ev.Type), Value: ev.Value}.String()
 		if ev.Type == string(block.ASN) {
 			if n, err := strconv.Atoi(ev.Value); err == nil && labels[n] != "" {

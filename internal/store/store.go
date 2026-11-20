@@ -100,6 +100,10 @@ CREATE TABLE IF NOT EXISTS block_events (
 	actor      TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS block_events_target ON block_events (zone, type, value, id);
+CREATE TABLE IF NOT EXISTS block_sims (
+	event_id INTEGER PRIMARY KEY, -- block_events.id
+	data     TEXT    NOT NULL     -- the rule simulation shown at review (sim.Report as JSON)
+);
 CREATE TABLE IF NOT EXISTS asn_names (
 	asn     INTEGER PRIMARY KEY,
 	name    TEXT    NOT NULL,
@@ -482,6 +486,54 @@ func (s *Store) AddBlockEvent(e BlockEvent) error {
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.At.Unix(), e.Zone, e.Op, e.Type, e.Value, e.Action, e.Mechanism, e.RuleID, e.Reason, exp, e.Actor)
 	return err
+}
+
+// AddBlockEventSim appends an audit record together with the rule
+// simulation the person saw before confirming it (one transaction; kept
+// for good, like the block log). sim nil: the record alone.
+func (s *Store) AddBlockEventSim(e BlockEvent, sim []byte) error {
+	if len(sim) == 0 {
+		return s.AddBlockEvent(e)
+	}
+	var exp int64
+	if !e.ExpiresAt.IsZero() {
+		exp = e.ExpiresAt.Unix()
+	}
+	if e.At.IsZero() {
+		e.At = time.Now()
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`INSERT INTO block_events (at, zone, op, type, value, action, mechanism, rule_id, reason, expires_at, actor)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		e.At.Unix(), e.Zone, e.Op, e.Type, e.Value, e.Action, e.Mechanism, e.RuleID, e.Reason, exp, e.Actor)
+	if err != nil {
+		return err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO block_sims (event_id, data) VALUES (?, ?)`, id, string(sim)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// BlockSim returns the rule simulation stored with a block record.
+func (s *Store) BlockSim(eventID int64) ([]byte, bool, error) {
+	var data string
+	err := s.db.QueryRow(`SELECT data FROM block_sims WHERE event_id = ?`, eventID).Scan(&data)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return []byte(data), true, nil
 }
 
 func scanEvents(rows *sql.Rows) ([]BlockEvent, error) {

@@ -175,6 +175,10 @@ func evalCmp(c Cmp, p Probe) Tri {
 			return of(v != s)
 		case "contains":
 			return of(strings.Contains(v, s))
+		case "starts_with":
+			return of(strings.HasPrefix(v, s))
+		case "ends_with":
+			return of(strings.HasSuffix(v, s))
 		case "wildcard":
 			return of(wildMatch(strings.ToLower(s), strings.ToLower(v)))
 		case "strict_wildcard":

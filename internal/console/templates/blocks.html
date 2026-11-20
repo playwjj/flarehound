@@ -101,7 +101,7 @@
     <dt>{{t "mechanism"}}</dt><dd>{{.Plan.Note}}</dd>
     {{if .Plan.Expression}}<dt>{{t "rule_after"}}</dt><dd><code class="wrap">{{.Plan.Expression}}</code></dd>{{end}}
     {{if .Where}}<dt>{{t "rule_position"}}</dt><dd>{{.Plan.RuleRef}} {{.Where}}</dd>{{end}}
-    <dt>{{t "measured"}}</dt><dd>{{if .ShareKnown}}{{.Measured}}{{else}}<span class="muted">{{t "not_measurable"}}</span>{{end}}</dd>
+    {{if .SimShown}}{{template "simbrief" (list $ .Sim)}}{{else}}<dt>{{t "measured"}}</dt><dd>{{if .ShareKnown}}{{.Measured}}{{else}}<span class="muted">{{t "not_measurable"}}</span>{{end}}{{if .Sim}}<br><small class="muted">{{t "sim_unevaluable_here"}} <a href="{{simLink $.Zone .Sim.Expr .Sim.Action}}">{{t "sim_why"}}</a></small>{{else if .SimErr}}<br><small class="muted">{{t "sim_failed"}} {{.SimErr}}</small>{{end}}</dd>{{end}}
     <dt>{{t "expires"}}</dt><dd>{{if .ExpiresAt.IsZero}}{{t "permanent"}}{{else}}{{when .ExpiresAt}} <small class="muted">({{t "needs_enforce"}})</small>{{end}}</dd>
     {{if .Opts.Reason}}<dt>{{t "reason"}}</dt><dd>{{.Opts.Reason}}</dd>{{end}}
   </dl>
@@ -172,6 +172,7 @@
 {{with .Effect}}
 {{if .Err}}<div class="banner warn">{{t "effect_err"}} {{.Err}}</div>{{end}}
 <p class="verdict v-{{verdictKind .}}"><b>{{verdict .}}</b></p>
+{{with prediction .}}<p class="meta">{{.}}</p>{{end}}
 {{if not .Settled}}<div class="banner info">{{t "effect_partial"}}</div>{{end}}
 <table class="list">
 <thead><tr><th></th><th class="r">{{t "before_1h"}}</th><th class="r">{{t "after_1h"}}</th></tr></thead>

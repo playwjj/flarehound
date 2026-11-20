@@ -33,6 +33,8 @@ const blockUsage = `Commands:
   flarehound health [--file heartbeat]             exit 0 if the watch loop's heartbeat is fresh (Docker HEALTHCHECK)
   flarehound console [help]                        the web console (see "flarehound console help")
   flarehound geoip update [-o PATH]                download the newest DB-IP country library (IP location)
+  flarehound simulate --expr '<WAF expression>' [--action block|challenge] [--days 7|1] [--date YYYY-MM-DD] [--json]
+                                                   replay a draft rule against recent traffic (read token; changes nothing)
 
 Blocking commands (separate write token, see README):
 
@@ -46,7 +48,7 @@ Common flags: -config PATH, --zone NAME|ID (required when several zones are conf
 
 // subcommands lists the verbs main dispatches here.
 var subcommands = map[string]bool{"audit": true, "calibrate": true, "doctor": true, "health": true, "block": true, "unblock": true, "blocks": true, "enforce": true, "help": true,
-	"rules": true, "ratelimit": true, "cache": true}
+	"rules": true, "ratelimit": true, "cache": true, "simulate": true}
 
 // splitArgs separates leading positionals from flags so flags may follow
 // the positionals ("block asn 207990 --for 24h").
@@ -109,7 +111,7 @@ func runSubcommand(ctx context.Context, cfgPath, verb string, args []string, red
 	yes := fs.Bool("yes", false, "do not ask for y/N confirmation")
 	confirm := fs.String("confirm", "", "pre-typed confirmation value for blocks that can hit real users")
 	skipOrigin := fs.Bool("skip-origin-check", false, "block an IP even if the DNS origin check cannot run")
-	days := fs.Int("days", 7, "attempt window for `blocks`")
+	days := fs.Int("days", 7, "attempt window for `blocks`; simulation window for `simulate` (7 or 1)")
 	var rf rulesFlags
 	fs.StringVar(&rf.phase, "phase", "", "rules: custom (default), ratelimit or cache")
 	fs.StringVar(&rf.expr, "expr", "", "rules: rule expression (Cloudflare rules language)")
@@ -133,6 +135,8 @@ func runSubcommand(ctx context.Context, cfgPath, verb string, args []string, red
 	fs.StringVar(&rf.asns, "asns", "", "rules recipe: ASNs (comma-separated)")
 	fs.StringVar(&rf.header, "header", "", "rules recipe: secret header name")
 	fs.StringVar(&rf.secretEnv, "secret-env", "", "rules recipe: environment variable holding the secret header value")
+	simDate := fs.String("date", "", "simulate: one local day (YYYY-MM-DD) instead of the last --days")
+	simJSON := fs.Bool("json", false, "simulate: print the report as JSON")
 	if err := fs.Parse(rest); err != nil {
 		return 2
 	}
@@ -221,6 +225,22 @@ func runSubcommand(ctx context.Context, cfgPath, verb string, args []string, red
 			fmt.Println()
 		}
 		return code
+	}
+
+	if verb == "simulate" { // read-only: never touches the write token
+		z, err := pickZone(cfg, *zoneArg)
+		if err != nil {
+			return fail(err)
+		}
+		var st *store.Store
+		if !cfg.Archive.Disabled { // calibration ratio only; optional
+			if st, err = store.Open(cfg.Archive.File); err == nil {
+				defer st.Close()
+			} else {
+				st = nil
+			}
+		}
+		return runSimulate(ctx, cfg, z, st, simArgs{expr: rf.expr, action: *action, days: *days, date: *simDate, json: *simJSON}, os.Stdout)
 	}
 
 	if verb == "audit" { // read-only: never touches the write token

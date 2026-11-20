@@ -7,6 +7,7 @@ package blockcli
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,10 +17,12 @@ import (
 	"time"
 
 	"github.com/playwjj/flarehound/internal/block"
+	"github.com/playwjj/flarehound/internal/calibrate"
 	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/config"
 	"github.com/playwjj/flarehound/internal/geoip"
 	"github.com/playwjj/flarehound/internal/schedule"
+	"github.com/playwjj/flarehound/internal/sim"
 	"github.com/playwjj/flarehound/internal/store"
 	"github.com/playwjj/flarehound/internal/suggest"
 )
@@ -50,6 +53,10 @@ type Env struct {
 	Out   io.Writer
 	Now   func() time.Time
 	Actor string // recorded in the audit log ("cli", "ttl", …)
+	// Sims caches rule simulations (review, then apply); nil: none kept.
+	Sims *sim.Cache
+	// NoSim turns the review's rule simulation off.
+	NoSim bool
 
 	in *bufio.Reader
 }
@@ -174,9 +181,20 @@ type Prepared struct {
 	IPNetwork string // hosting | eyeball | unknown ("" when IPASN is 0)
 	Day       int64
 	DayKnown  bool
+	// Sim is the rule simulation of an expression block (ASN, country,
+	// user agent): what the rule this target becomes would have done over
+	// the last 7 days. nil for IP blocks, when the read API cannot
+	// simulate, or when it failed (SimErr). Not Evaluable: the review
+	// falls back to the measured share.
+	Sim    *sim.Report
+	SimErr string
 
 	state block.State
 }
+
+// SimShown reports whether the review shows the simulation in place of
+// the single-target measurement.
+func (p *Prepared) SimShown() bool { return p.Sim != nil && p.Sim.Evaluable }
 
 // AlreadyDone is true when the target is already blocked as asked.
 func (p *Prepared) AlreadyDone() bool { return p.Plan.Op == block.OpNone }
@@ -232,6 +250,9 @@ func (e *Env) Prepare(ctx context.Context, t block.Target, o BlockOpts) (*Prepar
 		e.ipProfile(ctx, t, p)
 	}
 	_, p.Share, p.Measured, p.ShareKnown = e.measure(ctx, t)
+	if t.Type != block.IP && !e.NoSim {
+		p.Sim, p.SimErr = e.Simulate(ctx, block.Expression(t.Type, []string{t.Value}), string(o.Action), 0)
+	}
 	p.Warnings = block.Warnings(t, o.Action, p.Network, p.Share, p.ShareKnown)
 	if !p.Plan.Place.Ignored {
 		p.Where = p.Plan.Place.Describe()
@@ -244,6 +265,35 @@ func (e *Env) Prepare(ctx context.Context, t block.Target, o BlockOpts) (*Prepar
 		p.ExpiresAt = e.now().Add(o.TTL)
 	}
 	return p, nil
+}
+
+// SimInput is a simulation of expr on this zone with the zone's cleaning,
+// calibration and known sources; days 0 is the default window.
+func (e *Env) SimInput(expr, action string, days int) sim.Input {
+	in := sim.Input{ZoneID: e.Zone.ZoneID, ZoneName: e.Zone.Name, Expr: expr, Action: action, Days: days, Now: e.now(),
+		Workers: len(e.Zone.Workers) > 0, Loc: e.loc(), RuleNames: e.Cfg.RuleNames,
+		KnownUAs: e.Cfg.KnownFaces.UserAgents, KnownASNs: e.Cfg.KnownFaces.ASNs}
+	if e.Store != nil {
+		if rows, err := e.Store.CalibrationDays(e.Zone.ZoneID, 7); err == nil {
+			in.DashRatio = calibrate.Ratio(rows)
+		}
+	}
+	return in
+}
+
+// Simulate runs the rule simulator for expr when the read API can (nil
+// report otherwise; a failure is returned as text, never as an error: the
+// review goes on without it).
+func (e *Env) Simulate(ctx context.Context, expr, action string, days int) (*sim.Report, string) {
+	api, ok := e.Read.(sim.API)
+	if !ok {
+		return nil, ""
+	}
+	r, err := e.Sims.Run(ctx, api, e.SimInput(expr, action, days))
+	if err != nil {
+		return nil, err.Error()
+	}
+	return r, ""
 }
 
 // topAPI is the optional Top-N read the bypass check uses for the
@@ -328,7 +378,13 @@ func (e *Env) Execute(ctx context.Context, p *Prepared) (block.Entry, error) {
 		Action: string(p.Opts.Action), Mechanism: string(entry.Mechanism), RuleID: entry.RuleID, Reason: p.Opts.Reason,
 		ExpiresAt: p.ExpiresAt, Actor: e.Actor}
 	if e.Store != nil {
-		if err := e.Store.AddBlockEvent(ev); err != nil {
+		// The simulation the person saw is kept with the record, so the
+		// before/after comparison can set "predicted" against "actual".
+		var snap []byte
+		if p.SimShown() {
+			snap, _ = json.Marshal(p.Sim)
+		}
+		if err := e.Store.AddBlockEventSim(ev, snap); err != nil {
 			return entry, fmt.Errorf("%w: %v", ErrAuditFailed, err)
 		}
 	}
@@ -435,9 +491,14 @@ func (e *Env) Block(ctx context.Context, t block.Target, o BlockOpts) error {
 			e.printf("Last 24 h:  %d requests\n", p.Day)
 		}
 	}
-	if p.ShareKnown {
+	switch {
+	case p.SimShown():
+		e.printf("Simulated:  %s\n", p.Sim.VerdictText(e.Cfg.Report.Language))
+		e.printf("            %s · last %.0f days · `flarehound simulate --expr '%s'` for the full report\n",
+			sim.LabelText(p.Sim.Confidence, e.Cfg.Report.Language), p.Sim.Hours()/24, block.Expression(t.Type, []string{t.Value}))
+	case p.ShareKnown:
 		e.printf("Measured:   %s\n", p.Measured)
-	} else {
+	default:
 		e.printf("Measured:   not measurable for this target type\n")
 	}
 	if o.TTL > 0 {

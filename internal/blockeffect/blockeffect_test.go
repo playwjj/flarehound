@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/playwjj/flarehound/internal/cfapi"
+	"github.com/playwjj/flarehound/internal/sim"
 	"github.com/playwjj/flarehound/internal/store"
 )
 
@@ -68,5 +69,25 @@ func TestCompute(t *testing.T) {
 	}
 	if e := Compute(context.Background(), fake{}, "z", ev, at.Add(30*time.Minute), 7*time.Minute); e.Settled {
 		t.Fatal("partial hour reported as settled")
+	}
+}
+
+func TestPredictionLine(t *testing.T) {
+	e := Effect{Settled: true, AttemptsKnown: true, Attempts: 1320}
+	if e.PredictionLine("en") != "" {
+		t.Fatal("a line without a prediction")
+	}
+	e.Predict(&sim.Report{Evaluable: true, NetKnown: true, Net: 1490 * 24, From: time.Unix(0, 0), To: time.Unix(24*3600, 0)})
+	if got := e.PredictionLine("zh"); got != "预测净新增 ≈ 1,490 次/小时（确认时的模拟）；实际封禁后一小时拦截 1,320 次 (-11%)" {
+		t.Fatalf("got %q", got)
+	}
+	e.AttemptsKnown = false
+	if !strings.Contains(e.PredictionLine("en"), "not countable") {
+		t.Fatal(e.PredictionLine("en"))
+	}
+	var none Effect
+	none.Predict(&sim.Report{Evaluable: true}) // no net new: no prediction
+	if none.PredictedKnown {
+		t.Fatal("predicted without net new")
 	}
 }

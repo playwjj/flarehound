@@ -7,7 +7,7 @@ FlareHound states its limits up front rather than letting you discover them.
 - **Sampled analytics.** Cloudflare's adaptive GraphQL analytics are sampled and extrapolated. On small sites fine-grained breakdowns can be unstable, and a low-volume path may return 0 rows — zero does not mean absent. Very large sites will find attribution too coarse; FlareHound targets small-to-medium sites.
 - **Different units from the dashboard.** Adaptive counts include Worker subrequests and cache operations. On a live Free zone FlareHound measured ≈ 1.29× the dashboard's request count and ≈ 1.84× its edge 5xx (cache-operation artifacts). Thresholds are in FlareHound's units; see [Calibration](archive.md#calibration).
 - **Ingestion lag** (about 5–10 minutes) sets the detection floor. This is a watchdog, not a real-time shield — edge rules remain the shield.
-- **No referer dimension.** Traffic cannot be split by referring page, so "forged referer bypass" cannot be detected from analytics.
+- **No referring-page dimension.** At most the referer's host is available (paid plans), so traffic cannot be split by referring page and "forged referer bypass" cannot be detected from analytics.
 - **Worker CPU** is available only as quantiles (FlareHound uses P50), not as a total; any cost reading is an estimate.
 - **Retention.** Cloudflare keeps about 31 days. `-backfill` can recover at most the last 30 days; anything older cannot be rebuilt. The archive holds hourly aggregates, never individual requests.
 - **Database files level off, older ones never shrink.** Pruned rows free pages that new rows reuse. Only `archive.db` / `console.db` files created by v1.18 or later give space back to the disk after a large prune (for example after lowering `archive.hourly_retention_days`); files from earlier versions are not rebuilt and keep their size. See [disk space](archive.md#disk-space).
@@ -34,6 +34,16 @@ Rule quotas also differ by plan (custom rules Free 5 / Pro 20 / Business 100 / E
 - **Per-country and per-range shares** are not measured when blocking; FlareHound says so in the plan.
 - **IP location is a library's reading, not a fact.** It is the registered/routed country of an address — a residential proxy shows its exit, a data-centre address its data centre — and libraries disagree at the edges (DB-IP lite places Google's IPv6 resolver `2001:4860:4860::8888` in CA, GeoLite2 in US). There is deliberately no per-country traffic view built from it: countries inferred from the top IPs would be a heavily biased sample.
 - No AI in the detection path: findings are deterministic and reproducible from the same data.
+
+## Rule simulator
+
+See [Rule simulator](simulator.md). Its limits, before its features:
+
+- **Sampled approximation, not a replay.** There is no replay API; the expression is translated into filters over sampled, aggregated analytics. Sampling is the precision limit — there is no Logpush and no per-request log behind it.
+- **The referer only to its host** (paid plans). A comparison on the full referer ("exactly the home page") is widened to its host: the report is labelled *upper bound* and names the sub-expression. Under a negation it is not evaluable.
+- **Free zones** have no ASN dimension and no firewall events: ASN expressions are not evaluable there, and net new is not available. The report says so; it does not fill the gap from another source.
+- **Net new is a joined estimate.** Matches come from the HTTP requests dataset, "already stopped" from the firewall events — two datasets, sampled differently. It is counted against the whole rule set, not the rule's position (a skip rule ahead of it is not considered yet).
+- **Not evaluable at all:** headers, cookies, bodies, regular expressions, wildcards, threat and bot scores, rates, functions other than `starts_with` / `ends_with`, `$list` references and IP ranges. Such an expression gets no numbers, only the named sub-expressions.
 
 ## Scope
 

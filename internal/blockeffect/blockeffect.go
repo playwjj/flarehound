@@ -13,6 +13,7 @@ import (
 	"github.com/playwjj/flarehound/internal/block"
 	"github.com/playwjj/flarehound/internal/blockcli"
 	"github.com/playwjj/flarehound/internal/cfapi"
+	"github.com/playwjj/flarehound/internal/sim"
 	"github.com/playwjj/flarehound/internal/store"
 )
 
@@ -40,6 +41,45 @@ type Effect struct {
 	Attempts      int64
 	AttemptsKnown bool
 	Err           string
+	// Predicted is the net new per hour the rule simulation predicted at
+	// review (kept with the block record); PredictedKnown is false when no
+	// simulation with a net-new estimate was kept.
+	Predicted      float64 `json:",omitempty"`
+	PredictedKnown bool    `json:",omitempty"`
+	PredictedUpper bool    `json:",omitempty"`
+}
+
+// Predict takes the prediction from the simulation kept with the block.
+func (e *Effect) Predict(r *sim.Report) {
+	if r == nil || !r.Evaluable || !r.NetKnown {
+		return
+	}
+	e.Predicted, e.PredictedKnown, e.PredictedUpper = r.NetPerHour(), true, r.Upper()
+}
+
+// PredictionLine sets the review's prediction against what happened:
+// "predicted net new ≈ 1,490/h, actual 1,320 stopped (−11%)". "" without
+// a prediction.
+func (e Effect) PredictionLine(lang string) string {
+	if !e.PredictedKnown {
+		return ""
+	}
+	mark := "≈"
+	if e.PredictedUpper {
+		mark = "≤"
+	}
+	pred := fmt.Sprintf(t(lang, "predicted net new %s %s/h (simulation at review)", "预测净新增 %s %s 次/小时（确认时的模拟）"), mark, n(int64(e.Predicted+0.5)))
+	switch {
+	case !e.Settled:
+		return pred + t(lang, "; actual: the hour after has not settled", "；实际：封禁后一小时尚未落定")
+	case !e.AttemptsKnown:
+		return pred + t(lang, "; actual: not countable (no firewall events for this rule)", "；实际：无法计量（该规则无防火墙事件）")
+	}
+	dev := ""
+	if e.Predicted >= 1 {
+		dev = fmt.Sprintf(" (%+.0f%%)", (float64(e.Attempts)-e.Predicted)/e.Predicted*100)
+	}
+	return pred + fmt.Sprintf(t(lang, "; actual %s stopped in the hour after%s", "；实际封禁后一小时拦截 %s 次%s"), n(e.Attempts), dev)
 }
 
 func pctOf(n, of int64) float64 {

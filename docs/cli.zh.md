@@ -35,6 +35,7 @@ flarehound -config config.json -backfill 28
 | `health [--file heartbeat] [--max-age D]` | — | 心跳新鲜时退出码为 0（[心跳](channels.md#heartbeat-dead-man-switch)） |
 | `audit` | 只读 | [WAF 规则体检](audit.md) |
 | `calibrate [--days 7]` | 只读 | [口径校准](archive.md#calibration) |
+| `simulate --expr EXPR [--action block|challenge] [--days 7|1] [--date YYYY-MM-DD] [--json]` | 只读 | [规则模拟器](simulator.md)——用近期流量回放草稿规则；不改动任何东西 |
 | `block <ip|asn|country|ua> <value> […]` | 写 | [封锁](blocking.md) |
 | `unblock <ip|asn|country|ua> <value> [--yes]` | 写 | [封锁](blocking.md) |
 | `blocks [--days 7]` | 写 | [封锁](blocking.md#listing-and-attempts) |

@@ -75,6 +75,10 @@ type Filter struct {
 	FirewallRuleID    string // firewall dataset only
 	ClientIP          string // exact
 	UserAgentLike     string // SQL-like pattern, % wildcard
+	// Where is a pre-rendered filter fragment appended as is (the rule
+	// simulator's translated expression: "AND:[{…}]"). The caller owns
+	// its quoting.
+	Where string
 }
 
 func (f Filter) render(from, to time.Time) string {
@@ -125,6 +129,9 @@ func (f Filter) render(from, to time.Time) string {
 	}
 	if f.FirewallNotAction != "" {
 		parts = append(parts, "action_neq:"+quote(f.FirewallNotAction))
+	}
+	if f.Where != "" {
+		parts = append(parts, f.Where)
 	}
 	return strings.Join(parts, ",")
 }
@@ -253,7 +260,8 @@ type Face struct {
 	Name  string `json:"name"`
 	ASN   int    `json:"asn,omitempty"`
 	Count int64  `json:"count"`
-	Cat   string `json:"cat,omitempty"` // verified-bot category (client-IP lists only)
+	Cat   string `json:"cat,omitempty"`  // verified-bot category (client-IP lists only)
+	Desc  string `json:"desc,omitempty"` // registered network name (DimASNNamed only)
 }
 
 // Dimension names accepted by Top.
@@ -270,6 +278,9 @@ const (
 	DimClientIPASN    = "clientIP clientAsn"
 	DimClientIPBot    = "clientIP verifiedBotCategory"
 	DimClientIPASNBot = "clientIP clientAsn verifiedBotCategory"
+	// DimASNNamed groups by network with its registered name: ASN set,
+	// Name "AS15169", Desc the registered name.
+	DimASNNamed = "clientAsn clientASNDescription"
 )
 
 // Status dimensions: what the origin answered, and what the edge answered
@@ -308,6 +319,19 @@ func (c *Client) Top(ctx context.Context, zoneID string, from, to time.Time, dim
 			f := Face{Name: fmt.Sprint(r.Dimensions[DimClientIP]), Count: r.Count}
 			f.ASN, _ = asnOf(r.Dimensions[DimASN])
 			f.Cat, _ = r.Dimensions[DimVerifiedBot].(string)
+			out = append(out, f)
+		}
+		sort.SliceStable(out, func(i, j int) bool { return out[i].Count > out[j].Count })
+		return out, nil
+	}
+	if dim == DimASNNamed {
+		out := make([]Face, 0, len(rows))
+		for _, r := range rows {
+			f := Face{Count: r.Count, Name: fmt.Sprint(r.Dimensions[DimASN])}
+			if n, ok := asnOf(r.Dimensions[DimASN]); ok {
+				f.ASN, f.Name = n, fmt.Sprintf("AS%d", n)
+			}
+			f.Desc, _ = r.Dimensions["clientASNDescription"].(string)
 			out = append(out, f)
 		}
 		sort.SliceStable(out, func(i, j int) bool { return out[i].Count > out[j].Count })
@@ -463,6 +487,9 @@ type Caps struct {
 	// FirewallMaxAge is how far back firewall events can be queried
 	// (notOlderThan; 0 = unknown). Queries reaching further are rejected.
 	FirewallMaxAge time.Duration
+	// FirewallFields is the firewall dataset's availableFields (empty:
+	// not reported, everything is assumed available).
+	FirewallFields map[string]bool
 	Probed         bool // false: probing failed, everything is assumed available
 }
 
@@ -521,6 +548,21 @@ func SplitBots(fs []Face, n int) (others, bots []Face) {
 		}
 	}
 	return others, bots
+}
+
+// HasFirewallDim reports whether the firewall-events dataset is enabled
+// and exposes a dimension (assumed when the probe did not list fields).
+func (c Caps) HasFirewallDim(dim string) bool {
+	if !c.Probed {
+		return true
+	}
+	if !c.FirewallEnabled {
+		return false
+	}
+	if len(c.FirewallFields) == 0 {
+		return true
+	}
+	return c.FirewallFields["dimensions_"+dim]
 }
 
 // HasDim reports whether the HTTP dataset exposes a dimension.
@@ -582,7 +624,46 @@ func (c *Client) Capabilities(ctx context.Context, zoneID string) (Caps, error) 
 	for _, f := range st.HTTP.AvailableFields {
 		caps.HTTPFields[f] = true
 	}
+	if caps.FirewallEnabled {
+		// Best effort, in its own query: a failure here must not cost the
+		// watch its main probe. Without the list every field is assumed.
+		caps.FirewallFields = c.firewallFields(ctx, zoneID)
+	}
 	return caps, nil
+}
+
+// firewallFields reads the firewall dataset's availableFields (nil when
+// the read fails) — what the rule simulator may filter firewall events on.
+func (c *Client) firewallFields(ctx context.Context, zoneID string) map[string]bool {
+	q := fmt.Sprintf(`{viewer{zones(filter:{zoneTag:%s}){settings{firewallEventsAdaptiveGroups{availableFields}}}}}`, quote(zoneID))
+	var out struct {
+		Data struct {
+			Viewer struct {
+				Zones []struct {
+					Settings struct {
+						Firewall struct {
+							AvailableFields []string `json:"availableFields"`
+						} `json:"firewallEventsAdaptiveGroups"`
+					} `json:"settings"`
+				} `json:"zones"`
+			} `json:"viewer"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := c.queryInto(ctx, q, &out); err != nil || len(out.Errors) > 0 || len(out.Data.Viewer.Zones) == 0 {
+		return nil
+	}
+	fs := out.Data.Viewer.Zones[0].Settings.Firewall.AvailableFields
+	if len(fs) == 0 {
+		return nil
+	}
+	m := make(map[string]bool, len(fs))
+	for _, f := range fs {
+		m[f] = true
+	}
+	return m
 }
 
 // Dimension for Cloudflare's own verified-bot classification.
@@ -605,6 +686,18 @@ func (c *Client) FirewallTop(ctx context.Context, zoneID string, from, to time.T
 		return nil, err
 	}
 	return faces(rows, dim), nil
+}
+
+// FirewallGroups returns firewall-event counts grouped by one or more
+// dimensions (space-separated, e.g. "action" or "action ruleId") under a
+// filter — the rule simulator's "already handled by existing rules".
+// Not available on every plan: an error means "data unavailable".
+func (c *Client) FirewallGroups(ctx context.Context, zoneID string, from, to time.Time, dim string, limit int, f Filter) ([]Face, error) {
+	rows, err := c.zoneRows(ctx, zoneID, "firewallEventsAdaptiveGroups", "count dimensions{"+dim+"}", limit, true, f.render(from, to))
+	if err != nil {
+		return nil, err
+	}
+	return faces(rows, strings.Fields(dim)...), nil
 }
 
 // WorkerStat is one Worker script's window: invocations (including
