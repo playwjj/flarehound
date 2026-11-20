@@ -26,7 +26,7 @@ func TestVerdicts(t *testing.T) {
 		{Effect{Settled: true, Measurable: true, Before: 10000, After: 9800, StatusAfter: st(500, 9800)}, Unclear, "效果不明显"},
 		{Effect{Settled: true, AttemptsKnown: true, Attempts: 12}, NoMeasure, "拦截尝试 12 次"},
 		{Effect{Settled: true, Measurable: true, Before: 0, After: 40}, NoBefore, "封禁前一小时没有请求"},
-		{Effect{Measurable: true, Before: 100, After: 1}, Pending, "尚未落定"},
+		{Effect{Measurable: true, Before: 100, After: 1}, Pending, "还没到齐"},
 	}
 	for _, c := range cases {
 		k, zh := c.e.Verdict("zh")

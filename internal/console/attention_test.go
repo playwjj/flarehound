@@ -27,7 +27,7 @@ func TestAttentionHome(t *testing.T) {
 	if ib < 0 || iq < 0 || ib > iq {
 		t.Fatalf("order: busy at %d, quiet at %d (busy must come first despite the name)", ib, iq)
 	}
-	for _, want := range []string{"open alert episode since", "line(s) over", "new face(s) in 24 h", "no archived data", "total_up"} {
+	for _, want := range []string{"open alert episode since", "signal(s) above normal", "new source(s) in 24 h", "no archived data", "Traffic up"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("home lacks %q", want)
 		}

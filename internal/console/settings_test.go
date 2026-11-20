@@ -157,7 +157,7 @@ func TestSettingsThresholdsReplay(t *testing.T) {
 		t.Fatalf("review: %d\n%s", code, review)
 	}
 	// The fixture's spike (+150 % total, +350 % dynamic) is over the line now, not after.
-	m := regexp.MustCompile(`Hours over a line</td><td class="r">(\d+)</td><td class="r"><b>(\d+)</b>`).FindStringSubmatch(review)
+	m := regexp.MustCompile(`Hours above normal</td><td class="r">(\d+)</td><td class="r"><b>(\d+)</b>`).FindStringSubmatch(review)
 	if m == nil || m[1] == "0" || m[2] != "0" {
 		t.Fatalf("replay: %v", m)
 	}

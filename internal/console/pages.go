@@ -193,12 +193,47 @@ func (s *Server) funcs(l lang) template.FuncMap {
 		"thresholdRows": thresholdRows,
 		"contains":      contains,
 		"join":          func(s []string) string { return strings.Join(s, ", ") },
-		"asnInfo":       func(name string) ASNInfo { return s.asnInfo(name) },
-		"verdict":       func(e Effect) string { _, v := e.Verdict(string(l)); return v },
-		"verdictKind":   func(e Effect) string { k, _ := e.Verdict(string(l)); return k },
-		"coverOf":       func(zone, dim, name string) *analyze.RuleCover { return s.coverOf(zone, dim, name) },
-		"drillable":     func(dim, name string) bool { _, ok := drillFilter(dim, name); return ok },
-		"purposeTag":    func(dim, name string) *PurposeTag { return s.purposeTag(l, dim, name) },
+		"signal":        func(key string) string { return report.SignalTitle(string(l), key) },
+		// intro is the one line under the tabs that says what question the
+		// page answers; "" for pages without one.
+		"intro": func(nav string) string {
+			if _, ok := dict["intro_"+nav]; !ok {
+				return ""
+			}
+			return l.t("intro_" + nav)
+		},
+		// evLabel / evDetail: an alert event names its signals in plain
+		// words; other events (blocks, rule changes) are shown as recorded.
+		"evLabel": func(e Event) string {
+			if !alertEvent(e.Kind) {
+				return e.Label
+			}
+			switch e.Label {
+			case "changed", "escalate":
+				return l.t("dec_" + e.Label)
+			}
+			return ""
+		},
+		"evDetail": func(e Event) string {
+			if !alertEvent(e.Kind) || e.Detail == "" {
+				return e.Detail
+			}
+			var ts []string
+			for _, k := range strings.Split(e.Detail, ", ") {
+				ts = append(ts, report.SignalTitle(string(l), k))
+			}
+			sep := ", "
+			if l == "zh" {
+				sep = "、"
+			}
+			return strings.Join(ts, sep)
+		},
+		"asnInfo":     func(name string) ASNInfo { return s.asnInfo(name) },
+		"verdict":     func(e Effect) string { _, v := e.Verdict(string(l)); return v },
+		"verdictKind": func(e Effect) string { k, _ := e.Verdict(string(l)); return k },
+		"coverOf":     func(zone, dim, name string) *analyze.RuleCover { return s.coverOf(zone, dim, name) },
+		"drillable":   func(dim, name string) bool { _, ok := drillFilter(dim, name); return ok },
+		"purposeTag":  func(dim, name string) *PurposeTag { return s.purposeTag(l, dim, name) },
 		"labelTag": func(lb *purpose.Label) *PurposeTag {
 			if lb == nil {
 				return nil
@@ -626,3 +661,7 @@ func (s *Server) noASN(ctx context.Context, z config.Zone) bool {
 	c := s.Caps(ctx, z)
 	return c.Probed && !c.HasDim(cfapi.DimASN)
 }
+
+// alertEvent: the history event comes from an alert (its detail lists
+// signal keys).
+func alertEvent(kind string) bool { return kind == "alert" || kind == "held" || kind == "recovered" }

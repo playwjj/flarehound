@@ -2,6 +2,16 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.24.0 — 2026-11-20
+
+- **The console speaks plainly too**, in the vocabulary v1.23.0 gave the notifications:
+  - **One line under the tabs** says what question each page answers ("Is the site normal right now?", "Who changed the most compared with normal?", "Who showed up for the first time recently?" …).
+  - **"How this is counted"**: the method notes (sampling, what is compared with what, cache times, the Top-N upper bound) are folded at the bottom of the overview, movers and drill-down instead of sitting between the numbers.
+  - **Words**: *normal* for "baseline" (tiles, movers, settings), *above normal* for "over the line", *still arriving* for "not settled", *newest complete hour* for "newest settled hour", *new sources* for "new faces" (tab, settings, chips), *learning the normal level* for "baseline accumulating", *Cloudflare's everyday 522/524 background* for "bookkeeping", *reach the origin (not cached)* for `dynamic`; in Chinese also 访问者 / 来源网络 for UA / ASN and 本地记录 for 归档.
+  - **Signals by name**: the all-zones home and the history timeline show an open or past alert as "Traffic up · Origin errors up" instead of `total_up, origin_5xx`.
+  - A test keeps the old terms out of the console's Chinese strings. The rule simulator keeps its own terms (gross, net new, upper bound) for now: they are shared with the CLI and its documentation.
+- Block effects: "the hour after has not settled" reads "the data for the hour after is still arriving" in Chinese.
+
 ## v1.23.0 — 2026-11-20
 
 - **Notifications speak plainly.** Alerts and daily reports read like a note from a colleague, not detector output. Every message follows one order — conclusion, evidence, details:

@@ -19,7 +19,7 @@
 <h2 class="sec">{{t "live_title"}} <span class="muted">{{hm .From}}–{{hm .To}}</span> <span class="tag">{{t "unsettled"}}</span></h2>
 {{if not .BaselineOK}}<p class="note">{{if .Samples}}{{tf "baseline_thin" .Samples 20}}{{else}}{{t "baseline_none"}}{{end}}</p>{{end}}
 {{template "tiles" .Rows}}
-<p class="note">{{t "live_note"}}</p>
+{{template "how" (t "live_note")}}
 {{if or .TopUA .TopASN}}<section class="card"><h2>{{t "live_faces_title"}}</h2>
 <div class="split">
 {{if .TopUA}}<div>{{template "livefaces" (list $ "ua" .TopUA)}}</div>{{end}}
@@ -43,7 +43,7 @@
 {{end}}
 {{if .Trend}}<section class="card"><h2>{{t "trend_title"}}</h2>{{.Trend}}<p class="legend">{{t "trend_note"}}</p></section>{{end}}
 {{if .Chart}}<section class="card"><h2>{{t "last_48h"}}</h2>{{.Chart}}<p class="legend">{{t "hist_legend"}}</p></section>{{end}}
-<p class="note">{{t "settled_note"}}</p>
+{{template "how" (t "settled_note")}}
 {{template "snapform" .}}
 {{template "foot" .}}{{end}}
 
@@ -87,7 +87,8 @@
 {{if lt .Samples 20}}<p class="note">{{if .Samples}}{{tf "baseline_thin" .Samples 20}}{{else}}{{t "baseline_none"}}{{end}}</p>{{end}}
 <section class="card"><h2 class="up">▲ {{t "risers"}}</h2>{{template "moverrows" (rowsCtx $ .Up)}}</section>
 <section class="card"><h2 class="down">▼ {{t "fallers"}}</h2>{{template "moverrows" (rowsCtx $ .Down)}}</section>
-<p class="note">{{tf "movers_note" .TopN}}{{if eq $dim "path"}} {{t "path_note"}}{{end}}</p>
+{{if eq $dim "path"}}<p class="note">{{t "path_note"}}</p>{{end}}
+{{template "how" (tf "movers_note" .TopN)}}
 {{end}}{{end}}
 {{with .Blocked}}{{if and (not .Err) .Total}}<section class="card"><h2>{{t "blocked_title"}}</h2>
 <p class="note">{{tf "blocked_total" (num .Total)}} {{t "blocked_note"}}</p>
@@ -149,8 +150,8 @@
 <thead><tr><th>{{t "time"}}</th><th>{{t "event"}}</th><th>{{t "detail"}}</th></tr></thead>
 <tbody>{{range .History.Events}}<tr>
   <td data-label="{{t "time"}}" class="nowrap">{{when .At}}</td>
-  <td data-label="{{t "event"}}"><span class="ev ev-{{.Kind}}">{{evName .Kind}}</span> <span class="mono">{{.Label}}</span></td>
-  <td data-label="{{t "detail"}}" class="muted">{{short .Detail 160}}</td>
+  <td data-label="{{t "event"}}"><span class="ev ev-{{.Kind}}">{{evName .Kind}}</span>{{with evLabel .}} <span class="mono">{{.}}</span>{{end}}</td>
+  <td data-label="{{t "detail"}}" class="muted">{{short (evDetail .) 160}}</td>
 </tr>{{end}}</tbody></table>{{end}}
 </section>
 {{template "foot" .}}{{end}}
@@ -330,7 +331,8 @@
 </tr>{{end}}
 <tr><td class="muted">{{t "purpose_untagged"}}</td><td></td><td class="r muted">{{printf "%.1f%%" .Rest}}</td><td></td></tr>
 </tbody></table>{{end}}
-<p class="note">{{t "purpose_drill_note"}}{{if .NoASN}} {{t "purpose_no_asn"}}{{end}}</p>
+{{if .NoASN}}<p class="note">{{t "purpose_no_asn"}}</p>{{end}}
+{{template "how" (t "purpose_drill_note")}}
 </section>{{end}}{{end}}
 {{range .Sections}}
 <section class="card"><h2>{{t .Key}}</h2>
@@ -346,7 +348,7 @@
 </tr>{{end}}</tbody></table>{{end}}
 </section>
 {{end}}
-<p class="note">{{t "drill_note"}}</p>
+{{template "how" (t "drill_note")}}
 {{else}}<section class="card"><p>{{.Err}}</p></section>{{end}}
 <p>{{if eq .Dim "ip"}}<a href="/ips?z={{zq .Zone}}">← {{t "nav_ips"}}</a>{{else}}<a href="/movers?z={{zq .Zone}}&amp;dim={{.Dim}}">← {{t "nav_movers"}}</a>{{end}}</p>
 {{template "foot" .}}{{end}}
@@ -415,7 +417,7 @@
     {{if .NoData}}<span class="chip c-watch">{{t "att_nodata"}}</span>{{else if .Stale}}<span class="chip c-watch">{{t "att_stale"}}</span>{{end}}
     {{if not (or .Open .OriginOut .Origin5xx .OverLines .Watching .NewFaces .Alerts24h .NoData .Stale)}}<span class="chip c-ok">{{t "att_quiet"}}</span>{{end}}
   </p>
-  {{if .OpenKeys}}<p class="meta mono">{{join .OpenKeys}}</p>{{end}}
+  {{if .OpenKeys}}<p class="meta">{{range $i, $k := .OpenKeys}}{{if $i}} · {{end}}{{signal $k}}{{end}}</p>{{end}}
   {{if not .Window.IsZero}}<p class="meta">{{t "window"}} → {{when .Window}}</p>{{end}}
 </section>
 {{end}}

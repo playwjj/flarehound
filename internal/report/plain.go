@@ -401,3 +401,14 @@ func (l lang) statusBlock(b *strings.Builder, d DailyData) {
 		fmt.Fprintf(b, "- %s\n", s)
 	}
 }
+
+// SignalTitle names a signal key ("origin_5xx", "new_face_asn:AS207990",
+// "worker_calls_up:web") in plain words, as the notifications title it.
+func SignalTitle(language, key string) string {
+	rule, subject, _ := strings.Cut(key, ":")
+	f := analyze.Finding{Rule: rule, Subject: subject}
+	if rule == analyze.RuleNewFaceASN {
+		fmt.Sscanf(strings.TrimPrefix(strings.ToUpper(subject), "AS"), "%d", &f.ASN)
+	}
+	return lang(language).explain(f, analyze.Metrics{}, analyze.Metrics{}, "", nil, nil).Title
+}

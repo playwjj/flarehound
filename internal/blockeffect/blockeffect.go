@@ -71,7 +71,7 @@ func (e Effect) PredictionLine(lang string) string {
 	pred := fmt.Sprintf(t(lang, "predicted net new %s %s/h (simulation at review)", "预测净新增 %s %s 次/小时（确认时的模拟）"), mark, n(int64(e.Predicted+0.5)))
 	switch {
 	case !e.Settled:
-		return pred + t(lang, "; actual: the hour after has not settled", "；实际：封禁后一小时尚未落定")
+		return pred + t(lang, "; actual: the hour after has not settled", "；实际：封禁后一小时的数据还没到齐")
 	case !e.AttemptsKnown:
 		return pred + t(lang, "; actual: not countable (no firewall events for this rule)", "；实际：无法计量（该规则无防火墙事件）")
 	}
@@ -191,7 +191,7 @@ func (e Effect) Verdict(lang string) (kind, text string) {
 	}
 	switch {
 	case !e.Settled:
-		return Pending, t(lang, "the hour after has not settled yet", "封禁后一小时尚未落定")
+		return Pending, t(lang, "the hour after has not settled yet", "封禁后一小时的数据还没到齐")
 	case !e.Measurable:
 		if e.AttemptsKnown {
 			return NoMeasure, fmt.Sprintf(t(lang, "the rule stopped %s attempts in the hour after (ranges and countries cannot be counted on their own)",

@@ -244,3 +244,10 @@ p.chips { display: flex; flex-wrap: wrap; gap: .35rem; margin: .3rem 0; }
 .chip.c-watch { background: var(--watch-bg); border-color: transparent; }
 .chip.c-info { background: var(--info-bg); border-color: transparent; }
 .chip.c-ok { background: var(--ok-bg); border-color: transparent; }
+
+/* the question a page answers, under the tabs */
+.intro { font-size: .95rem; margin: .2rem 0 1rem; }
+/* methodology, folded away */
+details.how { margin: .2rem 0 .8rem; }
+details.how summary { color: var(--muted); font-size: .8rem; }
+details.how p { color: var(--muted); font-size: .82rem; margin: .3rem 0 0; }
