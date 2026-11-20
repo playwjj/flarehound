@@ -1,6 +1,6 @@
 # Rule changes
 
-New to WAF rules? Read [WAF basics](waf-guide.md) ([中文](waf-guide-zh.md)) and start from the recipes.
+New to WAF rules? Read [WAF basics](waf-guide.md) and start from the recipes.
 
 The execution module applies rule changes — including the challenge, rate-limit and cache suggestions from alerts — to three Cloudflare phases:
 

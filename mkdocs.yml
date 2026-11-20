@@ -23,7 +23,52 @@ theme:
       scheme: slate
       toggle: { icon: material/weather-sunny, name: Light mode }
 
+plugins:
+  - search
+  # English is the default (page.md); Chinese sits next to it (page.zh.md)
+  # and is served under /zh/. A page without a Chinese file falls back to
+  # English (the changelog is English only).
+  - i18n:
+      docs_structure: suffix
+      fallback_to_default: true
+      reconfigure_material: true
+      reconfigure_search: true
+      languages:
+        - locale: en
+          default: true
+          name: English
+          build: true
+        - locale: zh
+          name: 中文
+          build: true
+          site_description: 托管在 Cloudflare 上的网站的自托管巡检工具
+          nav_translations:
+            Home: 首页
+            Getting started: 入门
+            Quick start: 快速开始
+            API tokens & permissions: API Token 与权限
+            Configuration reference: 配置参考
+            How it works: 工作原理
+            Detection: 检测
+            Alerts, daily report & suggestions: 告警、日报与建议
+            Notification channels: 通知渠道
+            Local archive & calibration: 本地归档与口径校准
+            Web console: Web 控制台
+            Acting on findings: 处置
+            One-click blocking: 一键封锁
+            Rule changes: 规则变更
+            WAF rule audit: WAF 规则体检
+            WAF basics: WAF 入门
+            Reference: 参考
+            Command line: 命令行
+            Limitations: 局限
+            Troubleshooting: 故障排查
+            Changelog: 更新日志（英文）
+            Project direction: 产品方向
+            Web console revision: Web 控制台改版说明
+
 markdown_extensions:
+  - attr_list
   - admonition
   - tables
   - toc: { permalink: true }
@@ -48,7 +93,6 @@ nav:
       - Rule changes: rules.md
       - WAF rule audit: audit.md
       - WAF basics: waf-guide.md
-      - WAF 入门（中文）: waf-guide-zh.md
   - Reference:
       - Command line: cli.md
       - Limitations: limitations.md
@@ -56,4 +100,3 @@ nav:
       - Changelog: changelog.md
   - Project direction:
       - Web console revision: web-console-revision.md
-  - 中文简介: zh.md

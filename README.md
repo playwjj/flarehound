@@ -153,7 +153,7 @@ A console holding the write token lifts expired blocks itself (every 5 minutes);
 
 ## WAF basics and recipes
 
-New to WAF rules? [WAF basics](docs/waf-guide.md) ([中文](docs/waf-guide-zh.md)) covers order, verified bots, block vs challenge and narrow skips, and the recipes do it for you:
+New to WAF rules? [WAF basics](https://playwjj.github.io/flarehound/waf-guide/) ([中文](https://playwjj.github.io/flarehound/zh/waf-guide/)) covers order, verified bots, block vs challenge and narrow skips, and the recipes do it for you:
 
 ```bash
 flarehound rules recipes

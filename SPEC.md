@@ -461,7 +461,7 @@ MIT © 2026 playwjj
 
 ## 19. Web 控制台（v1.3 起；v1.4 拦截；v1.5 第三方登录；v1.7 WAF 规则）
 
-方向与理由见 `docs/web-console-revision.md`；本节记录已落地的实现约定。
+方向与理由见 `docs/web-console-revision.zh.md`；本节记录已落地的实现约定。
 
 - **进程与数据**：`flarehound console` 是独立进程，与 watch 共用二进制与配置。读 watch 写入的归档（SQLite WAL，双进程并发读写安全），账号与会话存独立的 `console.db`（0600），watch 从不打开。默认关闭（`console.enabled`），默认只听 `127.0.0.1:8640`；不做 TLS、不做公网暴露。
 - **口径一致**：总览 / 涨降榜 / 历史全部来自归档中已落定的小时窗口，基线即报警使用的「28 天同小时中位数」，状态色直接对照 `thresholds` 中的报警线；最新归档超过「监控周期 + 偏移 + 30 分钟」即标「数据已过期」。

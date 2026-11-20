@@ -33,4 +33,4 @@ Cloudflare gives you data. FlareHound gives you the conclusion.
 2. [API tokens & permissions](permissions.md) — the minimum token you need.
 3. [Configuration reference](configuration.md) — every key and default.
 
-The full design (in Chinese) is in [SPEC.md](https://github.com/playwjj/flarehound/blob/main/SPEC.md). A short Chinese overview is on the [中文简介](zh.md) page.
+The full design (in Chinese) is in [SPEC.md](https://github.com/playwjj/flarehound/blob/main/SPEC.md). The whole site is also available in Chinese — use the language switch at the top.

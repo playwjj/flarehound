@@ -1,6 +1,6 @@
 # WAF basics
 
-For people setting up Cloudflare WAF custom rules for the first time: five principles, then how to apply them with FlareHound's **rule recipes**, then the common mistakes. Every change shows the complete rule and waits for your confirmation; the phase is backed up first, the result is read back, and any change can be restored. [中文版](waf-guide-zh.md)
+For people setting up Cloudflare WAF custom rules for the first time: five principles, then how to apply them with FlareHound's **rule recipes**, then the common mistakes. Every change shows the complete rule and waits for your confirmation; the phase is backed up first, the result is read back, and any change can be restored.
 
 ## Five principles
 

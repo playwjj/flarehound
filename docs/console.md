@@ -107,7 +107,7 @@ Every change goes through a review page — the rule in plain words, the exact c
 
 The rules and the audit are kept warm in the background (rules re-read every 10 minutes, the audit re-run when 30 minutes old), so both pages open immediately; a change made in the console refreshes them, and the rules page has a refresh link. Recipes are plan-aware: a recipe whose rule type is at the plan's quota says so instead of offering a form, Free zones are not offered skip scopes they lack, and their rate-limit timing is fixed at 10 seconds.
 
-The **WAF audit** page puts **How to fix** first — each finding with what to do and a **Fix with a recipe** link (or the CLI command) — and keeps the full report below. New to this? [WAF basics](waf-guide.md) / [中文](waf-guide-zh.md).
+The **WAF audit** page puts **How to fix** first — each finding with what to do and a **Fix with a recipe** link (or the CLI command) — and keeps the full report below. New to this? [WAF basics](waf-guide.md).
 
 ## Read-only snapshots
 

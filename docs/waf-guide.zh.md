@@ -1,8 +1,8 @@
-# WAF 入门（中文）
+# WAF 入门 {#waf-basics}
 
 写给第一次配置 Cloudflare WAF 自定义规则的人：先讲五条原则，再讲怎么用 FlareHound 的**规则配方**照着做，最后列出常见错误。所有改动都要先看到完整的规则、确认后才执行，执行前自动备份、执行后读回核对，随时可以恢复。
 
-## 五条原则
+## 五条原则 {#five-principles}
 
 **1. 顺序决定一切。** 自定义规则从上往下执行，第一个匹配的「拦截」或「质询」就结束；「放行（Skip）」规则让请求跳过它指定的部分。推荐顺序：**放行 → 拦截 → 质询**。FlareHound 的配方会按这个顺序自动放到正确的位置。
 
@@ -23,7 +23,7 @@
 
 **5. 敏感路径单独保护。** 登录、后台、搜索、API 用「质询 + 按 IP 限速」两层。WAF 体检会列出哪些敏感路径还没有任何防护（敏感路径来自配置里的 `path_rules`、`daily.paths` 与 `waf_audit.sensitive_paths`）。
 
-## 用配方照着做
+## 用配方照着做 {#recipes}
 
 ```bash
 flarehound rules recipes          # 列出全部配方，带说明
@@ -44,7 +44,7 @@ flarehound audit                  # 体检，末尾「怎么修」给出可直�
 
 执行前你会看到：配方说明、这条规则的白话解释（例如「如果路径以 /login 开头，且不是 Cloudflare 已核验的爬虫 → 托管质询」）、完整的规则字段、插入位置、额度变化与警告，然后才需要确认。
 
-## 自己写规则时
+## 自己写规则时 {#writing-rules-yourself}
 
 ```bash
 flarehound rules list                       # 每条规则下有一行白话解释
@@ -57,7 +57,7 @@ flarehound rules restore 12                 # 恢复改动前的备份
 
 `--action skip` 必须说明跳过什么：`--skip rules`（其后的自定义规则，默认）、`ratelimit`、`managed`（托管规则，Pro 及以上）、`bots`（超级机器人对抗模式，Pro 及以上；Free 的 Bot Fight Mode 无法被规则跳过）、`legacy`（旧版安全功能），可逗号组合。不带跳过范围的放行规则 Cloudflare 会直接拒绝，FlareHound 会在发送前就提示。
 
-## 常见错误
+## 常见错误 {#common-mistakes}
 
 - **按 UA 放行 Googlebot**：任何人都能伪造。用 `cf.client.bot`。
 - **放行规则放在最后**：前面的拦截已经生效了，放行永远轮不到。放行放最前面。
@@ -67,6 +67,6 @@ flarehound rules restore 12                 # 恢复改动前的备份
 - **Free 套餐的限速**：只有 1 条限速规则，周期与持续时间都必须是 10 秒。
 - **规则额度用完**：Free 5 条、Pro 20 条。动作相同的规则可以用 `or` 合并，体检会列出可合并的规则。
 
-## 改坏了怎么办
+## 改坏了怎么办 {#undo}
 
 每次改动前都会备份整个阶段（归档 + `data/backups/` 下的 JSON 文件）。命令行用 `flarehound rules backups` 查看、`flarehound rules restore 编号` 恢复；控制台在 **WAF 规则** 页底部的「备份」里一键恢复。恢复本身也会先备份，所以恢复也能撤销。
