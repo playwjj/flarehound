@@ -20,17 +20,25 @@ import (
 
 type simArgs struct {
 	expr, action, date string
-	days               int
+	days, before       int
 	json               bool
 }
 
 // runSimulate replays a draft expression against the zone's recent
 // traffic and prints the report. Read token only; it changes nothing.
 func runSimulate(ctx context.Context, cfg *config.Config, z config.Zone, st *store.Store, a simArgs, out io.Writer) int {
-	return simulate(ctx, cfg, z, st, cfapi.New(cfg.APIToken), a, out, time.Now())
+	rest := cfapi.NewREST(cfg.APIToken) // custom rules (position) and lists, read token
+	return simulate(ctx, cfg, z, st, cfapi.New(cfg.APIToken), rest, a, out, time.Now())
 }
 
-func simulate(ctx context.Context, cfg *config.Config, z config.Zone, st *store.Store, api sim.API, a simArgs, out io.Writer, now time.Time) int {
+// simContext is the REST side a simulation reads: the custom rules and
+// the account lists (nil: neither).
+type simContext interface {
+	sim.RulesAPI
+	sim.ListAPI
+}
+
+func simulate(ctx context.Context, cfg *config.Config, z config.Zone, st *store.Store, api sim.API, rest simContext, a simArgs, out io.Writer, now time.Time) int {
 	if strings.TrimSpace(a.expr) == "" {
 		log.Print("simulate: --expr is required (a Cloudflare rules-language expression)")
 		return 2
@@ -45,7 +53,11 @@ func simulate(ctx context.Context, cfg *config.Config, z config.Zone, st *store.
 		action = string(act)
 	}
 	env := &blockcli.Env{Cfg: cfg, Zone: z, Store: st, Now: func() time.Time { return now }}
+	if rest != nil {
+		env.SimRules, env.SimLists = rest, rest
+	}
 	in := env.SimInput(a.expr, action, a.days)
+	in.Before = a.before
 	switch {
 	case a.date != "":
 		loc := cfg.Location

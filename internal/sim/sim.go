@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/playwjj/flarehound/internal/block"
 	"github.com/playwjj/flarehound/internal/cfapi"
 	"github.com/playwjj/flarehound/internal/geoip"
 	"github.com/playwjj/flarehound/internal/suggest"
@@ -83,6 +84,21 @@ type Input struct {
 	RuleNames map[string]string
 	// Loc forms the per-day split (default UTC).
 	Loc *time.Location
+
+	// Phase 2 context (all optional; without it the report says what it
+	// could not take into account).
+	// Lists expands $list references (AccountID required).
+	Lists     ListAPI
+	AccountID string
+	// Position: Ahead are the rules that will sit ahead of the draft when
+	// the caller knows them (AheadKnown; the block review). Otherwise
+	// Rules (the zone's custom rules) or RulesAPI (to read them) place
+	// the draft like a new FlareHound rule, or before rule Before (1-based).
+	Ahead      []cfapi.Rule
+	AheadKnown bool
+	Rules      []cfapi.Rule
+	RulesAPI   RulesAPI
+	Before     int
 }
 
 // Branch is one exemption of the expression and what it lets through.
@@ -137,6 +153,7 @@ const (
 	WarnBlockAll = "block_all" // block: humans who would pass a challenge are blocked too
 	WarnChalRate = "chal_rate" // challenge: pass-rate estimate not available yet (phase 2)
 	WarnInfix    = "infix"     // infix starts_with/ends_with: not valid in Cloudflare
+	WarnSkipped  = "skipped"   // skip rules ahead take a large share of the matches
 )
 
 // Report is a simulation's result. It is stored with a block as its
@@ -188,6 +205,18 @@ type Report struct {
 	Bots      int64      `json:"bots"`
 	BotsKnown bool       `json:"bots_known"`
 	Known     []KnownHit `json:"known,omitempty"`
+
+	// Phase 2.
+	Lists          []ListUse `json:"lists,omitempty"`
+	Position       int       `json:"position,omitempty"` // 1-based, among the custom rules
+	PositionKnown  bool      `json:"position_known,omitempty"`
+	PositionChosen bool      `json:"position_chosen,omitempty"` // Before was given
+	PositionWhy    string    `json:"position_why,omitempty"`
+	PosBefore      string    `json:"pos_before,omitempty"` // the rule right after it
+	Skips          []SkipRow `json:"skips,omitempty"`      // skip rules ahead that let matches through
+	SkippedAhead   int64     `json:"skipped_ahead,omitempty"`
+	NetUpper       bool      `json:"net_upper,omitempty"` // a non-logging skip ahead could not be counted
+	Chal           Challenge `json:"chal"`
 
 	DashRatio float64  `json:"dash_ratio,omitempty"`
 	Warnings  []Warn   `json:"warnings,omitempty"`
@@ -241,8 +270,9 @@ func (r *Report) DynShare() float64 {
 	return float64(r.MatchedDynamic) / float64(r.Dynamic)
 }
 
-// Upper is true when the numbers are upper bounds.
-func (r *Report) Upper() bool { return r.Confidence == UpperBound }
+// Upper is true when every count is an upper bound (a widened
+// sub-expression). Net new alone can be one too: NetMark.
+func (r *Report) Upper() bool { return len(r.Widened) > 0 }
 
 // Window computes the default window: the last `days` days ending an
 // hour before now, on the hour (so repeated runs share a cache entry).
@@ -414,7 +444,9 @@ func Run(ctx context.Context, api API, in Input) (*Report, error) {
 		caps = cfapi.AllCaps()
 		r.Errors = append(r.Errors, "capabilities: "+err.Error())
 	}
-	c := translate(n, caps)
+	lists, uses := resolveLists(ctx, n, in.Lists, in.AccountID)
+	r.Lists = uses
+	c := translate(n, caps, lists)
 	if hasInfix(n) {
 		r.Warnings = append(r.Warnings, Warn{Code: WarnInfix})
 	}
@@ -427,6 +459,8 @@ func Run(ctx context.Context, api API, in Input) (*Report, error) {
 	r.Evaluable = true
 	r.Widened = c.approx
 	r.ASNBound = c.asn
+	position(ctx, &in, r)
+	labels := ruleLabels(in)
 
 	// Cleaning: the same "real requests" as the reports; on Worker zones
 	// the empty-UA bookkeeping entries are left out everywhere.
@@ -459,7 +493,7 @@ func Run(ctx context.Context, api API, in Input) (*Report, error) {
 	var coreG gnode
 	botExempt := false
 	if core != nil {
-		cc := translate(core, caps)
+		cc := translate(core, caps, lists)
 		if cc.httpOK {
 			r.HasCore = true
 			coreG = cc.http
@@ -471,7 +505,7 @@ func Run(ctx context.Context, api API, in Input) (*Report, error) {
 				if i >= maxBranches {
 					break
 				}
-				ce := translate(e, caps)
+				ce := translate(e, caps, lists)
 				if !ce.httpOK {
 					continue
 				}
@@ -562,6 +596,46 @@ func Run(ctx context.Context, api API, in Input) (*Report, error) {
 			x.do("matched_net", func() (err error) { r.NetBase, err = api.Count(ctx, x.zone, fwFrom, to, httpF(full)); return })
 		}
 	}
+	// Skip rules ahead: logged skips come with the firewall events above;
+	// one that logs nothing is counted from its own expression.
+	skipPos := skipsAhead(in.Ahead)
+	type skipJob struct {
+		idx int
+		g   gnode
+	}
+	var skipJobs []skipJob
+	if r.NetWhy == "" {
+		for i, ar := range in.Ahead {
+			if !block.SkipsRest(ar) || ar.Logging == nil || ar.Logging.Enabled {
+				continue
+			}
+			row := SkipRow{Pos: i + 1, Label: block.RuleLabel(ar), NoLog: true}
+			sn, err := waf.Parse(ar.Expression)
+			var sc compiled
+			if err == nil {
+				sc = translate(sn, caps, lists)
+			}
+			if err != nil || !sc.httpOK || len(sc.approx) > 0 || len(r.Skips) >= maxBranches {
+				row.Unknown = true
+				r.Skips = append(r.Skips, row)
+				r.NetUpper = true
+				continue
+			}
+			r.Skips = append(r.Skips, row)
+			idx := len(r.Skips) - 1
+			g := and(full, sc.http)
+			skipJobs = append(skipJobs, skipJob{idx: idx, g: g})
+		}
+		for _, j := range skipJobs {
+			x.do("skip_nolog", func() error {
+				n, err := api.Count(ctx, x.zone, fwFrom, to, httpF(j.g))
+				x.mu.Lock()
+				r.Skips[j.idx].Count = n
+				x.mu.Unlock()
+				return err
+			})
+		}
+	}
 	x.wait()
 	r.Queries = x.used
 
@@ -592,17 +666,31 @@ func Run(ctx context.Context, api API, in Input) (*Report, error) {
 			base = r.NetBase
 		}
 		byRule := map[string]int64{}
+		skipped := map[string]int64{}
 		for _, f := range fw {
 			action, rule, _ := strings.Cut(f.Name, " ")
+			r.Chal.add(action, f.Count)
+			if strings.EqualFold(action, "skip") && skipPos[rule] > 0 {
+				skipped[rule] += f.Count
+				continue
+			}
 			if !Mitigating(action) {
 				continue
 			}
 			r.Handled += f.Count
 			label := rule
-			if nm := in.RuleNames[rule]; nm != "" {
+			if nm := labels[rule]; nm != "" {
 				label = nm
 			}
 			byRule[action+" "+label] += f.Count
+		}
+		for id, n := range skipped {
+			pos := skipPos[id]
+			r.Skips = append(r.Skips, SkipRow{Pos: pos, Label: block.RuleLabel(in.Ahead[pos-1]), Count: n})
+		}
+		sort.Slice(r.Skips, func(i, j int) bool { return r.Skips[i].Pos < r.Skips[j].Pos })
+		for _, s := range r.Skips {
+			r.SkippedAhead += s.Count
 		}
 		for k, v := range byRule {
 			r.HandledBy = append(r.HandledBy, cfapi.Face{Name: k, Count: v})
@@ -611,7 +699,7 @@ func Run(ctx context.Context, api API, in Input) (*Report, error) {
 		if len(r.HandledBy) > topN {
 			r.HandledBy = r.HandledBy[:topN]
 		}
-		r.Net = base - r.Handled
+		r.Net = base - r.Handled - r.SkippedAhead
 		if r.Net < 0 {
 			r.Net = 0
 		}
@@ -622,7 +710,7 @@ func Run(ctx context.Context, api API, in Input) (*Report, error) {
 
 	// Confidence.
 	switch {
-	case len(r.Widened) > 0:
+	case len(r.Widened) > 0, r.NetKnown && r.NetUpper:
 		r.Confidence = UpperBound
 	case r.NetKnown:
 		r.Confidence = ApproxJoined
@@ -787,6 +875,9 @@ func judge(r *Report) {
 	} else if r.Gross > 0 && !r.NetKnown && float64(r.Matched) < gapRatio*float64(r.Gross) {
 		add(Warn{Code: WarnGap, N: r.Exempted, Share: share(r.Exempted, r.Gross)})
 	}
+	if r.NetKnown && r.Matched > 0 && share(r.SkippedAhead, r.Matched) >= 0.1 {
+		add(Warn{Code: WarnSkipped, N: r.SkippedAhead, Share: share(r.SkippedAhead, r.Matched)})
+	}
 	if r.Action == "challenge" || r.Action == "managed_challenge" {
 		add(Warn{Code: WarnChalRate})
 	} else {
@@ -803,4 +894,23 @@ func judge(r *Report) {
 			}
 		}
 	}
+}
+
+// ruleLabels names the zone's rules by ID ("#3 «Protected pages»
+// (managed_challenge)"), from the ruleset when known, then rule_names.
+func ruleLabels(in Input) map[string]string {
+	out := map[string]string{}
+	for k, v := range in.RuleNames {
+		out[k] = v
+	}
+	rules := in.Rules
+	if rules == nil {
+		rules = in.Ahead
+	}
+	for i, x := range rules {
+		if x.ID != "" {
+			out[x.ID] = fmt.Sprintf("#%d %s", i+1, block.RuleLabel(x))
+		}
+	}
+	return out
 }

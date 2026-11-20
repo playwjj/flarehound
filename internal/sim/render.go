@@ -59,12 +59,37 @@ func (r *Report) Num(v int64, lang string) string {
 	return s
 }
 
-// ApproxNum renders an estimate ("≈ 35,800", "≤ 35,800").
-func (r *Report) ApproxNum(v int64) string {
-	if r.Upper() {
-		return "≤ " + N(v)
+// NetMark is the net new's sign: "≤" for an upper bound, "≈" otherwise.
+func (r *Report) NetMark() string {
+	if r.Upper() || r.NetUpper {
+		return "≤"
 	}
-	return "≈ " + N(v)
+	return "≈"
+}
+
+// NetHead is the net-new figure to lead with: the window's total when the
+// firewall events cover the whole window, else the per-day rate
+// extrapolated from the part they cover (the covered part's own count is
+// a footnote: NetFoot).
+func (r *Report) NetHead(lang string) string {
+	if r.NetFrom.IsZero() {
+		return r.NetMark() + " " + N(r.Net)
+	}
+	return fmt.Sprintf(t(lang, "%s %s a day (extrapolated from the covered part)", "%s %s 次/日（按覆盖段外推）"), r.NetMark(), N(int64(r.NetPerDay())))
+}
+
+// NetFoot is the covered part's own count when the firewall events do not
+// reach back over the whole window ("" otherwise).
+func (r *Report) NetFoot(lang string, loc *time.Location) string {
+	if r.NetFrom.IsZero() {
+		return ""
+	}
+	if loc == nil {
+		loc = time.UTC
+	}
+	return fmt.Sprintf(t(lang, "firewall events reach back only to %s: over %s → %s the net new is %s %s; the daily figure is that, extrapolated",
+		"防火墙事件只覆盖到 %s：%s → %s 这一段的净新增为 %s %s；日值据此外推"),
+		r.NetFrom.In(loc).Format("01-02 15:04"), r.NetFrom.In(loc).Format("01-02 15:04"), r.To.In(loc).Format("01-02 15:04"), r.NetMark(), N(r.Net))
 }
 
 // LabelText is the confidence label.
@@ -92,7 +117,7 @@ func ReasonText(it Item, lang string) string {
 	case whyFunction:
 		return t(lang, "functions other than starts_with/ends_with cannot be translated", "除 starts_with/ends_with 外的函数无法翻译")
 	case whyList:
-		return t(lang, "$list references are not expanded yet (phase 2)", "暂不展开 $list 引用（二期）")
+		return t(lang, "$list references cannot be expanded here (no access to the account's lists)", "此处无法展开 $list 引用（读不到账号列表）")
 	case whyCIDR:
 		return t(lang, "IP ranges (CIDR) cannot be filtered in analytics; list single addresses", "分析数据无法按网段（CIDR）过滤；请列出单个地址")
 	case whyPlan:
@@ -112,6 +137,19 @@ func ReasonText(it Item, lang string) string {
 			"referer 只能按 host 评估：按来自 %s 的全部 referer 计（上界）"), it.Dim)
 	case whyValue:
 		return t(lang, "the value is not valid for this field", "取值与字段类型不符")
+	case whyListManaged:
+		return t(lang, "Cloudflare's managed lists ($cf.…) cannot be read", "Cloudflare 托管列表（$cf.…）的内容无法读取")
+	case whyListAccess:
+		return t(lang, "the account's lists could not be read (no account ID, or the token lacks Account → Account Filter Lists: Read)",
+			"读不到账号的列表（未配置 account_id，或令牌缺少 Account → Account Filter Lists: Read）")
+	case whyListMissing:
+		return fmt.Sprintf(t(lang, "there is no list named %s in the account", "账号中没有名为 %s 的列表"), it.Dim)
+	case whyListKind:
+		return t(lang, "only IP and ASN lists are expanded (hostname and redirect lists are not)", "只展开 IP 与 ASN 列表（不展开 hostname、redirect 列表）")
+	case whyListBig:
+		return fmt.Sprintf(t(lang, "the list holds more than %d items", "列表超过 %d 项"), MaxListValues)
+	case whyListRange:
+		return t(lang, "the list holds IP ranges (CIDR), which cannot be filtered in analytics", "列表含网段（CIDR），分析数据无法按网段过滤")
 	case whyBareField:
 		return t(lang, "a bare field is only meaningful for booleans", "裸字段只对布尔字段有意义")
 	}
@@ -153,10 +191,19 @@ func (r *Report) WarnText(w Warn, lang string) string {
 	case WarnGap:
 		return fmt.Sprintf(t(lang, "%s of what looked blockable is exempted by the rule itself or already stopped by existing rules", "看起来可拦的量中有 %s 被规则自身豁免或已被现有规则处理"), Pct(w.Share))
 	case WarnBlockAll:
-		return t(lang, "block: people who would pass a challenge are blocked too — if real browsers may be among the matches, challenge first and watch",
+		s := t(lang, "block: people who would pass a challenge are blocked too — if real browsers may be among the matches, challenge first and watch",
 			"封锁：能通过挑战的真人浏览器也会被全拦——若命中里可能有真人，先用挑战观察")
+		if r.Chal.Known() {
+			lo, hi := r.Chal.Range()
+			s += fmt.Sprintf(t(lang, " (of the challenges these requests already met, roughly %s–%s got through — a block stops those too)",
+				"（这批请求已遇到的挑战中约 %s–%s 能过——封锁会把这些也拦下）"), Pct(lo), Pct(hi))
+		}
+		return s
 	case WarnChalRate:
-		return t(lang, "challenge: an estimate of the pass rate is not available yet (phase 2)", "挑战：挑战通过率估计暂不提供（二期）")
+		return t(lang, "challenge: ", "挑战：") + r.ChallengeText(lang)
+	case WarnSkipped:
+		return fmt.Sprintf(t(lang, "skip rules ahead of it let %s of its matches through first (%s) — the rule never sees them",
+			"排在它前面的 skip 规则先放行了 %s 次命中（%s）——这条规则看不到它们"), N(w.N), Pct(w.Share))
 	case WarnInfix:
 		return t(lang, "infix starts_with/ends_with is accepted here, but Cloudflare's rules language writes it as starts_with(field, \"…\")",
 			"此处接受中缀 starts_with/ends_with，但 Cloudflare 规则语言要写成 starts_with(字段, \"…\")")
@@ -202,7 +249,12 @@ func (r *Report) VerdictText(lang string) string {
 		fmt.Fprintf(&b, t(lang, "Matches %s", "命中 %s"), r.Bound(r.Matched))
 	}
 	if r.NetKnown {
-		fmt.Fprintf(&b, t(lang, ", net new %s (%s of all traffic)", "，净新增可拦 %s（占总量 %s）"), r.ApproxNum(r.Net), Pct(r.NetShare()))
+		if r.NetFrom.IsZero() {
+			fmt.Fprintf(&b, t(lang, ", net new %s (%s of all traffic)", "，净新增可拦 %s（占总量 %s）"), r.NetHead(lang), Pct(r.NetShare()))
+		} else {
+			fmt.Fprintf(&b, t(lang, ", net new %s %s a day (extrapolated from the part the firewall events cover; %s of all traffic)",
+				"，净新增可拦 %s %s 次/日（按防火墙事件覆盖段外推，占总量 %s）"), r.NetMark(), N(int64(r.NetPerDay())), Pct(r.NetShare()))
+		}
 	} else {
 		fmt.Fprintf(&b, t(lang, ", rule matches %s (%s of all traffic); net new not available", "，规则命中 %s（占总量 %s）；净新增不可用"), r.Bound(r.Matched), Pct(r.Share(r.Matched)))
 	}
@@ -269,6 +321,9 @@ func (r *Report) Text(lang string, loc *time.Location) string {
 	for _, it := range r.Widened {
 		p(t(lang, "  ≤ %s\n      %s\n", "  ≤ %s\n      %s\n"), it.Expr, ReasonText(it, lang))
 	}
+	for _, l := range r.Lists {
+		p(t(lang, "  $%s expanded: %s list, %d item(s)\n", "  已展开 $%s：%s 列表，%d 项\n"), l.Name, l.Kind, l.Items)
+	}
 
 	b.WriteString(t(lang, "\n1. Gross matches\n", "\n1. 毛命中\n"))
 	if r.HasCore {
@@ -310,17 +365,37 @@ func (r *Report) Text(lang string, loc *time.Location) string {
 
 	b.WriteString(t(lang, "\n3. Net new (the number that counts)\n", "\n3. 净新增（核心数字）\n"))
 	if r.NetKnown {
-		cover := ""
-		if !r.NetFrom.IsZero() {
-			cover = fmt.Sprintf(t(lang, " — firewall events reach back only to %s; net new covers that part", "——防火墙事件只覆盖到 %s 之后，净新增按这一段计"), r.NetFrom.In(loc).Format("01-02 15:04"))
+		if r.NetFrom.IsZero() {
+			p(t(lang, "   %s, %s of all traffic (~%s a day)\n", "   %s，占总量 %s（约 %s 次/日）\n"), r.NetHead(lang), Pct(r.NetShare()), N(int64(r.NetPerDay())))
+		} else {
+			p(t(lang, "   %s, %s of all traffic\n", "   %s，占总量 %s\n"), r.NetHead(lang), Pct(r.NetShare()))
+			p(t(lang, "   (%s)\n", "   （%s）\n"), r.NetFoot(lang, loc))
 		}
-		p(t(lang, "   %s, %s of all traffic (~%s a day)%s\n", "   %s，占总量 %s（约 %s 次/日）%s\n"), r.ApproxNum(r.Net), Pct(r.NetShare()), N(int64(r.NetPerDay())), cover)
 		p(t(lang, "   already stopped by existing rules: %s\n", "   已被现有规则处理：%s\n"), N(r.Handled))
 		for _, h := range r.HandledBy {
-			p("     %-40s %s\n", h.Name, N(h.Count))
+			p("     %-48s %s\n", clip(h.Name, 48), N(h.Count))
 		}
-		b.WriteString(t(lang, "   estimate: matches come from the HTTP requests dataset, \"already stopped\" from the firewall events — two datasets, sampled differently; counted against the whole rule set, not this rule's position (phase 2)\n",
-			"   估计值：命中来自 HTTP 请求数据集，已处理量来自防火墙事件数据集——两套数据采样口径不同；按全规则集口径估计，未计规则插入位置（二期）\n"))
+		if line := r.PositionText(lang); line != "" {
+			p("   %s\n", line)
+		}
+		for _, s := range r.Skips {
+			switch {
+			case s.Unknown:
+				p(t(lang, "     #%d %s: logs nothing and cannot be translated — not counted; net new is an upper bound\n",
+					"     #%d %s：不记录日志且无法翻译——未计入；净新增为上界\n"), s.Pos, s.Label)
+			case s.NoLog:
+				p(t(lang, "     #%d %s: %s (logs nothing: counted from its expression)\n", "     #%d %s：%s（不记录日志：按其表达式计）\n"), s.Pos, s.Label, N(s.Count))
+			default:
+				p("     #%d %s: %s\n", s.Pos, s.Label, N(s.Count))
+			}
+		}
+		if r.PositionKnown {
+			b.WriteString(t(lang, "   estimate: matches come from the HTTP requests dataset, \"already stopped\" and \"skipped ahead\" from the firewall events — two datasets, sampled differently\n",
+				"   估计值：命中来自 HTTP 请求数据集，已处理与前置跳过来自防火墙事件数据集——两套数据采样口径不同\n"))
+		} else {
+			b.WriteString(t(lang, "   estimate: matches come from the HTTP requests dataset, \"already stopped\" from the firewall events — two datasets, sampled differently; counted against the whole rule set, not this rule's position\n",
+				"   估计值：命中来自 HTTP 请求数据集，已处理量来自防火墙事件数据集——两套数据采样口径不同；按全规则集口径估计，未计规则插入位置\n"))
+		}
 	} else {
 		p("   %s\n", NetWhyText(r.NetWhy, lang))
 	}
@@ -400,4 +475,45 @@ func clip(s string, n int) string {
 		return s
 	}
 	return string(r[:n-1]) + "…"
+}
+
+// PositionText says where the draft would sit and what the skip rules
+// ahead of it take ("" when the position was not considered and there is
+// nothing to say).
+func (r *Report) PositionText(lang string) string {
+	if !r.PositionKnown {
+		switch r.PositionWhy {
+		case "rules_unreadable":
+			return t(lang, "position not considered: the custom rules could not be read (read token needs Zone → WAF: Read)",
+				"未计规则位置：读不到自定义规则（读令牌需要 Zone → WAF: Read）")
+		case "no_rules":
+			return t(lang, "position not considered", "未计规则位置")
+		}
+		return ""
+	}
+	how := t(lang, "where a new FlareHound rule goes: after the skip rules, ahead of the first challenge/block rule", "按 FlareHound 新规则的默认位置：skip 规则之后、第一条挑战/封锁规则之前")
+	if r.PositionChosen {
+		how = t(lang, "as chosen", "按指定位置")
+	}
+	s := fmt.Sprintf(t(lang, "position #%d (%s)", "位置 #%d（%s）"), r.Position, how)
+	if r.PosBefore != "" {
+		s += fmt.Sprintf(t(lang, ", before %s", "，排在 %s 之前"), r.PosBefore)
+	}
+	if len(r.Skips) == 0 {
+		return s + t(lang, "; no skip rule ahead lets these matches through", "；前面没有放行这些命中的 skip 规则")
+	}
+	return s + fmt.Sprintf(t(lang, "; skip rules ahead let %s of the matches through first:", "；前面的 skip 规则先放行了 %s 次命中："), N(r.SkippedAhead))
+}
+
+// ChallengeText is the slice's challenge history as a reference range.
+func (r *Report) ChallengeText(lang string) string {
+	c := r.Chal
+	if !c.Known() {
+		return t(lang, "no challenge history for these requests in the firewall events — no pass rate to go by",
+			"防火墙事件里这批请求没有挑战记录——没有通过率可参考")
+	}
+	lo, hi := c.Range()
+	return fmt.Sprintf(t(lang, "challenges already met by these requests: %s issued, %s solved, %s passed with an earlier clearance, %s failed — roughly %s–%s got through (reference only: the firewall events hold only requests that met a challenge)",
+		"这批请求已遇到的挑战：发出 %s、通过 %s、凭已有许可放行 %s、失败 %s——约 %s–%s 能过（仅作参考：防火墙事件只含遇到过挑战的请求，是有偏样本）"),
+		N(c.Issued), N(c.Solved), N(c.Bypassed), N(c.Failed), Pct(lo), Pct(hi))
 }

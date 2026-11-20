@@ -160,7 +160,7 @@ func Warnings(t Target, a Action, network string, share float64, shareKnown bool
 			}
 		}
 	case Country:
-		w = append(w, "a whole-country rule has the widest blast radius of all; every real visitor from that country is affected (per-country traffic is not measurable from adaptive analytics, so FlareHound cannot show the human share)")
+		w = append(w, "a whole-country rule has the widest blast radius of all; every real visitor from that country is affected (the review's simulation can show how much traffic that is, not how much of it is human)")
 	case UA:
 		w = append(w, "user agents are trivially forged and crawlers rotate them (three batches in one day in the field); this only holds against bots with a stable fingerprint")
 	}

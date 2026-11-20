@@ -109,6 +109,9 @@ func TestBlockReviewSimulates(t *testing.T) {
 	if !strings.Contains(body, "Simulated (last 7 days)") || !strings.Contains(body, "net new ≈ 14,000") {
 		t.Fatalf("review lacks the simulation:\n%s", body)
 	}
+	if !strings.Contains(body, "position #") {
+		t.Fatalf("review simulation does not say where the rule sits:\n%s", body)
+	}
 	if strings.Contains(body, ">Measured<") {
 		t.Fatal("the single-target measurement is still shown next to the simulation")
 	}

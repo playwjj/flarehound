@@ -13,8 +13,9 @@ Create both at *Cloudflare Dashboard → My Profile → API Tokens → Create To
 |---|---|---|
 | Zone → **Analytics: Read** | Everything the watchdog measures (GraphQL Analytics, including the capability probe) | **Yes — the minimum** |
 | Account → **Account Analytics: Read** | Worker invocations and CPU P50 (`workersInvocationsAdaptive` is an account-level dataset) | Only when a zone lists `workers` |
-| Zone → **WAF: Read** | WAF audit: reading custom rules; rule names in reports; the per-round ruleset version check (on some accounts also IP Access Rules); the console's **WAF rules** page (custom and rate-limit rules) | For the [WAF audit](audit.md) and the console rules page |
+| Zone → **WAF: Read** | WAF audit: reading custom rules; rule names in reports; the per-round ruleset version check (on some accounts also IP Access Rules); the console's **WAF rules** page (custom and rate-limit rules); the [rule simulator](simulator.md)'s rule position (skip rules ahead of the draft) | For the [WAF audit](audit.md), the console rules page and the simulator's position |
 | Zone → **Zone: Read** | The plan, for the audit's quota check | Optional |
+| Account → **Account Filter Lists: Read** | The [rule simulator](simulator.md) expanding `$list` references (needs `cloudflare.account_id`) | Optional |
 
 The read-token minimum was derived from the code's call sites: the watchdog's measurements are GraphQL Analytics queries only (`api.cloudflare.com/client/v4/graphql`). The one exception is the WAF audit: when it is enabled and the token has Zone → WAF: Read, each hourly round also reads the custom-rules ruleset version over REST (without that permission the call fails quietly and the audit reports "not available"). Older versions of the README also asked for Logs, Zone and Workers Scripts read access, which no code path uses. To check your own token, create one with only Zone → Analytics: Read and run `flarehound -once -dry-run`.
 

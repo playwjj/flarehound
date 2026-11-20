@@ -23,13 +23,23 @@ type simForm struct {
 	Expr   string
 	Action string // block | challenge
 	Days   int    // 7 or 1
+	Before int    // insert before custom rule #N (0: where a FlareHound rule goes)
 }
 
 // simInput builds a simulation with the zone's cleaning, calibration and
 // known sources (the same as the block review's).
 func (s *Server) simInput(z config.Zone, f simForm) sim.Input {
 	env := &blockcli.Env{Cfg: s.Cfg, Zone: z, Store: s.Store, Now: s.Now, SimCfg: s.eff()}
-	return env.SimInput(f.Expr, f.Action, f.Days)
+	// The read token's REST client reads the rules (position) and lists.
+	if ra, ok := s.RulesRead.(sim.RulesAPI); ok {
+		env.SimRules = ra
+	}
+	if la, ok := s.RulesRead.(sim.ListAPI); ok {
+		env.SimLists = la
+	}
+	in := env.SimInput(f.Expr, f.Action, f.Days)
+	in.Before = f.Before
+	return in
 }
 
 func (s *Server) simulatePage(w http.ResponseWriter, r *http.Request) {
@@ -41,6 +51,9 @@ func (s *Server) simulatePage(w http.ResponseWriter, r *http.Request) {
 	}
 	if q.Get("days") == "1" {
 		f.Days = 1
+	}
+	if n, err := strconv.Atoi(strings.TrimPrefix(strings.TrimSpace(q.Get("before")), "#")); err == nil && n > 0 && n < 1000 {
+		f.Before = n
 	}
 	p := page{Title: s.L(r).t("sim_title"), Zone: z, Nav: "simulate", SimForm: &f}
 	api, ok := s.Analytics.(sim.API)

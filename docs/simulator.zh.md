@@ -14,6 +14,7 @@
 flarehound simulate --zone starngage.com --expr '(ip.geoip.asnum eq 30633 and not cf.client.bot)' --action challenge
 flarehound simulate --expr 'http.user_agent contains "python-requests"' --days 1
 flarehound simulate --expr '…' --date 2026-11-17      # 指定某一天（本地时区）
+flarehound simulate --expr '…' --before 3             # 假设插在第 3 条自定义规则之前
 flarehound simulate --expr '…' --json                 # 以 JSON 输出报告
 ```
 
@@ -27,13 +28,13 @@ flarehound simulate --expr '…' --json                 # 以 JSON 输出报告
 
 1. **毛命中**——不计表达式自身 `and not …` 分支时的命中量，以及计入后的量（规则命中）；占总量与占 dynamic（回源）的百分比；按天拆分。
 2. **豁免拆分**——毛命中减规则命中：「以为要拦的」与「规则实际会拦的」差多少。每个顶层 `and not …` 分支单独计数。
-3. **净新增**——核心数字：规则命中减去已被现有规则拦截或挑战的部分（用同一表达式过滤防火墙事件；只计 block、challenge、JS challenge、managed challenge 的发出，不计其结果，避免重复计数）。按全规则集口径，不考虑本规则将来的插入位置。
+3. **净新增**——核心数字：规则命中减去已被现有规则拦截或挑战的部分（用同一表达式过滤防火墙事件；只计 block、challenge、JS challenge、managed challenge 的发出，不计其结果，避免重复计数），再减去**排在它前面的 skip 规则**先放行的部分（见[规则位置](#position)）。防火墙事件不覆盖整个窗口时（例如 `--date` 指定较早的一天），行首给出*按覆盖段外推*的日值，覆盖段本身的实数降为注脚。
 4. **构成拆分**——Top 5 路径、UA、客户端 IP（带 [IP 归属地](configuration.md#geoip)）、国家；表达式未绑定 ASN 时给 Top 网络。命中中的已知来源（`known_faces`）单列。
-5. **动作差异**——`block`：能通过挑战的真人也会被全拦。`challenge`：通过率估计暂不提供。
+5. **动作差异**——防火墙事件中这批请求的**挑战记录**：发出、通过、凭已有许可放行、失败的次数，以及能过的参考区间（下限 通过÷发出，上限 (通过+许可放行)÷(发出+许可放行)）。`challenge`：大致就是可预期的通过率。`block`：这些人封锁也会拦下。样本只含遇到过挑战的请求，是有偏样本——只作参考区间，不作精确预测；不足 30 条不给区间。
 6. **置信标签**——每份报告一个：
     - *近似（采样数据）*；
     - *近似（含数据集拼接估计）*——净新增拼接了两套数据集；
-    - *上界*——有子表达式只能放宽评估（referer，见下）；所有数字带 `≤`，并点名该子表达式。
+    - *上界*——有子表达式只能放宽评估（referer，见下）：所有数字带 `≤`，并点名该子表达式；或前面某条 skip 规则无法计量（见[规则位置](#position)）：净新增带 `≤`。
 7. **裁决行**——一句话结论，沿用护栏口径：无命中；命中中有住宅网络；波及已知来源；已验证机器人占命中 ≥ 20%；净新增 < 总量 1%；净新增远低于毛命中。例如：*毛命中 147,300，其中豁免 111,493（已验证机器人 111,493），净新增可拦 ≈ 35,800（占总量 0.2%）——建议降级为挑战或不处理。*
 
 数字采用 FlareHound 的口径，与日报同样清洗（配置了 Workers 的 zone，空 UA 条目——Worker 内部记账——一律不计，并单列一行）；[校准](archive.md#calibration)后，计数旁同时显示面板口径的近似值。
@@ -46,13 +47,23 @@ Cloudflare **没有回放 API**。GraphQL 分析数据是采样聚合的数据�
 |---|---|---|
 | 精确（采样） | `ip.src`（单个地址）、`ip.geoip.asnum` / `ip.src.asnum`、`ip.geoip.country` / `ip.src.country`、`http.user_agent`、`http.request.uri.path`、`http.request.uri.query`、`http.host`、`http.request.method`、`cf.client.bot`、`cf.verified_bot_category`，算子 `eq` `ne` `in` `contains` `starts_with()` `ends_with()`，以 `and` `or` `xor` `not` 与括号组合 | 否定下推到每个比较 |
 | 上界 | `http.referer`——只有 referer 的 **host** 是维度（付费套餐）。`eq "https://site/"` 按来自 `site` 的全部 referer 计。处于否定之下时不允许（既不是精确值也不是上界）。`http.referer eq ""`（无 referer）是精确的 | 标签「上界」，点名子表达式 |
-| 不可评估 | header、cookie、请求体、`matches`（正则）、`wildcard`、`cf.threat_score` / bot score、速率、`lower()` 等函数、`$list` 引用、网段（CIDR） | 点名并说明原因——**完全不给数**，绝不静默丢弃条件 |
+| 展开 | 引用账号 **IP 与 ASN 列表**的 `$list`（`ip.src in $bad_ips`、`ip.geoip.asnum in $clouds`）：经 Lists API 读出并替换为字面值 | 报告列出每个展开的列表及其大小 |
+| 不可评估 | header、cookie、请求体、`matches`（正则）、`wildcard`、`cf.threat_score` / bot score、速率、`lower()` 等函数、网段（CIDR）；无法展开的列表——Cloudflare 托管列表（`$cf.…`）、含网段的列表、hostname / redirect 列表、超过 1,000 项的列表，以及令牌读不到的列表（未配置 `account_id`，或缺少 Account → Account Filter Lists: Read，如租户账号） | 点名并说明原因——**完全不给数**，绝不静默丢弃条件 |
 
 每个字段都会对照该区套餐实际提供的维度检查（`flarehound doctor` 每区有一行 *rule simulator*）。**Free** 套餐没有 ASN 维度，也没有防火墙事件数据集：ASN 表达式在该区*不可评估*，净新增不可用——报告如实说明，不用其他口径凑数。
 
+## 规则位置 {#position}
+
+一条规则只能看到前面的规则放过来的流量。模拟器读取该区的自定义规则（读令牌，Zone → WAF: Read），把草稿放在 FlareHound 新规则的默认位置——skip 规则之后、第一条挑战或封锁规则之前——或放在 `--before N` 指定的规则之前（控制台：*插在第几条自定义规则之前*）。封锁确认页使用方案本身的位置。
+
+- **前面的 skip 规则**（跳过其余自定义规则的那种）先拿走它们的份额。Cloudflare 按规则记录这些跳过，所以随防火墙事件那次查询一起得到，不额外花查询：「位置 #4，排在 «Protected Pages»（managed_challenge）之前；前面的 skip 规则先放行了 900 次命中」。
+- **关闭了日志**的 skip 规则不留事件：按其自身表达式计（每条一次查询，最多三条）。表达式无法翻译时点名该规则，**净新增变为上界**。
+- 前面的封锁或挑战规则已计入「已处理」；排在后面的同样计入——那部分流量无论如何都会被拦，不算新增。
+- 读不到规则时（缺 Zone → WAF: Read），净新增按全规则集口径估计，报告会注明。
+
 ## 预算与缓存 {#budget-and-cache}
 
-每次模拟最多 **24 次 GraphQL 查询**（通常 15–19 次），最多 4 个并发。**10 分钟**内的同一模拟走缓存（控制台；确认页与执行共用）。
+每次模拟最多 **24 次 GraphQL 查询**（通常 15–19 次），最多 4 个并发；读取规则与列表是 REST 调用，不计入该预算。**10 分钟**内的同一模拟走缓存（控制台；确认页与执行共用）。
 
 ## 封锁之后 {#after-the-block}
 
@@ -63,4 +74,4 @@ Cloudflare **没有回放 API**。GraphQL 分析数据是采样聚合的数据�
 - 不做一键应用：报告不产生封锁方案，也没有写路径。
 - 不做逐请求回放：不引入 Logpush，不落盘原始日志，采样就是精度上限。
 - 不做跨 zone 模拟：表达式与规则集都是 zone 级的。
-- 暂不支持：规则位置（前面的 skip 规则放行、前面的 block 先拿走）、挑战通过率、`$list` 展开。
+- 暂不支持：hostname 列表、混合表达式的部分求值（可评估部分给数、其余点名）、预测与实际偏差作为日报固定行。

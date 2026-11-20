@@ -31,7 +31,7 @@ Rule quotas also differ by plan (custom rules Free 5 / Pro 20 / Business 100 / E
 - **Hard thresholds.** Slow growth (+5% a day) and attacks kept just under the line stay invisible; a legitimate surge (a launch, a viral post) looks the same as an attack in the numbers.
 - **Baseline problems.** If yesterday itself was abnormal, the comparison is distorted. The 4-week median baseline (once the archive has enough samples) reduces this, but a long-lasting anomaly can still become the new normal.
 - **No semantics.** Rules cannot know whether a new ASN is a crawler fleet or your own new service. Register known sources under `known_faces`.
-- **Per-country and per-range shares** are not measured when blocking; FlareHound says so in the plan.
+- **Per-range shares** are not measured when blocking (ranges cannot be filtered in analytics); FlareHound says so in the plan. Country blocks are measured by the review's [simulation](simulator.md) — how much traffic, never how much of it is human.
 - **IP location is a library's reading, not a fact.** It is the registered/routed country of an address — a residential proxy shows its exit, a data-centre address its data centre — and libraries disagree at the edges (DB-IP lite places Google's IPv6 resolver `2001:4860:4860::8888` in CA, GeoLite2 in US). There is deliberately no per-country traffic view built from it: countries inferred from the top IPs would be a heavily biased sample.
 - No AI in the detection path: findings are deterministic and reproducible from the same data.
 
@@ -42,7 +42,9 @@ See [Rule simulator](simulator.md). Its limits, before its features:
 - **Sampled approximation, not a replay.** There is no replay API; the expression is translated into filters over sampled, aggregated analytics. Sampling is the precision limit — there is no Logpush and no per-request log behind it.
 - **The referer only to its host** (paid plans). A comparison on the full referer ("exactly the home page") is widened to its host: the report is labelled *upper bound* and names the sub-expression. Under a negation it is not evaluable.
 - **Free zones** have no ASN dimension and no firewall events: ASN expressions are not evaluable there, and net new is not available. The report says so; it does not fill the gap from another source.
-- **Net new is a joined estimate.** Matches come from the HTTP requests dataset, "already stopped" from the firewall events — two datasets, sampled differently. It is counted against the whole rule set, not the rule's position (a skip rule ahead of it is not considered yet).
+- **Net new is a joined estimate.** Matches come from the HTTP requests dataset, "already stopped" and "skipped ahead" from the firewall events — two datasets, sampled differently. The rule's position needs Zone → WAF: Read on the read token; without it net new is counted against the whole rule set. A skip rule ahead that logs nothing and cannot be translated makes net new an upper bound.
+- **Challenge pass rates are a biased sample.** Only requests that met a challenge are in the firewall events: the range is a reference, not a prediction.
+- **`$lists`** are expanded only for IP and ASN lists the read token can read (Account → Account Filter Lists: Read), up to 1,000 single values; managed `$cf.…` lists, lists with ranges and hostname lists are not evaluable.
 - **Not evaluable at all:** headers, cookies, bodies, regular expressions, wildcards, threat and bot scores, rates, functions other than `starts_with` / `ends_with`, `$list` references and IP ranges. Such an expression gets no numbers, only the named sub-expressions.
 
 ## Scope

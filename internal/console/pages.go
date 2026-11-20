@@ -242,7 +242,6 @@ func (s *Server) funcs(l lang) template.FuncMap {
 		"simPct":     sim.Pct,
 		"simNum":     func(r *sim.Report, v int64) string { return r.Num(v, string(l)) },
 		"simBound":   func(r *sim.Report, v int64) string { return r.Bound(v) },
-		"simApprox":  func(r *sim.Report, v int64) string { return r.ApproxNum(v) },
 		"simPerDay":  func(r *sim.Report) int64 { return int64(r.NetPerDay()) },
 		"simLink":    simLink,
 		"prediction": func(e *Effect) string { return e.PredictionLine(string(l)) },

@@ -54,7 +54,7 @@ func (e *Effect) Predict(r *sim.Report) {
 	if r == nil || !r.Evaluable || !r.NetKnown {
 		return
 	}
-	e.Predicted, e.PredictedKnown, e.PredictedUpper = r.NetPerHour(), true, r.Upper()
+	e.Predicted, e.PredictedKnown, e.PredictedUpper = r.NetPerHour(), true, r.NetMark() == "≤"
 }
 
 // PredictionLine sets the review's prediction against what happened:

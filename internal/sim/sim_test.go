@@ -18,7 +18,7 @@ func mustTranslate(t *testing.T, expr string, caps cfapi.Caps) compiled {
 	if err != nil {
 		t.Fatalf("parse %q: %v", expr, err)
 	}
-	return translate(n, caps)
+	return translate(n, caps, nil)
 }
 
 func proCaps() cfapi.Caps {

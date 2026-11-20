@@ -14,6 +14,7 @@ The simulator replays a draft expression against the last days of real traffic a
 flarehound simulate --zone starngage.com --expr '(ip.geoip.asnum eq 30633 and not cf.client.bot)' --action challenge
 flarehound simulate --expr 'http.user_agent contains "python-requests"' --days 1
 flarehound simulate --expr '…' --date 2026-11-17      # one local day
+flarehound simulate --expr '…' --before 3             # as if inserted before custom rule #3
 flarehound simulate --expr '…' --json                 # the report as JSON
 ```
 
@@ -27,13 +28,13 @@ In the console: **Simulate** tab (any signed-in account). Composition rows link 
 
 1. **Gross matches** — requests the expression matches without its own `and not …` branches, and with them (what the rule matches); share of all traffic and of dynamic (origin) traffic; split per day.
 2. **Exemptions** — gross minus matches: what "the rule would block" vs "the rule actually blocks". Each top-level `and not …` branch is counted on its own.
-3. **Net new** — the number that counts: the matches minus what existing rules already block or challenge (firewall events filtered by the same expression; block, challenge, JS challenge, managed challenge — not their outcomes, so a request is not counted twice). Counted against the whole rule set, not this rule's future position.
+3. **Net new** — the number that counts: the matches minus what existing rules already block or challenge (firewall events filtered by the same expression; block, challenge, JS challenge, managed challenge — not their outcomes, so a request is not counted twice), minus what **skip rules ahead of it** let through first (see [Position](#position)). When the firewall events do not reach back over the whole window (`--date` on an older day), the line leads with the daily rate *extrapolated from the covered part*, and the covered part's own count is a footnote.
 4. **Composition** — top 5 paths, user agents, client IPs (with [IP location](configuration.md#geoip)), countries; top networks when the expression is not bound to ASNs. Known sources (`known_faces`) among the matches are listed.
-5. **Action** — `block`: people who would pass a challenge are blocked too. `challenge`: a pass-rate estimate is not available yet.
+5. **Action** — the slice's **challenge history** from the firewall events: challenges issued, solved, passed with an earlier clearance, failed, and a reference range of how many got through (at least solved ÷ issued, at most solved + cleared ÷ issued + cleared). `challenge`: that is the pass rate to expect, roughly. `block`: those are the people a block stops too. Only requests that met a challenge are in that sample — a biased one, so a range for reference, not a prediction; under 30 events no range is given.
 6. **Confidence label** — one per report:
     - *approximate (sampled data)*;
     - *approximate (includes a cross-dataset estimate)* — net new joins two datasets;
-    - *upper bound* — a sub-expression could only be widened (the referer, see below); every number carries `≤` and the sub-expression is named.
+    - *upper bound* — a sub-expression could only be widened (the referer, see below): every number carries `≤` and the sub-expression is named; or a skip rule ahead could not be counted (see [Position](#position)): net new carries `≤`.
 7. **Verdict line** — one sentence in the guard rails' terms: nothing matched; a residential network in the matches; a known source hit; verified bots ≥ 20 % of the matches; net new < 1 % of all traffic; net new far below the gross. Example: *Gross 147,300, of which 111,493 exempted (verified bots 111,493), net new ≈ 35,800 (0.2 % of all traffic) — consider a challenge, or no action.*
 
 Numbers are in FlareHound's units, cleaned like the reports (on zones with Workers, empty-UA entries — Worker bookkeeping — are left out everywhere and counted on their own line); once [calibrated](archive.md#calibration), counts also show their dashboard equivalent.
@@ -46,13 +47,23 @@ There is **no replay API**. GraphQL analytics are sampled, aggregated datasets; 
 |---|---|---|
 | Exact (sampled) | `ip.src` (single addresses), `ip.geoip.asnum` / `ip.src.asnum`, `ip.geoip.country` / `ip.src.country`, `http.user_agent`, `http.request.uri.path`, `http.request.uri.query`, `http.host`, `http.request.method`, `cf.client.bot`, `cf.verified_bot_category` with `eq` `ne` `in` `contains` `starts_with()` `ends_with()`, combined with `and` `or` `xor` `not` and parentheses | Negations are pushed down to each comparison |
 | Upper bound | `http.referer` — only the referer's **host** is a dimension (paid plans). `eq "https://site/"` is counted as every referer from `site`. Not allowed under a negation (it would be neither a count nor a bound). `http.referer eq ""` (no referer) is exact | Label *upper bound*, sub-expression named |
-| Not evaluable | headers, cookies, bodies, `matches` (regex), `wildcard`, `cf.threat_score` / bot score, rates, `lower()` and other functions, `$list` references, IP ranges (CIDR) | Named with the reason — **no numbers at all**, never a silently dropped condition |
+| Expanded | `$list` references to the account's **IP and ASN lists** (`ip.src in $bad_ips`, `ip.geoip.asnum in $clouds`): read through the Lists API and replaced by their values | The report names each expanded list and its size |
+| Not evaluable | headers, cookies, bodies, `matches` (regex), `wildcard`, `cf.threat_score` / bot score, rates, `lower()` and other functions, IP ranges (CIDR); lists that cannot be expanded — Cloudflare's managed lists (`$cf.…`), lists holding ranges, hostname / redirect lists, lists over 1,000 items, and lists the token cannot read (no `account_id`, or no Account → Account Filter Lists: Read — e.g. a tenant account) | Named with the reason — **no numbers at all**, never a silently dropped condition |
 
 Every field is checked against what the zone's plan exposes (`flarehound doctor` shows a *rule simulator* row per zone). On **Free** there is no ASN dimension and no firewall-events dataset: an ASN expression is *not evaluable on this zone*, and net new is not available — the report says so instead of filling the gap from another source.
 
+## Position
+
+A rule only sees what the rules ahead of it let through. The simulator reads the zone's custom rules (read token, Zone → WAF: Read) and places the draft where a new FlareHound rule goes — after the skip rules, ahead of the first challenge or block rule — or before rule `--before N` (console: *Insert before custom rule #*). The block review uses the plan's own position.
+
+- **Skip rules ahead** that skip the remaining custom rules take their share first. Cloudflare logs those skips per rule, so they come with the firewall-events query at no extra cost: "position #4, before «Protected Pages» (managed_challenge); skip rules ahead let 900 of the matches through first".
+- A skip rule with **logging off** leaves no events: it is counted from its own expression (one query each, up to three). If that expression cannot be translated, it is named and **net new becomes an upper bound**.
+- A block or challenge rule ahead already counts as "already stopped"; so does one behind it — that traffic is stopped either way, so it is not new.
+- Without the rules (no Zone → WAF: Read) net new is counted against the whole rule set and the report says so.
+
 ## Budget and cache
 
-At most **24 GraphQL queries** per simulation (typically 15–19), four at a time. The same simulation within **10 minutes** comes from the cache (console; the review and the apply share it).
+At most **24 GraphQL queries** per simulation (typically 15–19), four at a time; reading the rules and lists are REST calls outside that budget. The same simulation within **10 minutes** comes from the cache (console; the review and the apply share it).
 
 ## After the block
 
@@ -63,4 +74,4 @@ The simulation shown at review is **kept with the block record** (archive table 
 - No one-click apply: a report produces no block plan and no write path.
 - No per-request replay, no Logpush, no raw logs on disk: sampling is the precision limit.
 - No cross-zone simulation: expressions and rule sets are per zone.
-- Not yet: the rule's position (a skip rule ahead letting traffic through, an earlier block taking it first), challenge pass rates, `$list` expansion.
+- Not yet: hostname lists, partial evaluation of mixed expressions (numbers for the evaluable part, the rest named), predicted vs actual as a fixed line in the daily report.

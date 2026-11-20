@@ -68,6 +68,29 @@ func target(rules []cfapi.Rule) (idx, lastSkip int) {
 	return idx, lastSkip
 }
 
+// DefaultIndex is where a new FlareHound rule would be inserted into
+// rules (0-based: rules[:i] are ahead of it) — after the skip rules, ahead
+// of the first challenge/block rule. The rule simulator uses it.
+func DefaultIndex(rules []cfapi.Rule) int {
+	idx, _ := target(rules)
+	return idx
+}
+
+// Ahead returns the rules that will sit ahead of rule ref at position pos
+// (1-based, as Place computes it; the rule itself left out).
+func (s State) Ahead(ref string, pos int) []cfapi.Rule {
+	var rest []cfapi.Rule
+	for _, r := range s.Ruleset.Rules {
+		if ownRef(r) != ref {
+			rest = append(rest, r)
+		}
+	}
+	if pos-1 < len(rest) && pos >= 1 {
+		rest = rest[:pos-1]
+	}
+	return rest
+}
+
 // Place computes where the rule ref goes (see the package comment).
 func (s State) Place(ref string) Placement {
 	var rest []cfapi.Rule

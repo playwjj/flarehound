@@ -61,6 +61,11 @@ type Env struct {
 	// that the console can change at run time (known faces, rule names);
 	// the console passes its configuration with the settings overlay.
 	SimCfg *config.Config
+	// SimRules / SimLists read the custom rules (the draft's position) and
+	// account lists ($list expansion) for simulations; nil: the write API
+	// when it can, else the simulation goes without them.
+	SimRules sim.RulesAPI
+	SimLists sim.ListAPI
 
 	in *bufio.Reader
 }
@@ -255,7 +260,14 @@ func (e *Env) Prepare(ctx context.Context, t block.Target, o BlockOpts) (*Prepar
 	}
 	_, p.Share, p.Measured, p.ShareKnown = e.measure(ctx, t)
 	if t.Type != block.IP && !e.NoSim {
-		p.Sim, p.SimErr = e.Simulate(ctx, block.Expression(t.Type, []string{t.Value}), string(o.Action), 0)
+		in := e.SimInput(block.Expression(t.Type, []string{t.Value}), string(o.Action), 0)
+		// The review knows where the rule will sit: the rules ahead of the
+		// plan's position are the ones that see the traffic first.
+		if !p.Plan.Place.Ignored && p.Plan.Place.Pos > 0 {
+			in.Rules = st.Ruleset.Rules
+			in.Ahead, in.AheadKnown = st.Ahead(p.Plan.RuleRef, p.Plan.Place.Pos), true
+		}
+		p.Sim, p.SimErr = e.Simulate(ctx, in)
 	}
 	p.Warnings = block.Warnings(t, o.Action, p.Network, p.Share, p.ShareKnown)
 	if !p.Plan.Place.Ignored {
@@ -286,18 +298,26 @@ func (e *Env) SimInput(expr, action string, days int) sim.Input {
 			in.DashRatio = calibrate.Ratio(rows)
 		}
 	}
+	in.AccountID = e.Cfg.Cloudflare.AccountID
+	in.RulesAPI, in.Lists = e.SimRules, e.SimLists
+	if in.RulesAPI == nil && e.Write != nil {
+		in.RulesAPI = e.Write
+	}
+	if in.Lists == nil && e.Write != nil {
+		in.Lists = e.Write
+	}
 	return in
 }
 
 // Simulate runs the rule simulator for expr when the read API can (nil
 // report otherwise; a failure is returned as text, never as an error: the
 // review goes on without it).
-func (e *Env) Simulate(ctx context.Context, expr, action string, days int) (*sim.Report, string) {
+func (e *Env) Simulate(ctx context.Context, in sim.Input) (*sim.Report, string) {
 	api, ok := e.Read.(sim.API)
 	if !ok {
 		return nil, ""
 	}
-	r, err := e.Sims.Run(ctx, api, e.SimInput(expr, action, days))
+	r, err := e.Sims.Run(ctx, api, in)
 	if err != nil {
 		return nil, err.Error()
 	}

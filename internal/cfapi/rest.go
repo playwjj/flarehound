@@ -212,10 +212,18 @@ type Rule struct {
 	Enabled     bool   `json:"enabled"`
 	// Read-side only (the audit); never sent by FlareHound's writes.
 	ActionParameters *ActionParameters `json:"action_parameters,omitempty"`
-	LastUpdated      time.Time         `json:"last_updated,omitzero"`
+	// Logging of a skip rule (read side): Enabled false means its matches
+	// leave no firewall event.
+	Logging     *RuleLogging `json:"logging,omitempty"`
+	LastUpdated time.Time    `json:"last_updated,omitzero"`
 	// Write-side only: where to put the rule on create / update (nil:
 	// append on create, stay in place on update).
 	Position *Position `json:"position,omitempty"`
+}
+
+// RuleLogging is a skip rule's "log matching requests" switch.
+type RuleLogging struct {
+	Enabled bool `json:"enabled"`
 }
 
 // Position places a rule relative to another rule of the same ruleset.
@@ -291,7 +299,8 @@ type List struct {
 
 type ListItem struct {
 	ID      string `json:"id,omitempty"`
-	IP      string `json:"ip"`
+	IP      string `json:"ip,omitempty"`
+	ASN     int    `json:"asn,omitempty"` // ASN lists (read side)
 	Comment string `json:"comment,omitempty"`
 }
 

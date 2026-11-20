@@ -120,7 +120,7 @@ func runDoctor(ctx context.Context, cfg *config.Config, cfgPath string, out io.W
 			d.ok("analytics: %s requests in %s", fmtInt(n), w)
 		}
 		caps, err := read.Capabilities(ctx, z.ZoneID)
-		simRow := simulatorRow(caps, err, watch == "✓")
+		capsErr := err
 		if err != nil {
 			d.warn("capability probe failed: %v", err)
 		} else {
@@ -172,7 +172,10 @@ func runDoctor(ctx context.Context, cfg *config.Config, cfgPath string, out io.W
 			audit += " (path coverage not configured for this zone: set cloudflare.zones[].waf_audit.sensitive_paths)"
 		}
 		rows = append(rows, capRow{"WAF audit", audit})
-		rows = append(rows, capRow{"rule simulator", simRow})
+		rulesOK := restGET(ctx, cfg.APIToken, "/zones/"+z.ZoneID+"/rulesets/phases/http_request_firewall_custom/entrypoint")
+		rulesRead := rulesOK == nil || strings.Contains(rulesOK.Error(), "HTTP 404")
+		listsRead := cfg.Cloudflare.AccountID != "" && restGET(ctx, cfg.APIToken, "/accounts/"+cfg.Cloudflare.AccountID+"/rules/lists") == nil
+		rows = append(rows, capRow{"rule simulator", simulatorRow(caps, capsErr, watch == "✓", rulesRead, listsRead)})
 		rows = append(rows, capRow{"calibration", watch})
 
 		block, rules, cache := "✗ no write token ("+cfg.Blocking.WriteTokenEnv+" empty)", "✗ no write token", "✗ no write token"
@@ -500,7 +503,7 @@ func doctorGeoIP(d *doctorOut, cfg *config.Config) {
 // which parts of an expression this plan's analytics can evaluate, and
 // whether net new (firewall events) is available. A gap is a plan limit,
 // not a problem: the simulator says "not evaluable here" instead of a number.
-func simulatorRow(caps cfapi.Caps, err error, analytics bool) string {
+func simulatorRow(caps cfapi.Caps, err error, analytics, rules, lists bool) string {
 	if !analytics {
 		return "– needs Zone → Analytics: Read"
 	}
@@ -513,6 +516,14 @@ func simulatorRow(caps cfapi.Caps, err error, analytics bool) string {
 		}
 		return "✗"
 	}
-	return fmt.Sprintf("✓ ASN dimension %s · country %s · referer host %s · firewall events (net new) %s",
-		mark(caps.HasDim(cfapi.DimASN)), mark(caps.HasDim("clientCountryName")), mark(caps.HasDim("clientRefererHost")), mark(caps.HasFirewallDim("action")))
+	s := fmt.Sprintf("✓ ASN dimension %s · country %s · referer host %s · firewall events (net new) %s · rule position %s · $lists %s",
+		mark(caps.HasDim(cfapi.DimASN)), mark(caps.HasDim("clientCountryName")), mark(caps.HasDim("clientRefererHost")), mark(caps.HasFirewallDim("action")),
+		mark(rules), mark(lists))
+	if !rules {
+		s += " (position: Zone → WAF: Read on the read token)"
+	}
+	if !lists {
+		s += " ($lists: account_id and Account → Account Filter Lists: Read on the read token)"
+	}
+	return s
 }

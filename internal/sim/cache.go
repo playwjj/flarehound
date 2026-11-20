@@ -3,6 +3,7 @@ package sim
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,8 +26,16 @@ type cacheEntry struct {
 func NewCache() *Cache { return &Cache{m: map[string]cacheEntry{}} }
 
 func key(in Input) string {
+	ahead := "?"
+	if in.AheadKnown {
+		ids := make([]string, len(in.Ahead))
+		for i, r := range in.Ahead {
+			ids[i] = r.ID
+		}
+		ahead = strings.Join(ids, ",")
+	}
 	return strings.Join([]string{in.ZoneID, strings.TrimSpace(in.Expr), in.Action,
-		in.From.UTC().Format(time.RFC3339), in.To.UTC().Format(time.RFC3339)}, "\x00")
+		in.From.UTC().Format(time.RFC3339), in.To.UTC().Format(time.RFC3339), strconv.Itoa(in.Before), ahead}, "\x00")
 }
 
 // Run returns a cached report younger than CacheTTL, or simulates.

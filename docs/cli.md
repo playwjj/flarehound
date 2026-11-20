@@ -35,7 +35,7 @@ flarehound -config config.json -backfill 28
 | `health [--file heartbeat] [--max-age D]` | — | Exit 0 if the heartbeat is fresh ([heartbeat](channels.md#heartbeat-dead-man-switch)) |
 | `audit` | read | [WAF audit](audit.md) |
 | `calibrate [--days 7]` | read | [Calibration](archive.md#calibration) |
-| `simulate --expr EXPR [--action block|challenge] [--days 7|1] [--date YYYY-MM-DD] [--json]` | read | [Rule simulator](simulator.md) — replay a draft rule against recent traffic; changes nothing |
+| `simulate --expr EXPR [--action block|challenge] [--days 7|1] [--date YYYY-MM-DD] [--before N] [--json]` | read | [Rule simulator](simulator.md) — replay a draft rule against recent traffic; changes nothing |
 | `block <ip|asn|country|ua> <value> […]` | write | [Blocking](blocking.md) |
 | `unblock <ip|asn|country|ua> <value> [--yes]` | write | [Blocking](blocking.md) |
 | `blocks [--days 7]` | write | [Blocking](blocking.md#listing-and-attempts) |
@@ -57,7 +57,7 @@ Run it first after installing. It prints, read-only:
 
 - the version and whether the configuration validates; configured channels; whether a heartbeat URL is set;
 - per zone: analytics reachable (with the last hour's request count), the plan's capabilities (ASN breakdown, firewall events and how long they are kept), Worker metrics;
-- a **capability matrix** — hourly watch, WAF audit, rule simulator (ASN dimension, country, referer host, firewall events for net new), calibration, one-click blocking, rule changes, cache rules — each ✓ or ✗ **with the missing permission named**;
+- a **capability matrix** — hourly watch, WAF audit, rule simulator (ASN dimension, country, referer host, firewall events for net new, rule position, `$lists`), calibration, one-click blocking, rule changes, cache rules — each ✓ or ✗ **with the missing permission named**;
 - the last evaluated window, any open anomaly, the next hourly round and daily report, the heartbeat age, the archive span, the measured samples behind each newer metric's baseline (and how many days a line still accumulating has to go), and pending outbox messages;
 - **storage**: what the data directory holds — `archive.db` (and its WAL) with the oldest hourly snapshot and whether large prunes return space to the disk, `console.db`, the JSONL file and its rotated copies, the `charts/` PNGs (count, size, oldest) — so a slow build-up is visible;
 - the [IP location](configuration.md#geoip) library: loaded (type, build date, file date, networks), not found (the feature is off — not a problem), or present but unusable (✗).

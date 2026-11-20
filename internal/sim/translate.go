@@ -177,8 +177,8 @@ type compiler struct {
 	caps   cfapi.Caps
 	bad    []Item // tier 3
 	approx []Item // tier 2
-	notes  []string
-	asn    bool // an ASN comparison appears (the expression is bound to networks)
+	asn    bool   // an ASN comparison appears (the expression is bound to networks)
+	lists  map[string]listRes
 }
 
 func (c *compiler) has(dim string) bool {
@@ -268,7 +268,22 @@ func (c *compiler) cmp(x waf.Cmp, neg bool) gnode {
 	var vals []string
 	switch v := x.Value.(type) {
 	case waf.ListRef:
-		return c.fail(x, whyList, "")
+		res, ok := c.lists[v.Name]
+		switch {
+		case !ok:
+			return c.fail(x, whyList, "")
+		case res.why != "":
+			return c.fail(x, res.why, v.Name)
+		case op != "in":
+			return c.fail(x, whyOperator, "")
+		case len(res.vals) == 0:
+			// An empty list matches nothing: "in" is false, "not in" true.
+			if neg {
+				return gnode{all: true}
+			}
+			return c.fail(x, whyValue, v.Name)
+		}
+		vals = append([]string(nil), res.vals...)
 	case waf.Set:
 		if op != "in" {
 			return c.fail(x, whyOperator, "")
@@ -436,10 +451,10 @@ type compiled struct {
 
 // translate compiles n for the HTTP dataset (required) and the firewall
 // dataset (for "already handled"; optional).
-func translate(n waf.Node, caps cfapi.Caps) compiled {
-	h := &compiler{ds: dsHTTP, caps: caps}
+func translate(n waf.Node, caps cfapi.Caps, lists map[string]listRes) compiled {
+	h := &compiler{ds: dsHTTP, caps: caps, lists: lists}
 	gh := h.compile(n, false)
-	f := &compiler{ds: dsFirewall, caps: caps}
+	f := &compiler{ds: dsFirewall, caps: caps, lists: lists}
 	gf := f.compile(n, false)
 	return compiled{http: gh, fw: gf, httpOK: len(h.bad) == 0, fwOK: len(f.bad) == 0,
 		bad: dedupe(h.bad), approx: dedupe(h.approx), fwBad: dedupe(f.bad), asn: h.asn}

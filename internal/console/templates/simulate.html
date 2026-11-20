@@ -14,6 +14,7 @@
     <option value="7"{{if eq $d 7}} selected{{end}}>{{t "sim_7d"}}</option>
     <option value="1"{{if eq $d 1}} selected{{end}}>{{t "sim_24h"}}</option>
   </select></label>
+  <label>{{t "sim_before"}}<input name="before" inputmode="numeric" value="{{if .Before}}{{.Before}}{{end}}" placeholder="{{t "sim_before_ph"}}" autocomplete="off"></label>
   <button>{{t "sim_run"}}</button>
 </form>
 {{end}}
@@ -34,15 +35,20 @@
   {{range $r.Warnings}}<div class="banner info">{{simWarn $r .}}</div>{{end}}
 {{else}}
   {{range $r.Widened}}<div class="banner warn">≤ <code class="wrap">{{.Expr}}</code> — {{simReason .}}</div>{{end}}
+  {{range $r.Lists}}<p class="meta">{{tf "sim_list_expanded" .Name .Kind .Items}}</p>{{end}}
   {{range $r.Warnings}}{{if ne .Code $r.Verdict}}<div class="banner {{if or (eq .Code "eyeball") (eq .Code "known") (eq .Code "bots")}}warn{{else}}info{{end}}">{{simWarn $r .}}</div>{{end}}{{end}}
   <dl class="kv">
     {{if $r.HasCore}}<dt>{{t "sim_gross"}}</dt><dd>{{simNum $r $r.Gross}} · {{simPct ($r.Share $r.Gross)}} {{t "sim_of_total"}}</dd>
     <dt>{{t "sim_exempted"}}</dt><dd>{{simBound $r $r.Exempted}}{{range $r.Branches}}<br><small class="muted">and not <code>{{.Expr}}</code>: {{simBound $r .Count}}</small>{{end}}</dd>{{end}}
     <dt>{{t "sim_matched"}}</dt><dd>{{simNum $r $r.Matched}} · {{simPct ($r.Share $r.Matched)}} {{t "sim_of_total"}}{{if and $r.DynamicKnown $r.Dynamic}} · {{simPct $r.DynShare}} {{t "sim_of_dynamic"}}{{end}}</dd>
     {{if $r.BotsKnown}}<dt>{{t "sim_bots"}}</dt><dd>{{simBound $r $r.Bots}}</dd>{{end}}
-    <dt>{{t "sim_net"}}</dt><dd>{{if $r.NetKnown}}<b>{{simApprox $r $r.Net}}</b> · {{simPct $r.NetShare}} {{t "sim_of_total"}} · {{tf "sim_per_day" (num (simPerDay $r))}}
+    <dt>{{t "sim_net"}}</dt><dd>{{if $r.NetKnown}}<b>{{$r.NetHead $p.Lang}}</b> · {{simPct $r.NetShare}} {{t "sim_of_total"}}{{if $r.NetFrom.IsZero}} · {{tf "sim_per_day" (num (simPerDay $r))}}{{end}}
       <br><small class="muted">{{t "sim_handled"}} {{num $r.Handled}}{{range $r.HandledBy}} · {{.Name}} {{num .Count}}{{end}}{{if not $r.NetFrom.IsZero}} · {{t "sim_net_from"}} {{when $r.NetFrom}}{{end}}</small>
+      {{with $r.NetFoot $p.Lang nil}}<br><small class="muted">{{.}}</small>{{end}}
+      {{with $r.PositionText $p.Lang}}<br><small>{{.}}</small>{{end}}
+      {{range $r.Skips}}<br><small class="muted">#{{.Pos}} {{.Label}}: {{if .Unknown}}{{t "sim_skip_unknown"}}{{else}}{{num .Count}}{{if .NoLog}} ({{t "sim_skip_nolog"}}){{end}}{{end}}</small>{{end}}
       <br><small class="muted">{{t "sim_net_note"}}</small>{{else}}<span class="muted">{{simNetWhy $r.NetWhy}}</span>{{end}}</dd>
+    <dt>{{t "sim_challenges"}}</dt><dd><small>{{$r.ChallengeText $p.Lang}}</small></dd>
     <dt>{{t "m_total"}}</dt><dd>{{num $r.Total}}{{if $r.CleanEmptyUA}}<br><small class="muted">{{tf "sim_empty_ua" (num $r.EmptyUA)}}</small>{{end}}</dd>
   </dl>
   {{if $r.Days}}<h3>{{t "sim_days"}}</h3>
@@ -65,5 +71,6 @@
 <dt>{{t "sim_brief"}}</dt><dd><span class="tag">{{simLabel $r.Confidence}}</span><br><b>{{simVerdict $r}}</b>
   {{range $r.Widened}}<br><small class="muted">≤ <code>{{.Expr}}</code> — {{simReason .}}</small>{{end}}
   {{range $r.Warnings}}{{if and (ne .Code $r.Verdict) (or (eq .Code "eyeball") (eq .Code "known") (eq .Code "bots") (eq .Code "gap"))}}<br><small>⚠ {{simWarn $r .}}</small>{{end}}{{end}}
+  {{if $r.NetKnown}}{{with $r.PositionText $p.Lang}}<br><small class="muted">{{.}}</small>{{end}}{{end}}
   <br><small class="muted">{{when $r.From}} → {{when $r.To}} · <a href="{{simLink $p.Zone $r.Expr $r.Action}}">{{t "sim_full"}}</a></small></dd>
 {{end}}

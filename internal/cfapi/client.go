@@ -4,8 +4,11 @@
 //   - Keep every query compact and single-dimension: long queries risk
 //     truncation somewhere in the chain.
 //   - Always orderBy count_DESC; without it, returned groups are arbitrary.
-//   - The adaptive dataset has no host or clientCountry dimension and no
-//     clientReferer filter. The ASN dimension is clientAsn (lowercase n).
+//   - Host (clientRequestHTTPHost) and country (clientCountryName) are
+//     dimensions on every plan seen so far, Free included; the referer is
+//     only there as its host (clientRefererHost, paid plans) — there is no
+//     full-referer filter. The ASN dimension is clientAsn (lowercase n),
+//     absent on Free. What a zone has is probed (Capabilities), not assumed.
 //   - Adaptive counts include Worker subrequests; only ever compare
 //     adaptive numbers with adaptive numbers, same window shape.
 //

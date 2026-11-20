@@ -33,7 +33,7 @@ const blockUsage = `Commands:
   flarehound health [--file heartbeat]             exit 0 if the watch loop's heartbeat is fresh (Docker HEALTHCHECK)
   flarehound console [help]                        the web console (see "flarehound console help")
   flarehound geoip update [-o PATH]                download the newest DB-IP country library (IP location)
-  flarehound simulate --expr '<WAF expression>' [--action block|challenge] [--days 7|1] [--date YYYY-MM-DD] [--json]
+  flarehound simulate --expr '<WAF expression>' [--action block|challenge] [--days 7|1] [--date YYYY-MM-DD] [--before N] [--json]
                                                    replay a draft rule against recent traffic (read token; changes nothing)
 
 Blocking commands (separate write token, see README):
@@ -240,7 +240,15 @@ func runSubcommand(ctx context.Context, cfgPath, verb string, args []string, red
 				st = nil
 			}
 		}
-		return runSimulate(ctx, cfg, z, st, simArgs{expr: rf.expr, action: *action, days: *days, date: *simDate, json: *simJSON}, os.Stdout)
+		before := 0
+		if rf.before != "" {
+			n, err := strconv.Atoi(strings.TrimPrefix(rf.before, "#"))
+			if err != nil || n < 1 {
+				return fail(fmt.Errorf("simulate: --before takes a rule number (1, 2, …), got %q", rf.before))
+			}
+			before = n
+		}
+		return runSimulate(ctx, cfg, z, st, simArgs{expr: rf.expr, action: *action, days: *days, date: *simDate, json: *simJSON, before: before}, os.Stdout)
 	}
 
 	if verb == "audit" { // read-only: never touches the write token

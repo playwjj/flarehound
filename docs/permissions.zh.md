@@ -13,8 +13,9 @@ FlareHound 使用**两个独立的 Token**。看守进程只持有只读 Token�
 |---|---|---|
 | Zone → **Analytics: Read** | 看守测量的一切（GraphQL Analytics，包括能力探测） | **是——最低要求** |
 | Account → **Account Analytics: Read** | Worker 调用量与 CPU P50（`workersInvocationsAdaptive` 是账户级数据集） | 仅当某个 zone 配置了 `workers` |
-| Zone → **WAF: Read** | WAF 规则体检：读取自定义规则；报告中的规则名称；每轮的规则集版本检查（在部分账户上还包括 IP Access Rules）；控制台的 **WAF 规则** 页面（自定义规则与限速规则） | 用于 [WAF 规则体检](audit.md) 和控制台规则页面 |
+| Zone → **WAF: Read** | WAF 规则体检：读取自定义规则；报告中的规则名称；每轮的规则集版本检查（在部分账户上还包括 IP Access Rules）；控制台的 **WAF 规则** 页面（自定义规则与限速规则）；[规则模拟器](simulator.md)的规则位置（排在草稿前面的 skip 规则） | 用于 [WAF 规则体检](audit.md)、控制台规则页面与模拟器的规则位置 |
 | Zone → **Zone: Read** | 读取套餐，用于体检中的额度检查 | 可选 |
+| Account → **Account Filter Lists: Read** | [规则模拟器](simulator.md)展开 `$list` 引用（需配置 `cloudflare.account_id`） | 可选 |
 
 只读 Token 的最低权限是从代码调用点推导出来的：看守的测量全部是 GraphQL Analytics 查询（`api.cloudflare.com/client/v4/graphql`）。唯一的例外是 WAF 规则体检：启用体检且 Token 具有 Zone → WAF: Read 时，每个小时轮次还会通过 REST 读取自定义规则集的版本（没有该权限时调用会静默失败，体检报告「不可用」）。旧版 README 还要求 Logs、Zone 和 Workers Scripts 的读取权限，但没有任何代码路径用到它们。要检查你自己的 Token，可以只授予 Zone → Analytics: Read 创建一个，然后运行 `flarehound -once -dry-run`。
 
