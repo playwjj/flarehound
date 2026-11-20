@@ -48,7 +48,19 @@ Cloudflare **没有回放 API**。GraphQL 分析数据是采样聚合的数据�
 | 精确（采样） | `ip.src`（单个地址）、`ip.geoip.asnum` / `ip.src.asnum`、`ip.geoip.country` / `ip.src.country`、`http.user_agent`、`http.request.uri.path`、`http.request.uri.query`、`http.host`、`http.request.method`、`cf.client.bot`、`cf.verified_bot_category`，算子 `eq` `ne` `in` `contains` `starts_with()` `ends_with()`，以 `and` `or` `xor` `not` 与括号组合 | 否定下推到每个比较 |
 | 上界 | `http.referer`——只有 referer 的 **host** 是维度（付费套餐）。`eq "https://site/"` 按来自 `site` 的全部 referer 计。处于否定之下时不允许（既不是精确值也不是上界）。`http.referer eq ""`（无 referer）是精确的 | 标签「上界」，点名子表达式 |
 | 展开 | 引用账号 **IP 与 ASN 列表**的 `$list`（`ip.src in $bad_ips`、`ip.geoip.asnum in $clouds`）：经 Lists API 读出并替换为字面值 | 报告列出每个展开的列表及其大小 |
-| 不可评估 | header、cookie、请求体、`matches`（正则）、`wildcard`、`cf.threat_score` / bot score、速率、`lower()` 等函数、网段（CIDR）；无法展开的列表——Cloudflare 托管列表（`$cf.…`）、含网段的列表、hostname / redirect 列表、超过 1,000 项的列表，以及令牌读不到的列表（未配置 `account_id`，或缺少 Account → Account Filter Lists: Read，如租户账号） | 点名并说明原因——**完全不给数**，绝不静默丢弃条件 |
+| 取界 | header、cookie、请求体、`matches`（正则）、`wildcard`、`cf.threat_score` / bot score、速率、`lower()` 等函数、网段（CIDR）；无法展开的列表——Cloudflare 托管列表（`$cf.…`）、含网段的列表、hostname / redirect 列表、超过 1,000 项的列表，以及令牌读不到的列表（未配置 `account_id`，或缺少 Account → Account Filter Lists: Read，如租户账号） | 点名并说明原因，再[取界](#partial-evaluation)：上界按命中计，下界按不命中计——绝不静默丢弃条件 |
+| 此区不支持 | 该区套餐不提供的字段（Free 的 ASN）、非法取值 | 整个表达式**完全不给数** |
+
+### 部分求值 {#partial-evaluation}
+
+混合表达式——一部分子项可评估、一部分不可——仍然给数，以上下界的形式。否定下推之后，把某个子项设为真只会让表达式变大，设为假只会变小。所以：
+
+- **上界**：所有不可评估子项按命中计。报告中的全部计数（含构成拆分）都基于这个过滤条件，并带 `≤`；
+- **下界**：所有不可评估子项按不命中计。*规则命中*以区间给出——「介于 3,100 与 ≤ 10,000 之间」；
+- **净新增**仍是可靠的上界：上界命中减去现有规则**确定**拦下的、前面 skip 规则**确定**放行的——这两项都按下界过滤条件读取；
+- **子项标注**：每个顶层子项（`a and b and not c`）逐条列出：✓ 已评估、≤ 放宽评估（referer host）、? 取界（附原因）、✗ 此区不支持。
+
+上界等于整个 zone 的表达式（`ip.geoip.asnum eq 30633 or http.cookie contains "x"`：不可评估的分支可能是任何东西）不给数——「上界是全部」等于什么都没说。部分求值时不做豁免拆分（那是区间套区间）；子项标注会说明每个分支是什么。
 
 每个字段都会对照该区套餐实际提供的维度检查（`flarehound doctor` 每区有一行 *rule simulator*）。**Free** 套餐没有 ASN 维度，也没有防火墙事件数据集：ASN 表达式在该区*不可评估*，净新增不可用——报告如实说明，不用其他口径凑数。
 
@@ -69,9 +81,11 @@ Cloudflare **没有回放 API**。GraphQL 分析数据是采样聚合的数据�
 
 确认页上显示的模拟会**随封锁记录一起保存**（归档表 `block_sims`）。封前/封后对比（控制台与日报）随后增加一行：*预测净新增 ≈ 1,490 次/小时（确认时的模拟）；实际封禁后一小时拦截 1,320 次（−11%）*——预测偏差长期可见。「实际」取该规则的防火墙事件；没有防火墙事件的套餐会注明无法计量。
 
+封锁的封后一小时落定后，日报会记录这一结果（归档表 `sim_outcomes`，每条封锁一次防火墙查询，每份日报最多十条），并带一条**固定行**，给出模拟器近 30 天的成绩：带净新增预测确认的封锁数、已计量数，以及实际相对预测的中位偏差与最大偏差——上界预测会注明，因为那里实际偏低属预期。
+
 ## 不做的事 {#not-done}
 
 - 不做一键应用：报告不产生封锁方案，也没有写路径。
 - 不做逐请求回放：不引入 Logpush，不落盘原始日志，采样就是精度上限。
 - 不做跨 zone 模拟：表达式与规则集都是 zone 级的。
-- 暂不支持：hostname 列表、混合表达式的部分求值（可评估部分给数、其余点名）、预测与实际偏差作为日报固定行。
+- 不做：hostname 列表；逐子项给数（子项只做标注，计数针对整个表达式）。

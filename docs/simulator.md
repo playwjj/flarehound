@@ -48,7 +48,19 @@ There is **no replay API**. GraphQL analytics are sampled, aggregated datasets; 
 | Exact (sampled) | `ip.src` (single addresses), `ip.geoip.asnum` / `ip.src.asnum`, `ip.geoip.country` / `ip.src.country`, `http.user_agent`, `http.request.uri.path`, `http.request.uri.query`, `http.host`, `http.request.method`, `cf.client.bot`, `cf.verified_bot_category` with `eq` `ne` `in` `contains` `starts_with()` `ends_with()`, combined with `and` `or` `xor` `not` and parentheses | Negations are pushed down to each comparison |
 | Upper bound | `http.referer` — only the referer's **host** is a dimension (paid plans). `eq "https://site/"` is counted as every referer from `site`. Not allowed under a negation (it would be neither a count nor a bound). `http.referer eq ""` (no referer) is exact | Label *upper bound*, sub-expression named |
 | Expanded | `$list` references to the account's **IP and ASN lists** (`ip.src in $bad_ips`, `ip.geoip.asnum in $clouds`): read through the Lists API and replaced by their values | The report names each expanded list and its size |
-| Not evaluable | headers, cookies, bodies, `matches` (regex), `wildcard`, `cf.threat_score` / bot score, rates, `lower()` and other functions, IP ranges (CIDR); lists that cannot be expanded — Cloudflare's managed lists (`$cf.…`), lists holding ranges, hostname / redirect lists, lists over 1,000 items, and lists the token cannot read (no `account_id`, or no Account → Account Filter Lists: Read — e.g. a tenant account) | Named with the reason — **no numbers at all**, never a silently dropped condition |
+| Bounded | headers, cookies, bodies, `matches` (regex), `wildcard`, `cf.threat_score` / bot score, rates, `lower()` and other functions, IP ranges (CIDR); lists that cannot be expanded — Cloudflare's managed lists (`$cf.…`), lists holding ranges, hostname / redirect lists, lists over 1,000 items, and lists the token cannot read (no `account_id`, or no Account → Account Filter Lists: Read — e.g. a tenant account) | Named with the reason and [bounded](#partial-evaluation): counted as matching for the upper bound, as not matching for the lower bound — never silently dropped |
+| Not supported here | a field the zone's plan does not expose (ASN on Free), an invalid value | **No numbers at all** for the expression |
+
+### Partial evaluation
+
+A mixed expression — some terms evaluable, some not — still gets numbers, as bounds. After negations are pushed down, the expression only grows when a term is made true and only shrinks when it is made false. So:
+
+- **upper bound**: every unknown term counted as matching. All counts in the report (and the composition) are over this filter and carry `≤`;
+- **lower bound**: every unknown term counted as not matching. *Matches* is given as a range — "between 3,100 and ≤ 10,000";
+- **net new** stays a sound upper bound: the upper matches minus what existing rules **certainly** stop and skip rules ahead **certainly** let through — both read over the lower-bound filter;
+- **term by term**: each top-level term (`a and b and not c`) is listed with ✓ evaluated, ≤ widened (referer host), ? bounded (with its reason) or ✗ not supported here.
+
+An expression whose upper bound is the whole zone (`ip.geoip.asnum eq 30633 or http.cookie contains "x"`: the unknown branch could be anything) gets no numbers — a bound of "everything" says nothing. The exemption split is left out under partial evaluation (a range of ranges); the term annotations say what each branch is.
 
 Every field is checked against what the zone's plan exposes (`flarehound doctor` shows a *rule simulator* row per zone). On **Free** there is no ASN dimension and no firewall-events dataset: an ASN expression is *not evaluable on this zone*, and net new is not available — the report says so instead of filling the gap from another source.
 
@@ -69,9 +81,11 @@ At most **24 GraphQL queries** per simulation (typically 15–19), four at a tim
 
 The simulation shown at review is **kept with the block record** (archive table `block_sims`). The before/after comparison (console and daily report) then adds a line: *predicted net new ≈ 1,490/h (simulation at review); actual 1,320 stopped in the hour after (−11 %)* — so the prediction's error stays visible. "Actual" is the rule's firewall events; on plans without them it says it cannot be counted.
 
+Once a block's hour after has settled, the daily report records that outcome (archive table `sim_outcomes`, one firewall query per block, at most ten per report) and carries a **fixed line** with the simulator's record over the last 30 days: how many blocks were confirmed with a net-new prediction, how many were measured, and the median and widest deviation of actual from predicted — upper-bound predictions noted, since a shortfall there is expected.
+
 ## Not done
 
 - No one-click apply: a report produces no block plan and no write path.
 - No per-request replay, no Logpush, no raw logs on disk: sampling is the precision limit.
 - No cross-zone simulation: expressions and rule sets are per zone.
-- Not yet: hostname lists, partial evaluation of mixed expressions (numbers for the evaluable part, the rest named), predicted vs actual as a fixed line in the daily report.
+- Not done: hostname lists; per-term numbers (a term is only annotated, the counts are for the expression as a whole).

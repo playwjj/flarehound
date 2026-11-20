@@ -54,6 +54,7 @@ var dict = map[string][2]string{
 	"sim_skip_nolog":            {"logs nothing: counted from its expression", "不记录日志：按其表达式计"},
 	"sim_challenges":            {"Challenge history", "挑战记录"},
 	"sim_list_expanded":         {"$%s expanded: %s list, %d item(s)", "已展开 $%s：%s 列表，%d 项"},
+	"sim_terms":                 {"Term by term", "子项标注"},
 	"sim_why":                   {"why", "原因"},
 	"nav_account":               {"Account", "账号"},
 	"nav_users":                 {"Users", "用户"},

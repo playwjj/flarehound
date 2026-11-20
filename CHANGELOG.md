@@ -2,6 +2,14 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.21.0 — 2026-11-20
+
+- **Rule simulator, phase 3: partial evaluation and its own track record.**
+  - **Mixed expressions get numbers, as bounds.** Until now one term that cannot be replayed (a header, a cookie, a regex, a score, an unexpandable `$list` …) made the whole expression "not evaluable". After negations are pushed down the expression is monotone in its terms, so each unknown term is bounded: counted as matching for the **upper bound** (every count, `≤`) and as not matching for the **lower bound** — *matches* is given as a range, "between 3,100 and ≤ 10,000". **Net new stays a sound upper bound**: upper matches minus what existing rules certainly stop and skip rules ahead certainly let through, both read over the lower-bound filter. Label *upper bound (includes sub-expressions that cannot be evaluated exactly)*.
+  - **Term by term.** Each top-level term is annotated — ✓ evaluated, ≤ widened (referer host), ? bounded (with its reason), ✗ not supported here — in the CLI, the console and the JSON report.
+  - **Still no numbers** when nothing evaluable narrows the expression (an `or` whose other branch could be anything: the upper bound is the whole zone), and for a plan gap (ASN on Free: not supported on this zone). The exemption split is left out under partial evaluation.
+  - **Predicted vs actual in the daily report.** Once a block's hour after has settled, the daily report records what the rule stopped (archive table `sim_outcomes`; one firewall query per block, at most ten per report) and carries a fixed line: "Rule simulator, last 30 days: 4 block(s) confirmed with a net-new prediction, 3 measured — actual vs predicted per hour: median −11%, widest +85% (AS45102)", upper-bound predictions noted.
+
 ## v1.20.0 — 2026-11-20
 
 - **Rule simulator, phase 2: the rule's position, challenge history and `$lists`.**

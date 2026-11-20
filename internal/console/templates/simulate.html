@@ -30,17 +30,19 @@
 <p class="meta">{{when $r.From}} → {{when $r.To}} · {{t "sim_settle"}}{{if $r.Cached}} · {{t "sim_cached"}}{{end}}</p>
 <p><span class="tag">{{simLabel $r.Confidence}}</span></p>
 <p class="verdict"><b>{{simVerdict $r}}</b></p>
+{{if $r.Terms}}<h3>{{t "sim_terms"}}</h3>
+  <ul class="terms">{{range $r.Terms}}{{$te := .Expr}}<li><b>{{simTermMark .Status}}</b> <code class="wrap">{{.Expr}}</code><br><small class="muted">{{simTermText .Status}}{{range .Items}}<br>· {{if ne .Expr $te}}<code>{{.Expr}}</code> — {{end}}{{simReason .}}{{end}}</small></li>{{end}}</ul>{{end}}
 {{if not $r.Evaluable}}
-  <ul>{{range $r.Unevaluable}}<li><code class="wrap">{{.Expr}}</code><br><small class="muted">{{simReason .}}</small></li>{{end}}</ul>
+  {{if not $r.Terms}}<ul>{{range $r.Unevaluable}}<li><code class="wrap">{{.Expr}}</code><br><small class="muted">{{simReason .}}</small></li>{{end}}</ul>{{end}}
   {{range $r.Warnings}}<div class="banner info">{{simWarn $r .}}</div>{{end}}
 {{else}}
-  {{range $r.Widened}}<div class="banner warn">≤ <code class="wrap">{{.Expr}}</code> — {{simReason .}}</div>{{end}}
+  {{if not $r.Terms}}{{range $r.Widened}}<div class="banner warn">≤ <code class="wrap">{{.Expr}}</code> — {{simReason .}}</div>{{end}}{{end}}
   {{range $r.Lists}}<p class="meta">{{tf "sim_list_expanded" .Name .Kind .Items}}</p>{{end}}
   {{range $r.Warnings}}{{if ne .Code $r.Verdict}}<div class="banner {{if or (eq .Code "eyeball") (eq .Code "known") (eq .Code "bots")}}warn{{else}}info{{end}}">{{simWarn $r .}}</div>{{end}}{{end}}
   <dl class="kv">
     {{if $r.HasCore}}<dt>{{t "sim_gross"}}</dt><dd>{{simNum $r $r.Gross}} · {{simPct ($r.Share $r.Gross)}} {{t "sim_of_total"}}</dd>
     <dt>{{t "sim_exempted"}}</dt><dd>{{simBound $r $r.Exempted}}{{range $r.Branches}}<br><small class="muted">and not <code>{{.Expr}}</code>: {{simBound $r .Count}}</small>{{end}}</dd>{{end}}
-    <dt>{{t "sim_matched"}}</dt><dd>{{simNum $r $r.Matched}} · {{simPct ($r.Share $r.Matched)}} {{t "sim_of_total"}}{{if and $r.DynamicKnown $r.Dynamic}} · {{simPct $r.DynShare}} {{t "sim_of_dynamic"}}{{end}}</dd>
+    <dt>{{t "sim_matched"}}</dt><dd>{{if and $r.Partial $r.LowKnown}}{{num $r.MatchedLow}} – {{end}}{{simNum $r $r.Matched}} · {{simPct ($r.Share $r.Matched)}} {{t "sim_of_total"}}{{if and $r.DynamicKnown $r.Dynamic}} · {{simPct $r.DynShare}} {{t "sim_of_dynamic"}}{{end}}</dd>
     {{if $r.BotsKnown}}<dt>{{t "sim_bots"}}</dt><dd>{{simBound $r $r.Bots}}</dd>{{end}}
     <dt>{{t "sim_net"}}</dt><dd>{{if $r.NetKnown}}<b>{{$r.NetHead $p.Lang}}</b> · {{simPct $r.NetShare}} {{t "sim_of_total"}}{{if $r.NetFrom.IsZero}} · {{tf "sim_per_day" (num (simPerDay $r))}}{{end}}
       <br><small class="muted">{{t "sim_handled"}} {{num $r.Handled}}{{range $r.HandledBy}} · {{.Name}} {{num .Count}}{{end}}{{if not $r.NetFrom.IsZero}} · {{t "sim_net_from"}} {{when $r.NetFrom}}{{end}}</small>

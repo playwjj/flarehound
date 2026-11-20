@@ -106,6 +106,8 @@ Sent every day (it is a scheduled report, not an alert). The first line is "All 
 - **Checkpoints:**
     - firewall events by rule (with rule names) and the IPs most often blocked or challenged — or "unavailable" on plans without the dataset, never 0;
     - each FlareHound block with its attempts in the window, start and expiry — lift a block when the attempts stop, not when it gets quiet;
+    - blocks made in the window with their before/after verdict and, when confirmed after a [simulation](simulator.md), its predicted net new against what the rule stopped;
+    - the **rule simulator's record** over 30 days: blocks confirmed with a net-new prediction, how many were measured, and the median and widest deviation of actual from predicted (per hour) — "Rule simulator, last 30 days: 4 block(s) confirmed with a net-new prediction, 3 measured — actual vs predicted per hour: median −11%, widest +85% (AS45102)";
     - `daily.paths`: origin reach per path vs. its `max` (✓ / ⚠);
     - `daily.artifacts`: known accounting artifacts, counted separately from visitor errors.
 - Suggestions (no rate-limit advice: the daily report has no per-IP data).

@@ -105,6 +105,8 @@ type gnode struct {
 	and, or []gnode
 	leaf    string // "clientAsn:\"30633\""
 	all     bool   // matches everything (an empty conjunction)
+	none    bool   // matches nothing (an empty disjunction)
+	unknown bool   // a term that cannot be translated (partial evaluation)
 }
 
 func (g gnode) render() string {
@@ -128,10 +130,12 @@ func renderList(gs []gnode) string {
 }
 
 func and(a, b gnode) gnode {
-	if a.all {
+	switch {
+	case a.none || b.none:
+		return gnode{none: true}
+	case a.all:
 		return b
-	}
-	if b.all {
+	case b.all:
 		return a
 	}
 	var out []gnode
@@ -146,6 +150,14 @@ func and(a, b gnode) gnode {
 }
 
 func or(a, b gnode) gnode {
+	switch {
+	case a.all || b.all:
+		return gnode{all: true}
+	case a.none:
+		return b
+	case b.none:
+		return a
+	}
 	var out []gnode
 	for _, x := range []gnode{a, b} {
 		if len(x.or) > 0 {
@@ -179,6 +191,46 @@ type compiler struct {
 	approx []Item // tier 2
 	asn    bool   // an ASN comparison appears (the expression is bound to networks)
 	lists  map[string]listRes
+	// partial: a term that cannot be translated (but is not a plan gap)
+	// becomes an unknown node instead of failing the expression.
+	partial bool
+	unknown []Item
+}
+
+// soft reasons can be bounded by partial evaluation; a plan gap cannot:
+// on a zone without the dimension the expression is "not supported here".
+func soft(why string) bool {
+	switch why {
+	case whyPlan, whyValue, whyParse:
+		return false
+	}
+	return true
+}
+
+// bound replaces every unknown term with v (true: it matches, false: it
+// does not). The tree is in negation normal form, so it is monotone in its
+// terms: v = true gives a superset of the real matches, false a subset.
+func bound(g gnode, v bool) gnode {
+	switch {
+	case g.unknown:
+		if v {
+			return gnode{all: true}
+		}
+		return gnode{none: true}
+	case len(g.and) > 0:
+		out := gnode{all: true}
+		for _, k := range g.and {
+			out = and(out, bound(k, v))
+		}
+		return out
+	case len(g.or) > 0:
+		out := gnode{none: true}
+		for _, k := range g.or {
+			out = or(out, bound(k, v))
+		}
+		return out
+	}
+	return g
 }
 
 func (c *compiler) has(dim string) bool {
@@ -189,6 +241,10 @@ func (c *compiler) has(dim string) bool {
 }
 
 func (c *compiler) fail(n fmt.Stringer, why, dim string) gnode {
+	if c.partial && soft(why) {
+		c.unknown = append(c.unknown, Item{Expr: n.String(), Why: why, Dim: dim})
+		return gnode{unknown: true}
+	}
 	c.bad = append(c.bad, Item{Expr: n.String(), Why: why, Dim: dim})
 	return gnode{leaf: "x"} // placeholder; a failed compile is never rendered
 }
@@ -440,13 +496,18 @@ func refHost(v, op string) string {
 	return strings.ToLower(u.Hostname())
 }
 
-// compiled is an expression translated for both datasets.
+// compiled is an expression translated for both datasets. With partial
+// evaluation http / fw are the upper bounds and httpLow / fwLow the lower
+// bounds; otherwise the lower bounds equal them.
 type compiled struct {
-	http, fw     gnode
-	httpOK, fwOK bool
-	bad, approx  []Item
-	fwBad        []Item
-	asn          bool
+	http, fw       gnode
+	httpLow, fwLow gnode
+	httpOK, fwOK   bool
+	bad, approx    []Item
+	fwBad          []Item
+	asn            bool
+	partial        bool
+	unknown        []Item // terms bounded, not evaluated
 }
 
 // translate compiles n for the HTTP dataset (required) and the firewall
@@ -456,8 +517,31 @@ func translate(n waf.Node, caps cfapi.Caps, lists map[string]listRes) compiled {
 	gh := h.compile(n, false)
 	f := &compiler{ds: dsFirewall, caps: caps, lists: lists}
 	gf := f.compile(n, false)
-	return compiled{http: gh, fw: gf, httpOK: len(h.bad) == 0, fwOK: len(f.bad) == 0,
+	return compiled{http: gh, fw: gf, httpLow: gh, fwLow: gf, httpOK: len(h.bad) == 0, fwOK: len(f.bad) == 0,
 		bad: dedupe(h.bad), approx: dedupe(h.approx), fwBad: dedupe(f.bad), asn: h.asn}
+}
+
+// translatePartial is translate with partial evaluation: terms that cannot
+// be translated are bounded (upper: they match; lower: they do not). The
+// result is still not evaluable when nothing bounds the expression (the
+// upper bound is the whole zone) or a term fails for a hard reason.
+func translatePartial(n waf.Node, caps cfapi.Caps, lists map[string]listRes) compiled {
+	h := &compiler{ds: dsHTTP, caps: caps, lists: lists, partial: true}
+	gh := h.compile(n, false)
+	f := &compiler{ds: dsFirewall, caps: caps, lists: lists, partial: true}
+	gf := f.compile(n, false)
+	c := compiled{bad: dedupe(h.bad), approx: dedupe(h.approx), fwBad: dedupe(f.bad), asn: h.asn, unknown: dedupe(h.unknown)}
+	c.partial = len(c.unknown) > 0
+	c.http, c.httpLow = bound(gh, true), bound(gh, false)
+	c.fw, c.fwLow = bound(gf, true), bound(gf, false)
+	c.httpOK = len(h.bad) == 0 && !c.http.all && !c.http.none
+	c.fwOK = len(f.bad) == 0 && !c.fw.all && !c.fw.none
+	if len(h.bad) == 0 && !c.httpOK {
+		// Nothing evaluable narrows it: the unknown terms are the reason.
+		c.bad = c.unknown
+		c.unknown, c.partial = nil, false
+	}
+	return c
 }
 
 func dedupe(items []Item) []Item {

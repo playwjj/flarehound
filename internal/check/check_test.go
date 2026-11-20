@@ -2,6 +2,7 @@ package check
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"github.com/playwjj/flarehound/internal/notify"
 	"github.com/playwjj/flarehound/internal/report"
 	"github.com/playwjj/flarehound/internal/schedule"
+	"github.com/playwjj/flarehound/internal/sim"
 	"github.com/playwjj/flarehound/internal/store"
 )
 
@@ -1003,5 +1005,60 @@ func TestImmatureBaselineHoldsUnreachable(t *testing.T) {
 	}
 	if len(out.msgs) != 1 || !strings.Contains(out.msgs[0], "unreachable") {
 		t.Fatalf("mature baseline: expected an origin_unreachable alert, got %d msgs %+v", len(out.msgs), out.msgs)
+	}
+}
+
+// TestDailySimAccuracy: a block confirmed after a simulation gets its
+// outcome recorded once the hour after has settled, and the daily report
+// carries the simulator's accuracy line.
+func TestDailySimAccuracy(t *testing.T) {
+	cfg := testConfig(t)
+	api := &fakeAPI{windows: map[time.Time]*window{}, reads: map[time.Time]int{}}
+	out := &sink{}
+	end := time.Date(2026, 11, 17, 8, 0, 0, 0, time.UTC)
+	r := &Runner{API: api, Cfg: cfg, Sender: out, Now: func() time.Time { return end.Add(7 * time.Minute) }}
+	st := withStore(t, r)
+	zone := cfg.Cloudflare.Zones[0]
+	api.windows[end.Add(-48*time.Hour)] = normal()
+	api.windows[end.Add(-24*time.Hour)] = normal()
+	snap, _ := json.Marshal(sim.Report{Evaluable: true, NetKnown: true, Net: 2400, From: end.Add(-48 * time.Hour), To: end.Add(-24 * time.Hour)})
+	ev := store.BlockEvent{At: end.Add(-5 * time.Hour), Zone: zone.ZoneID, Op: "block", Type: "asn", Value: "207990",
+		Action: "challenge", Mechanism: "custom_rule", RuleID: "rule-asn", Actor: "cli"}
+	if err := st.AddBlockEventSim(ev, snap); err != nil {
+		t.Fatal(err)
+	}
+	// Too fresh: the hour after has not settled.
+	fresh := ev
+	fresh.At, fresh.Value = end.Add(-10*time.Minute), "4134"
+	_ = st.AddBlockEventSim(fresh, snap)
+	if err := r.Daily(context.Background(), zone); err != nil {
+		t.Fatal(err)
+	}
+	msg := out.msgs[0]
+	if !strings.Contains(msg, "1 block(s) confirmed with a net-new prediction, 1 measured") || !strings.Contains(msg, "median +20%") || !strings.Contains(msg, "(AS207990)") {
+		t.Fatalf("accuracy line:\n%s", msg)
+	}
+	outs, _ := st.SimOutcomes(zone.ZoneID, end.Add(-30*24*time.Hour))
+	if len(outs) != 1 || outs[0].Actual != 120 || outs[0].Predicted != 100 {
+		t.Fatalf("outcomes: %+v", outs)
+	}
+	pend, _ := st.PendingSims(zone.ZoneID, end.Add(-30*24*time.Hour), 10)
+	if len(pend) != 1 || pend[0].Event.Value != "4134" {
+		t.Fatalf("pending: %+v", pend)
+	}
+}
+
+func TestSimAccuracyOf(t *testing.T) {
+	a := SimAccuracyOf([]store.SimOutcome{
+		{Target: "AS1", Predicted: 100, Actual: 90},
+		{Target: "AS2", Predicted: 100, Actual: 185, Upper: true},
+		{Target: "AS3", Predicted: 100, Actual: -1},
+		{Target: "AS4", Predicted: -1, Actual: 50},
+	}, 30)
+	if a.Predicted != 3 || a.Measured != 2 || a.Upper != 1 || a.Worst != "AS2" || a.WorstDev < 0.84 || a.MedianDev < 0.37 || a.MedianDev > 0.38 {
+		t.Fatalf("%+v", a)
+	}
+	if SimAccuracyOf([]store.SimOutcome{{Predicted: -1}}, 30) != nil {
+		t.Fatal("no prediction, no line")
 	}
 }

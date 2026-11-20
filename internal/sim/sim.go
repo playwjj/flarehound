@@ -218,6 +218,15 @@ type Report struct {
 	NetUpper       bool      `json:"net_upper,omitempty"` // a non-logging skip ahead could not be counted
 	Chal           Challenge `json:"chal"`
 
+	// Phase 3: partial evaluation. Unknown terms are bounded — counted as
+	// matching for the upper bound (every count), as not matching for the
+	// lower bound (MatchedLow). Terms annotates each top-level term.
+	Partial    bool   `json:"partial,omitempty"`
+	Unknown    []Item `json:"unknown,omitempty"`
+	MatchedLow int64  `json:"matched_low,omitempty"`
+	LowKnown   bool   `json:"low_known,omitempty"`
+	Terms      []Term `json:"terms,omitempty"`
+
 	DashRatio float64  `json:"dash_ratio,omitempty"`
 	Warnings  []Warn   `json:"warnings,omitempty"`
 	Verdict   string   `json:"verdict,omitempty"` // the deciding warning code, or "ok"
@@ -271,8 +280,9 @@ func (r *Report) DynShare() float64 {
 }
 
 // Upper is true when every count is an upper bound (a widened
-// sub-expression). Net new alone can be one too: NetMark.
-func (r *Report) Upper() bool { return len(r.Widened) > 0 }
+// sub-expression, or terms bounded by partial evaluation). Net new alone
+// can be one too: NetMark.
+func (r *Report) Upper() bool { return len(r.Widened) > 0 || r.Partial }
 
 // Window computes the default window: the last `days` days ending an
 // hour before now, on the hour (so repeated runs share a cache entry).
@@ -446,7 +456,8 @@ func Run(ctx context.Context, api API, in Input) (*Report, error) {
 	}
 	lists, uses := resolveLists(ctx, n, in.Lists, in.AccountID)
 	r.Lists = uses
-	c := translate(n, caps, lists)
+	c := translatePartial(n, caps, lists)
+	r.Terms = annotate(n, caps, lists)
 	if hasInfix(n) {
 		r.Warnings = append(r.Warnings, Warn{Code: WarnInfix})
 	}
@@ -459,6 +470,7 @@ func Run(ctx context.Context, api API, in Input) (*Report, error) {
 	r.Evaluable = true
 	r.Widened = c.approx
 	r.ASNBound = c.asn
+	r.Partial, r.Unknown = c.partial, c.unknown
 	position(ctx, &in, r)
 	labels := ruleLabels(in)
 
@@ -471,11 +483,24 @@ func Run(ctx context.Context, api API, in Input) (*Report, error) {
 	}
 	httpF := func(g gnode) cfapi.Filter { return cfapi.Filter{Where: where(and(clean, g))} }
 	full := c.http
+	// fullLow is the lower bound under partial evaluation (full itself
+	// otherwise): what is subtracted from net new must be certain, so it
+	// is read over the lower bound.
+	fullLow, fwLow := c.httpLow, c.fwLow
 	from, to := r.From, r.To
 
 	// Required: the zone's total and the matches.
 	x.do("total", func() (err error) { r.Total, err = api.Count(ctx, x.zone, from, to, httpF(gnode{all: true})); return })
 	x.do("matched", func() (err error) { r.Matched, err = api.Count(ctx, x.zone, from, to, httpF(full)); return })
+	if r.Partial && !fullLow.none && !fullLow.all {
+		x.do("matched_low", func() (err error) {
+			r.MatchedLow, err = api.Count(ctx, x.zone, from, to, httpF(fullLow))
+			r.LowKnown = err == nil
+			return
+		})
+	} else if r.Partial && fullLow.none {
+		r.LowKnown = true // nothing is certain to match: at least 0
+	}
 	x.do("dynamic", func() error {
 		d, err := api.Count(ctx, x.zone, from, to, cfapi.Filter{CacheStatus: "dynamic", Where: where(clean)})
 		r.Dynamic = d
@@ -492,7 +517,10 @@ func Run(ctx context.Context, api API, in Input) (*Report, error) {
 	core, exempt := split(n)
 	var coreG gnode
 	botExempt := false
-	if core != nil {
+	// Under partial evaluation the matches are a range; an exemption split
+	// on top of it would need ranges of ranges. The term annotations say
+	// what each branch is.
+	if core != nil && !r.Partial {
 		cc := translate(core, caps, lists)
 		if cc.httpOK {
 			r.HasCore = true
@@ -586,11 +614,13 @@ func Run(ctx context.Context, api API, in Input) (*Report, error) {
 			r.NetWhy = "firewall_retention"
 			break
 		}
-		fwWhere := where(and(clean, c.fw))
-		x.do("handled", func() (err error) {
-			fw, err = api.FirewallGroups(ctx, x.zone, fwFrom, to, "action ruleId", 100, cfapi.Filter{Where: fwWhere})
-			return
-		})
+		if !fwLow.none { // nothing certain to match: nothing certainly stopped
+			fwWhere := where(and(clean, fwLow))
+			x.do("handled", func() (err error) {
+				fw, err = api.FirewallGroups(ctx, x.zone, fwFrom, to, "action ruleId", 100, cfapi.Filter{Where: fwWhere})
+				return
+			})
+		}
 		if fwFrom.After(from) {
 			r.NetFrom = fwFrom
 			x.do("matched_net", func() (err error) { r.NetBase, err = api.Count(ctx, x.zone, fwFrom, to, httpF(full)); return })
@@ -623,7 +653,10 @@ func Run(ctx context.Context, api API, in Input) (*Report, error) {
 			}
 			r.Skips = append(r.Skips, row)
 			idx := len(r.Skips) - 1
-			g := and(full, sc.http)
+			g := and(fullLow, sc.http)
+			if g.none {
+				continue
+			}
 			skipJobs = append(skipJobs, skipJob{idx: idx, g: g})
 		}
 		for _, j := range skipJobs {
@@ -704,13 +737,17 @@ func Run(ctx context.Context, api API, in Input) (*Report, error) {
 			r.Net = 0
 		}
 		r.NetKnown = true
+		if r.Partial {
+			// upper matches − certainly stopped − certainly skipped: a bound.
+			r.NetUpper = true
+		}
 	} else if r.NetWhy == "" {
 		r.NetWhy = "firewall_error"
 	}
 
 	// Confidence.
 	switch {
-	case len(r.Widened) > 0, r.NetKnown && r.NetUpper:
+	case len(r.Widened) > 0, r.Partial, r.NetKnown && r.NetUpper:
 		r.Confidence = UpperBound
 	case r.NetKnown:
 		r.Confidence = ApproxJoined
@@ -911,6 +948,61 @@ func ruleLabels(in Input) map[string]string {
 		if x.ID != "" {
 			out[x.ID] = fmt.Sprintf("#%d %s", i+1, block.RuleLabel(x))
 		}
+	}
+	return out
+}
+
+// Term statuses.
+const (
+	TermExact       = "exact"       // evaluated (sampled)
+	TermWidened     = "widened"     // evaluated as a superset (the referer's host)
+	TermUnknown     = "unknown"     // bounded: matches (upper) / does not (lower)
+	TermUnsupported = "unsupported" // a plan gap or an invalid value: no numbers
+)
+
+// Term is one top-level term of the expression and how it was evaluated.
+type Term struct {
+	Expr   string `json:"expr"`
+	Status string `json:"status"`
+	Items  []Item `json:"items,omitempty"` // why it is not exact
+}
+
+// annotate evaluates each top-level term ("a and b and not c") on its own
+// and says how it is taken: the term-by-term reading of a mixed
+// expression. Nil for a single term that is evaluated exactly.
+func annotate(n waf.Node, caps cfapi.Caps, lists map[string]listRes) []Term {
+	var conj []waf.Node
+	var walk func(waf.Node)
+	walk = func(x waf.Node) {
+		if a, ok := x.(waf.And); ok {
+			walk(a.L)
+			walk(a.R)
+			return
+		}
+		conj = append(conj, x)
+	}
+	walk(n)
+	var out []Term
+	plain := true
+	for _, x := range conj {
+		h := &compiler{ds: dsHTTP, caps: caps, lists: lists, partial: true}
+		h.compile(x, false)
+		t := Term{Expr: x.String(), Status: TermExact}
+		switch {
+		case len(h.bad) > 0:
+			t.Status, t.Items = TermUnsupported, dedupe(h.bad)
+		case len(h.unknown) > 0:
+			t.Status, t.Items = TermUnknown, dedupe(h.unknown)
+		case len(h.approx) > 0:
+			t.Status, t.Items = TermWidened, dedupe(h.approx)
+		}
+		if t.Status != TermExact {
+			plain = false
+		}
+		out = append(out, t)
+	}
+	if plain {
+		return nil
 	}
 	return out
 }

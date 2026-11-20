@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"html"
 	"log"
+	"math"
 	"net/url"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -853,6 +855,7 @@ func (r *Runner) Daily(ctx context.Context, zone config.Zone) error {
 			}
 		}
 		d.BlockEffects = r.blockEffects(ctx, zone, w.From, w.To)
+		d.SimAccuracy = r.simAccuracy(ctx, zone)
 		if st, err := r.Store.Stats(z); err == nil {
 			d.Archive = &report.ArchiveInfo{Hours: st.Hours, Days: st.Days, Oldest: st.Oldest}
 			if samples, err := r.Store.SameHour(z, w.To.Add(-time.Hour), w.To, analyze.LongBaselineDays); err == nil {
@@ -1200,4 +1203,95 @@ func (r *Runner) blockEffects(ctx context.Context, zone config.Zone, from, to ti
 		out = append(out, report.BlockEffectLine{Target: target, Action: ev.Action, At: ev.At, Verdict: v})
 	}
 	return out
+}
+
+// simAccuracyDays is the look-back of the simulator's accuracy line.
+const simAccuracyDays = 30
+
+// simAccuracy records the outcome of every block confirmed after a
+// simulation once its hour after has settled (what the rule stopped, one
+// firewall query each, at most 10 per report), and sums the last 30 days
+// up: the simulator's prediction error stays visible.
+func (r *Runner) simAccuracy(ctx context.Context, zone config.Zone) *report.SimAccuracy {
+	if r.Store == nil {
+		return nil
+	}
+	now := r.now()
+	since := now.Add(-simAccuracyDays * 24 * time.Hour)
+	pend, err := r.Store.PendingSims(zone.ZoneID, since, 10)
+	if err != nil {
+		log.Printf("zone %s: simulator outcomes: %v", zone.Name, err)
+		return nil
+	}
+	caps := r.Caps(ctx, zone)
+	for _, p := range pend {
+		ev := p.Event
+		if ev.Op != "block" || now.Sub(ev.At) < time.Hour+r.Cfg.IntradayOffset() {
+			continue
+		}
+		t := block.Target{Type: block.Type(ev.Type), Value: ev.Value}
+		o := store.SimOutcome{EventID: ev.ID, Zone: zone.ZoneID, At: ev.At, Target: t.String(), Predicted: -1, Actual: -1}
+		if rep, err := sim.Decode(p.Sim); err == nil && rep.NetKnown {
+			o.Predicted, o.Upper = rep.NetPerHour(), rep.NetMark() == "≤"
+		}
+		if o.Predicted >= 0 && ev.RuleID != "" && caps.FirewallEnabled {
+			at := ev.At.Truncate(time.Minute)
+			n, err := block.Attempts(ctx, r.API, zone.ZoneID, ev.RuleID, t, at, at.Add(time.Hour))
+			if err != nil {
+				continue // try again with the next report
+			}
+			o.Actual = n
+		}
+		if !r.DryRun {
+			if err := r.Store.PutSimOutcome(o); err != nil {
+				log.Printf("zone %s: simulator outcome: %v", zone.Name, err)
+			}
+		}
+	}
+	outs, err := r.Store.SimOutcomes(zone.ZoneID, since)
+	if err != nil {
+		return nil
+	}
+	return SimAccuracyOf(outs, simAccuracyDays)
+}
+
+// SimAccuracyOf sums recorded outcomes up (nil when none had a prediction).
+func SimAccuracyOf(outs []store.SimOutcome, days int) *report.SimAccuracy {
+	a := &report.SimAccuracy{Days: days}
+	var devs []float64
+	for _, o := range outs {
+		if o.Predicted < 0 {
+			continue
+		}
+		a.Predicted++
+		if o.Upper {
+			a.Upper++
+		}
+		if o.Actual < 0 {
+			continue
+		}
+		a.Measured++
+		if o.Predicted < 1 {
+			continue // a deviation from ~0 says nothing
+		}
+		dev := (float64(o.Actual) - o.Predicted) / o.Predicted
+		devs = append(devs, dev)
+		if a.Worst == "" || math.Abs(dev) > math.Abs(a.WorstDev) {
+			a.Worst, a.WorstDev = o.Target, dev
+		}
+	}
+	if a.Predicted == 0 {
+		return nil
+	}
+	if len(devs) > 0 {
+		sort.Float64s(devs)
+		m := len(devs) / 2
+		a.MedianDev = devs[m]
+		if len(devs)%2 == 0 {
+			a.MedianDev = (devs[m-1] + devs[m]) / 2
+		}
+	} else {
+		a.Measured = 0 // measured, but no prediction above ~0 to compare
+	}
+	return a
 }

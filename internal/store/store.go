@@ -100,6 +100,16 @@ CREATE TABLE IF NOT EXISTS block_events (
 	actor      TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS block_events_target ON block_events (zone, type, value, id);
+CREATE TABLE IF NOT EXISTS sim_outcomes (
+	event_id    INTEGER PRIMARY KEY, -- block_events.id
+	zone        TEXT    NOT NULL,
+	at          INTEGER NOT NULL,    -- when the block was made
+	target      TEXT    NOT NULL,
+	predicted   REAL    NOT NULL,    -- net new per hour at review; -1: no prediction
+	upper       INTEGER NOT NULL,    -- 1: the prediction was an upper bound
+	actual      INTEGER NOT NULL,    -- stopped in the hour after; -1: not countable
+	measured_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS block_sims (
 	event_id INTEGER PRIMARY KEY, -- block_events.id
 	data     TEXT    NOT NULL     -- the rule simulation shown at review (sim.Report as JSON)
@@ -521,6 +531,92 @@ func (s *Store) AddBlockEventSim(e BlockEvent, sim []byte) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// PendingSim is a block made with a simulation whose outcome is not
+// recorded yet.
+type PendingSim struct {
+	Event BlockEvent
+	Sim   []byte
+}
+
+// PendingSims returns a zone's blocks since `since` that carry a
+// simulation and have no recorded outcome, oldest first.
+func (s *Store) PendingSims(zone string, since time.Time, limit int) ([]PendingSim, error) {
+	rows, err := s.db.Query(`SELECT `+prefixed("e.", eventCols)+`, b.data FROM block_events e
+		JOIN block_sims b ON b.event_id = e.id
+		LEFT JOIN sim_outcomes o ON o.event_id = e.id
+		WHERE e.zone = ? AND e.at >= ? AND o.event_id IS NULL ORDER BY e.id LIMIT ?`, zone, since.Unix(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PendingSim
+	for rows.Next() {
+		var p PendingSim
+		var at, exp int64
+		var data string
+		e := &p.Event
+		if err := rows.Scan(&e.ID, &at, &e.Zone, &e.Op, &e.Type, &e.Value, &e.Action, &e.Mechanism, &e.RuleID, &e.Reason, &exp, &e.Actor, &data); err != nil {
+			return nil, err
+		}
+		e.At = time.Unix(at, 0).UTC()
+		if exp > 0 {
+			e.ExpiresAt = time.Unix(exp, 0).UTC()
+		}
+		p.Sim = []byte(data)
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func prefixed(p, cols string) string {
+	parts := strings.Split(cols, ", ")
+	for i := range parts {
+		parts[i] = p + parts[i]
+	}
+	return strings.Join(parts, ", ")
+}
+
+// SimOutcome is a simulated block's prediction against what it stopped.
+type SimOutcome struct {
+	EventID   int64
+	Zone      string
+	At        time.Time
+	Target    string
+	Predicted float64 // net new per hour; < 0: no prediction
+	Upper     bool
+	Actual    int64 // < 0: not countable
+}
+
+// PutSimOutcome records an outcome (once per block).
+func (s *Store) PutSimOutcome(o SimOutcome) error {
+	_, err := s.db.Exec(`INSERT OR REPLACE INTO sim_outcomes (event_id, zone, at, target, predicted, upper, actual, measured_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, o.EventID, o.Zone, o.At.Unix(), o.Target, o.Predicted, map[bool]int{true: 1}[o.Upper], o.Actual, time.Now().Unix())
+	return err
+}
+
+// SimOutcomes returns a zone's recorded outcomes of blocks made since
+// `since`, oldest first.
+func (s *Store) SimOutcomes(zone string, since time.Time) ([]SimOutcome, error) {
+	rows, err := s.db.Query(`SELECT event_id, zone, at, target, predicted, upper, actual FROM sim_outcomes
+		WHERE zone = ? AND at >= ? ORDER BY at, event_id`, zone, since.Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SimOutcome
+	for rows.Next() {
+		var o SimOutcome
+		var at int64
+		var up int
+		if err := rows.Scan(&o.EventID, &o.Zone, &at, &o.Target, &o.Predicted, &up, &o.Actual); err != nil {
+			return nil, err
+		}
+		o.At, o.Upper = time.Unix(at, 0).UTC(), up == 1
+		out = append(out, o)
+	}
+	return out, rows.Err()
 }
 
 // BlockSim returns the rule simulation stored with a block record.

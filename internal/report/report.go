@@ -726,6 +726,19 @@ type BlockEffectLine struct {
 	Verdict        string
 }
 
+// SimAccuracy is the rule simulator's record: for blocks confirmed after a
+// simulation, the net new it predicted per hour against what the rule
+// stopped in the hour after.
+type SimAccuracy struct {
+	Days      int     // the look-back (30)
+	Predicted int     // blocks with a prediction
+	Measured  int     // … whose hour after was counted
+	Upper     int     // … of which the prediction was an upper bound
+	MedianDev float64 // median (actual − predicted) / predicted
+	Worst     string  // target with the widest deviation
+	WorstDev  float64
+}
+
 // BlockStatus is one active FlareHound block for the daily checkpoint.
 type BlockStatus struct {
 	Target     string
@@ -776,6 +789,7 @@ type DailyData struct {
 	Covered           map[string]analyze.RuleCover
 	Blocks            []BlockStatus
 	BlockEffects      []BlockEffectLine // blocks made in the window, before / after
+	SimAccuracy       *SimAccuracy      // rule simulator: predicted vs actual over 30 days
 	ActiveSince       time.Time
 	ActiveFingerprint string
 	Gaps              []string
@@ -795,6 +809,9 @@ func Daily(language string, d DailyData) string {
 		for _, x := range d.BlockEffects {
 			fmt.Fprintf(&b, l.t("  %s (%s, %s): %s\n", "  %s（%s，%s）：%s\n"), x.Target, x.Action, x.At.In(locOr(d.Loc)).Format("01-02 15:04"), x.Verdict)
 		}
+	}
+	if a := d.SimAccuracy; a != nil && a.Predicted > 0 {
+		b.WriteString(l.simAccuracy(*a))
 	}
 	for _, c := range d.Checkpoints {
 		if c.OriginReach > c.Max {
@@ -1049,4 +1066,20 @@ func (l lang) coverNote(c analyze.RuleCover) string {
 		return fmt.Sprintf(l.t(" — already blocked by rule #%d%s: this volume is blocked requests", "——已被规则 #%d%s拦截：此量为被拦下的请求"), c.Pos, desc)
 	}
 	return fmt.Sprintf(l.t(" — already challenged by rule #%d%s: this volume includes challenged requests", "——已被规则 #%d%s质询：此量包含被质询的请求"), c.Pos, desc)
+}
+
+// simAccuracy is the fixed line on the rule simulator's predictions.
+func (l lang) simAccuracy(a SimAccuracy) string {
+	s := fmt.Sprintf(l.t("- Rule simulator, last %d days: %d block(s) confirmed with a net-new prediction, %d measured",
+		"- 规则模拟器，近 %d 天：%d 次封锁带净新增预测，%d 次已计量"), a.Days, a.Predicted, a.Measured)
+	if a.Measured == 0 {
+		return s + l.t(" — nothing to compare yet (the hour after has not settled, or the rule has no firewall events).\n",
+			"——尚无可比数据（封后一小时未落定，或该规则无防火墙事件）。\n")
+	}
+	s += fmt.Sprintf(l.t(" — actual vs predicted per hour: median %+.0f%%, widest %+.0f%% (%s)",
+		"——实际对比预测（每小时）：中位偏差 %+.0f%%，最大偏差 %+.0f%%（%s）"), a.MedianDev*100, a.WorstDev*100, a.Worst)
+	if a.Upper > 0 {
+		s += fmt.Sprintf(l.t("; %d prediction(s) were upper bounds, so a shortfall there is expected", "；其中 %d 次预测为上界，实际偏低属预期"), a.Upper)
+	}
+	return s + l.t(".\n", "。\n")
 }

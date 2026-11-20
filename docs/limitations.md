@@ -45,7 +45,7 @@ See [Rule simulator](simulator.md). Its limits, before its features:
 - **Net new is a joined estimate.** Matches come from the HTTP requests dataset, "already stopped" and "skipped ahead" from the firewall events — two datasets, sampled differently. The rule's position needs Zone → WAF: Read on the read token; without it net new is counted against the whole rule set. A skip rule ahead that logs nothing and cannot be translated makes net new an upper bound.
 - **Challenge pass rates are a biased sample.** Only requests that met a challenge are in the firewall events: the range is a reference, not a prediction.
 - **`$lists`** are expanded only for IP and ASN lists the read token can read (Account → Account Filter Lists: Read), up to 1,000 single values; managed `$cf.…` lists, lists with ranges and hostname lists are not evaluable.
-- **Not evaluable at all:** headers, cookies, bodies, regular expressions, wildcards, threat and bot scores, rates, functions other than `starts_with` / `ends_with`, `$list` references and IP ranges. Such an expression gets no numbers, only the named sub-expressions.
+- **Not evaluable, only bounded:** headers, cookies, bodies, regular expressions, wildcards, threat and bot scores, rates, functions other than `starts_with` / `ends_with`, unexpandable `$list` references and IP ranges. A term like that is named and bounded (upper: matches, lower: does not); the counts become upper bounds, with a lower bound for the matches. When nothing evaluable narrows the expression (the upper bound is the whole zone), it gets no numbers at all.
 
 ## Scope
 

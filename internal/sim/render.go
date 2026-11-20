@@ -101,6 +101,8 @@ func LabelText(conf, lang string) string {
 		return t(lang, "approximate (includes a cross-dataset estimate)", "近似（含数据集拼接估计）")
 	case UpperBound:
 		return t(lang, "upper bound (includes sub-expressions that cannot be evaluated exactly)", "上界（含不可精确评估的子表达式）")
+	case "":
+		return t(lang, "not evaluable", "不可评估")
 	}
 	return t(lang, "not evaluable", "不可评估")
 }
@@ -246,7 +248,11 @@ func (r *Report) VerdictText(lang string) string {
 			}
 		}
 	} else {
-		fmt.Fprintf(&b, t(lang, "Matches %s", "命中 %s"), r.Bound(r.Matched))
+		if r.Partial && r.LowKnown {
+			fmt.Fprintf(&b, t(lang, "Matches between %s and ≤ %s", "命中介于 %s 与 ≤ %s 之间"), N(r.MatchedLow), N(r.Matched))
+		} else {
+			fmt.Fprintf(&b, t(lang, "Matches %s", "命中 %s"), r.Bound(r.Matched))
+		}
 	}
 	if r.NetKnown {
 		if r.NetFrom.IsZero() {
@@ -313,13 +319,18 @@ func (r *Report) Text(lang string, loc *time.Location) string {
 		for _, it := range r.Unevaluable {
 			p("  ✗ %s\n      %s\n", it.Expr, ReasonText(it, lang))
 		}
+		r.termsText(&b, lang)
 		for _, w := range r.Warnings {
 			p(t(lang, "  note: %s\n", "  提示：%s\n"), r.WarnText(w, lang))
 		}
 		return b.String()
 	}
-	for _, it := range r.Widened {
-		p(t(lang, "  ≤ %s\n      %s\n", "  ≤ %s\n      %s\n"), it.Expr, ReasonText(it, lang))
+	if len(r.Terms) > 0 {
+		r.termsText(&b, lang)
+	} else {
+		for _, it := range r.Widened {
+			p(t(lang, "  ≤ %s\n      %s\n", "  ≤ %s\n      %s\n"), it.Expr, ReasonText(it, lang))
+		}
 	}
 	for _, l := range r.Lists {
 		p(t(lang, "  $%s expanded: %s list, %d item(s)\n", "  已展开 $%s：%s 列表，%d 项\n"), l.Name, l.Kind, l.Items)
@@ -330,6 +341,13 @@ func (r *Report) Text(lang string, loc *time.Location) string {
 		p(t(lang, "   without its exemptions: %s, %s of all traffic\n", "   不计豁免分支：%s，占总量 %s\n"), r.Num(r.Gross, lang), Pct(r.Share(r.Gross)))
 	}
 	p(t(lang, "   rule matches:           %s, %s of all traffic", "   规则命中：    %s，占总量 %s"), r.Num(r.Matched, lang), Pct(r.Share(r.Matched)))
+	if r.Partial {
+		if r.LowKnown {
+			p(t(lang, "\n   at least:               %s (the unknown terms taken as not matching)", "\n   至少：        %s（不可评估子项按不命中计）"), N(r.MatchedLow))
+		} else {
+			b.WriteString(t(lang, "\n   at least:               not measured", "\n   至少：        未能测得"))
+		}
+	}
 	if r.DynamicKnown && r.Dynamic > 0 {
 		p(t(lang, ", %s of the dynamic (origin) traffic", "，占 dynamic（回源）%s"), Pct(r.DynShare()))
 	}
@@ -516,4 +534,48 @@ func (r *Report) ChallengeText(lang string) string {
 	return fmt.Sprintf(t(lang, "challenges already met by these requests: %s issued, %s solved, %s passed with an earlier clearance, %s failed — roughly %s–%s got through (reference only: the firewall events hold only requests that met a challenge)",
 		"这批请求已遇到的挑战：发出 %s、通过 %s、凭已有许可放行 %s、失败 %s——约 %s–%s 能过（仅作参考：防火墙事件只含遇到过挑战的请求，是有偏样本）"),
 		N(c.Issued), N(c.Solved), N(c.Bypassed), N(c.Failed), Pct(lo), Pct(hi))
+}
+
+// TermMark is a term status's sign in the annotations.
+func TermMark(status string) string {
+	switch status {
+	case TermExact:
+		return "✓"
+	case TermWidened:
+		return "≤"
+	case TermUnknown:
+		return "?"
+	}
+	return "✗"
+}
+
+// TermText says how a term was taken.
+func TermText(status, lang string) string {
+	switch status {
+	case TermExact:
+		return t(lang, "evaluated", "已评估")
+	case TermWidened:
+		return t(lang, "evaluated as a superset", "按放宽的超集评估")
+	case TermUnknown:
+		return t(lang, "cannot be evaluated: counted as matching for the upper bound, as not matching for the lower bound",
+			"不可评估：上界按命中计，下界按不命中计")
+	}
+	return t(lang, "not supported here: no numbers", "此处不支持：不给数")
+}
+
+func (r *Report) termsText(b *strings.Builder, lang string) {
+	if len(r.Terms) == 0 {
+		return
+	}
+	b.WriteString(t(lang, "\nTerm by term:\n", "\n子项标注：\n"))
+	for _, tm := range r.Terms {
+		fmt.Fprintf(b, "  %s %s\n      %s\n", TermMark(tm.Status), tm.Expr, TermText(tm.Status, lang))
+		for _, it := range tm.Items {
+			if it.Expr != tm.Expr {
+				fmt.Fprintf(b, "      · %s — %s\n", it.Expr, ReasonText(it, lang))
+			} else {
+				fmt.Fprintf(b, "      · %s\n", ReasonText(it, lang))
+			}
+		}
+	}
 }

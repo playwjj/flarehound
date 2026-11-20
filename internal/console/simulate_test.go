@@ -176,3 +176,15 @@ func TestSimulateKnownFromOverlay(t *testing.T) {
 		t.Fatalf("overlay known face not used:\n%s", body)
 	}
 }
+
+func TestSimulatePartialPage(t *testing.T) {
+	e := newWriteEnv(t, false)
+	e.srv.Analytics = simLive{}
+	q := url.Values{"expr": {`ip.geoip.asnum eq 24940 and http.cookie contains "sess"`}, "lang": {"en"}}
+	_, body, _ := e.admin.do("GET", "/simulate?"+q.Encode(), nil, nil)
+	for _, want := range []string{"Term by term", "counted as matching for the upper bound", "Matches between 0 and ≤ 45,000", "upper bound"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("partial page lacks %q", want)
+		}
+	}
+}
