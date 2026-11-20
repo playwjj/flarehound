@@ -8,7 +8,7 @@ copyright: MIT © 2026 playwjj
 
 theme:
   name: material
-  logo: logo.png
+  logo: assets/logo-header.png  # logo.png trimmed of its transparent border
   favicon: logo.png
   features:
     - navigation.sections
@@ -22,6 +22,9 @@ theme:
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
       toggle: { icon: material/weather-sunny, name: Light mode }
+
+extra_css:
+  - stylesheets/extra.css
 
 plugins:
   - search
