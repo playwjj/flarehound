@@ -8,6 +8,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/playwjj/flarehound/internal/purpose"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -298,6 +299,10 @@ type Config struct {
 	// ASNNames are short names for networks ("45102": "aliyun"), used in
 	// notifications and the console instead of the registered name.
 	ASNNames map[string]string `json:"asn_names"`
+	// Purposes re-files user agents in the traffic-by-purpose facet
+	// ("SomeBot": "tool"; "none" removes one): UA substring → class.
+	// They take precedence over the built-in table.
+	Purposes map[string]string `json:"purposes"`
 	Report   struct {
 		Language string `json:"language"` // "en" | "zh"
 		// Visuals attaches charts (Telegram, Discord, WeCom, email, JSONL)
@@ -612,6 +617,11 @@ func (c *Config) resolve() error {
 			return fmt.Errorf("config: asn_names: %w", err)
 		}
 	}
+	for k, v := range c.Purposes {
+		if err := CheckPurpose(k, v); err != nil {
+			return fmt.Errorf("config: purposes: %w", err)
+		}
+	}
 	if c.Archive.File == "" {
 		c.Archive.File = filepath.Join(c.DataDir(), "archive.db")
 	}
@@ -776,6 +786,20 @@ func checkASNName(k, v string) error {
 	}
 	return nil
 }
+
+// CheckPurpose validates one purposes entry (UA substring → class).
+func CheckPurpose(ua, class string) error {
+	if n := len(strings.TrimSpace(ua)); n < 3 || n > 300 {
+		return fmt.Errorf("%q: a user agent marker needs 3–300 characters", ua)
+	}
+	if !purpose.Valid(purpose.Class(strings.TrimSpace(class))) {
+		return fmt.Errorf("%q: unknown purpose %q (training, search, user_action, tool, mixed, undeclared, none)", ua, class)
+	}
+	return nil
+}
+
+// PurposeTable is the traffic-by-purpose table with this config's overrides.
+func (c *Config) PurposeTable() *purpose.Table { return purpose.New(c.Purposes) }
 
 // ASNLabels returns the operator's short ASN names, by number.
 func (c *Config) ASNLabels() map[int]string {

@@ -10,6 +10,7 @@ package analyze
 
 import (
 	"fmt"
+	"github.com/playwjj/flarehound/internal/purpose"
 	"sort"
 	"strconv"
 	"strings"
@@ -185,6 +186,9 @@ type Finding struct {
 	Base    float64 `json:"base"`
 	Pct     float64 `json:"pct"`
 	Down    bool    `json:"down,omitempty"` // collapse-type: lower is worse
+	// Purpose labels a new user agent (traffic by purpose), set by the
+	// caller after evaluation; nil: not labelled.
+	Purpose *purpose.Label `json:"purpose,omitempty"`
 }
 
 // Key identifies the signal across rounds. New-face UAs share one key on

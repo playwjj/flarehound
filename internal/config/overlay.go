@@ -71,12 +71,15 @@ type Overlay struct {
 	KnownUAs  []string `json:"known_user_agents,omitempty"`
 	// ASNNames sets short names for networks (on top of asn_names).
 	ASNNames map[string]string `json:"asn_names,omitempty"`
+	// Purposes re-files user agents in the traffic-by-purpose facet (on
+	// top of purposes; an entry here replaces the same marker there).
+	Purposes map[string]string `json:"purposes,omitempty"`
 }
 
 // Empty reports whether the overlay changes nothing.
 func (o *Overlay) Empty() bool {
 	return o == nil || (len(o.Notify) == 0 && o.Email == nil && len(o.Disabled) == 0 && o.Thresholds == nil &&
-		len(o.KnownASNs) == 0 && len(o.KnownUAs) == 0 && len(o.ASNNames) == 0)
+		len(o.KnownASNs) == 0 && len(o.KnownUAs) == 0 && len(o.ASNNames) == 0 && len(o.Purposes) == 0)
 }
 
 // IsDisabled reports whether a channel is turned off by the overlay.
@@ -296,6 +299,20 @@ func (c *Config) apply(o *Overlay) error {
 		}
 		n, _ := strconv.Atoi(strings.TrimPrefix(strings.ToUpper(k), "AS"))
 		c.ASNNames[strconv.Itoa(n)] = strings.TrimSpace(v)
+	}
+	for k, v := range o.Purposes {
+		if err := CheckPurpose(k, v); err != nil {
+			return fmt.Errorf("settings: purposes: %w", err)
+		}
+		if c.Purposes == nil {
+			c.Purposes = map[string]string{}
+		}
+		for b := range c.Purposes { // the same marker in another spelling
+			if strings.EqualFold(b, strings.TrimSpace(k)) {
+				delete(c.Purposes, b)
+			}
+		}
+		c.Purposes[strings.TrimSpace(k)] = strings.TrimSpace(v)
 	}
 	c.Overlay = o
 	return nil

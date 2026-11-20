@@ -35,6 +35,8 @@ const blockUsage = `Commands:
   flarehound geoip update [-o PATH]                download the newest DB-IP country library (IP location)
   flarehound simulate --expr '<WAF expression>' [--action block|challenge] [--days 7|1] [--date YYYY-MM-DD] [--before N] [--json]
                                                    replay a draft rule against recent traffic (read token; changes nothing)
+  flarehound purpose [--hours 24] [--asn N]        traffic by purpose (training, search, user-triggered, tools, mixed,
+                                                   undeclared automation) for the zone or one network (read token)
 
 Blocking commands (separate write token, see README):
 
@@ -48,7 +50,7 @@ Common flags: -config PATH, --zone NAME|ID (required when several zones are conf
 
 // subcommands lists the verbs main dispatches here.
 var subcommands = map[string]bool{"audit": true, "calibrate": true, "doctor": true, "health": true, "block": true, "unblock": true, "blocks": true, "enforce": true, "help": true,
-	"rules": true, "ratelimit": true, "cache": true, "simulate": true}
+	"rules": true, "ratelimit": true, "cache": true, "simulate": true, "purpose": true}
 
 // splitArgs separates leading positionals from flags so flags may follow
 // the positionals ("block asn 207990 --for 24h").
@@ -137,6 +139,8 @@ func runSubcommand(ctx context.Context, cfgPath, verb string, args []string, red
 	fs.StringVar(&rf.secretEnv, "secret-env", "", "rules recipe: environment variable holding the secret header value")
 	simDate := fs.String("date", "", "simulate: one local day (YYYY-MM-DD) instead of the last --days")
 	simJSON := fs.Bool("json", false, "simulate: print the report as JSON")
+	pHours := fs.Int("hours", 24, "purpose: the last N whole hours (1..168)")
+	pASN := fs.Int("asn", 0, "purpose: one network's slice of the traffic")
 	if err := fs.Parse(rest); err != nil {
 		return 2
 	}
@@ -225,6 +229,22 @@ func runSubcommand(ctx context.Context, cfgPath, verb string, args []string, red
 			fmt.Println()
 		}
 		return code
+	}
+
+	if verb == "purpose" { // read-only: never touches the write token
+		z, err := pickZone(cfg, *zoneArg)
+		if err != nil {
+			return fail(err)
+		}
+		var st *store.Store
+		if !cfg.Archive.Disabled { // registered ASN names only; optional
+			if st, err = store.Open(cfg.Archive.File); err == nil {
+				defer st.Close()
+			} else {
+				st = nil
+			}
+		}
+		return runPurpose(ctx, cfg, z, st, cfapi.New(cfg.APIToken), *pHours, *pASN, time.Now(), os.Stdout)
 	}
 
 	if verb == "simulate" { // read-only: never touches the write token

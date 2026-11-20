@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/playwjj/flarehound/internal/purpose"
 	"html"
 	"log"
 	"math"
@@ -600,6 +601,7 @@ func (r *Runner) Intraday(ctx context.Context, zone config.Zone) error {
 				samples.Of(analyze.RuleMetric(f.Rule), f.Subject), th.BaselineMinSamples)
 		}
 	}
+	findings, _ = r.labelFaces(ctx, zone, w, findings)
 	var attr analyze.Attribution
 	findings, attr.VerifiedBots, attr.Impostors = r.verifyBots(ctx, zone, w, findings)
 	attr.FaceHistory, attr.ArchiveDays = r.faceHistory(zone, findings)
@@ -750,6 +752,7 @@ func (r *Runner) Daily(ctx context.Context, zone config.Zone) error {
 	th := Thresholds(cfg)
 	d := report.DailyData{Zone: zone.Name, Window: w, Loc: cfg.Location, Cur: cur, Base: base, UnreachableMin: th.UnreachableMin}
 	d.Findings = analyze.Evaluate(cur, base, th, known(cfg))
+	d.Findings, d.RecordedFaces = r.labelFaces(ctx, zone, w, d.Findings)
 	d.Findings, d.VerifiedBots, d.Impostors = r.verifyBots(ctx, zone, w, d.Findings)
 	// A full day is settled data; collapse needs no settle re-read here.
 
@@ -787,6 +790,8 @@ func (r *Runner) Daily(ctx context.Context, zone config.Zone) error {
 	if !caps.HasDim(cfapi.DimASN) {
 		d.NoASN = true
 	}
+	d.Purpose, err = r.purposeData(ctx, zone, w, bw, cur, base)
+	logErr("traffic by purpose", err)
 
 	// Suggestions: the same engine as intraday, on the day's evidence.
 	// No per-IP data here, so rate-limit advice (which needs it) cannot fire.
@@ -1294,4 +1299,103 @@ func SimAccuracyOf(outs []store.SimOutcome, days int) *report.SimAccuracy {
 		a.Measured = 0 // measured, but no prediction above ~0 to compare
 	}
 	return a
+}
+
+// hostingFn judges networks for undeclared automation: the built-in
+// network table first, then the registered names the archive recorded.
+func (r *Runner) hostingFn() func(int) bool {
+	var names map[int]string
+	if r.Store != nil {
+		names, _ = r.Store.ASNNames()
+	}
+	return func(asn int) bool { return suggest.Classify(asn, names[asn]) == suggest.Hosting }
+}
+
+// purposeFacet reads one window's UA groups and classifies them.
+func (r *Runner) purposeFacet(ctx context.Context, zone config.Zone, t *purpose.Table, from, to time.Time, hosting func(int) bool) (purpose.Facet, error) {
+	dim := r.Caps(ctx, zone).UAPurposeDim()
+	rows, err := r.API.Top(ctx, zone.ZoneID, from, to, dim, purpose.RowLimit, cfapi.Filter{})
+	if err != nil {
+		return purpose.Facet{}, err
+	}
+	return t.Facet(purpose.RowsOf(rows), purpose.OptionsFor(dim, hosting)), nil
+}
+
+// purposeData is the daily report's traffic by purpose; nil when the
+// table is off (the report is then exactly as before) or the window
+// could not be read.
+func (r *Runner) purposeData(ctx context.Context, zone config.Zone, w, bw schedule.Window, cur, base analyze.Metrics) (*report.PurposeData, error) {
+	t := r.Cfg.PurposeTable()
+	if !t.OK() {
+		return nil, nil
+	}
+	hosting := r.hostingFn()
+	cf, err := r.purposeFacet(ctx, zone, t, w.From, w.To, hosting)
+	if err != nil {
+		return nil, err
+	}
+	p := &report.PurposeData{Version: t.Version(), Overrides: t.Overrides(), Cur: cf, CurTotal: cur.Total, BaseTotal: base.Total,
+		ASNLabels: r.asnDisplayNames()}
+	if p.Base, err = r.purposeFacet(ctx, zone, t, bw.From, bw.To, hosting); err != nil {
+		p.BaseNA = true
+	}
+	return p, nil
+}
+
+// asnDisplayNames is the operator's short names over the registered ones.
+func (r *Runner) asnDisplayNames() map[int]string {
+	out := map[int]string{}
+	if r.Store != nil {
+		if names, err := r.Store.ASNNames(); err == nil {
+			for k, v := range names {
+				out[k] = v
+			}
+		}
+	}
+	for k, v := range r.Cfg.ASNLabels() {
+		out[k] = v
+	}
+	return out
+}
+
+// labelFaces gives new user agents their purpose (from the table, and
+// from the UA's own traffic for verification and undeclared automation)
+// and takes new training crawlers out of the alert: they are recorded —
+// archived like every face, logged, listed in the daily report — but do
+// not escalate. Only a training label that is verified, or that the plan
+// cannot verify, is taken out: a self-declared, unverified "GPTBot" may
+// be anyone and alerts as before. No threshold changes.
+func (r *Runner) labelFaces(ctx context.Context, zone config.Zone, w schedule.Window, fs []analyze.Finding) (kept, recorded []analyze.Finding) {
+	t := r.Cfg.PurposeTable()
+	if !t.OK() {
+		return fs, nil
+	}
+	dim := r.Caps(ctx, zone).UAPurposeDim()
+	var hosting func(int) bool
+	for _, f := range fs {
+		if f.Rule != analyze.RuleNewFaceUA {
+			kept = append(kept, f)
+			continue
+		}
+		if hosting == nil {
+			hosting = r.hostingFn()
+		}
+		o := purpose.OptionsFor(dim, hosting)
+		rows, err := r.API.Top(ctx, zone.ZoneID, w.From, w.To, dim, 50, cfapi.Filter{UserAgent: f.Subject})
+		if err != nil {
+			log.Printf("zone %s: purpose of %q: %v", zone.Name, f.Subject, err)
+			rows, o = nil, purpose.Options{}
+		}
+		if lb, ok := t.Classify(f.Subject, purpose.RowsOf(rows), o); ok {
+			lb := lb
+			f.Purpose = &lb
+			if lb.Class == purpose.Training && (lb.Trust == purpose.Verified || !o.HasBot) {
+				log.Printf("zone %s: new face %q is a training crawler (%s, %s): recorded, not escalated", zone.Name, f.Subject, lb.Operator, lb.Trust)
+				recorded = append(recorded, f)
+				continue
+			}
+		}
+		kept = append(kept, f)
+	}
+	return kept, recorded
 }

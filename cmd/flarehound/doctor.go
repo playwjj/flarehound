@@ -96,6 +96,7 @@ func runDoctor(ctx context.Context, cfg *config.Config, cfgPath string, out io.W
 		d.warn("no heartbeat ping URL (notify.heartbeat_url_env): nobody outside notices if the watchdog dies")
 	}
 	doctorGeoIP(d, cfg)
+	doctorPurpose(d, cfg)
 
 	read := cfapi.New(cfg.APIToken)
 	wt := os.Getenv(cfg.Blocking.WriteTokenEnv)
@@ -526,4 +527,15 @@ func simulatorRow(caps cfapi.Caps, err error, analytics, rules, lists bool) stri
 		s += " ($lists: account_id and Account → Account Filter Lists: Read on the read token)"
 	}
 	return s
+}
+
+// doctorPurpose reports the traffic-by-purpose table: its version and
+// size, the overrides in effect; off (and why) when the table is broken.
+func doctorPurpose(d *doctorOut, cfg *config.Config) {
+	t := cfg.PurposeTable()
+	if !t.OK() {
+		d.warn("traffic by purpose off: %v (reports, console and alerts behave as without it)", t.Err())
+		return
+	}
+	d.ok("traffic by purpose: built-in table %s, %d entries; %d override(s)", t.Version(), t.Size(), t.Overrides())
 }

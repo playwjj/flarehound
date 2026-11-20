@@ -35,6 +35,7 @@ flarehound -config config.json -backfill 28
 | `health [--file heartbeat] [--max-age D]` | — | Exit 0 if the heartbeat is fresh ([heartbeat](channels.md#heartbeat-dead-man-switch)) |
 | `audit` | read | [WAF audit](audit.md) |
 | `calibrate [--days 7]` | read | [Calibration](archive.md#calibration) |
+| `purpose [--hours 24] [--asn N]` | read | [Traffic by purpose](purpose.md) for the zone or one network's slice, against the same hours a day earlier |
 | `simulate --expr EXPR [--action block|challenge] [--days 7|1] [--date YYYY-MM-DD] [--before N] [--json]` | read | [Rule simulator](simulator.md) — replay a draft rule against recent traffic; changes nothing |
 | `block <ip|asn|country|ua> <value> […]` | write | [Blocking](blocking.md) |
 | `unblock <ip|asn|country|ua> <value> [--yes]` | write | [Blocking](blocking.md) |

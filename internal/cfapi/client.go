@@ -284,6 +284,12 @@ const (
 	// DimASNNamed groups by network with its registered name: ASN set,
 	// Name "AS15169", Desc the registered name.
 	DimASNNamed = "clientAsn clientASNDescription"
+	// User-agent groupings with more (traffic by purpose): one row per
+	// UA × network × verified-bot category, Name the UA, ASN its network,
+	// Cat the category ("" when not a verified bot).
+	DimUAASNBot = "userAgent clientAsn verifiedBotCategory"
+	DimUAASN    = "userAgent clientAsn"
+	DimUABot    = "userAgent verifiedBotCategory"
 )
 
 // Status dimensions: what the origin answered, and what the edge answered
@@ -316,10 +322,18 @@ func (c *Client) Top(ctx context.Context, zoneID string, from, to time.Time, dim
 	if err != nil {
 		return nil, err
 	}
-	if strings.HasPrefix(dim, DimClientIP+" ") {
+	if strings.HasPrefix(dim, DimClientIP+" ") || strings.HasPrefix(dim, DimUserAgent+" ") {
+		key := DimClientIP
+		if strings.HasPrefix(dim, DimUserAgent+" ") {
+			key = DimUserAgent
+		}
 		out := make([]Face, 0, len(rows))
 		for _, r := range rows {
-			f := Face{Name: fmt.Sprint(r.Dimensions[DimClientIP]), Count: r.Count}
+			name, _ := r.Dimensions[key].(string)
+			if key == DimClientIP {
+				name = fmt.Sprint(r.Dimensions[key])
+			}
+			f := Face{Name: name, Count: r.Count}
 			f.ASN, _ = asnOf(r.Dimensions[DimASN])
 			f.Cat, _ = r.Dimensions[DimVerifiedBot].(string)
 			out = append(out, f)
@@ -537,6 +551,22 @@ func (c Caps) ClientIPDim() string {
 		return DimClientIPBot
 	}
 	return DimClientIP
+}
+
+// UAPurposeDim is the richest user-agent grouping the plan supports for
+// traffic by purpose: with network (undeclared automation needs it) and
+// verified-bot category (verified labels need it) where available.
+func (c Caps) UAPurposeDim() string {
+	asn, bot := c.HasDim(DimASN), c.HasDim(DimVerifiedBot)
+	switch {
+	case asn && bot:
+		return DimUAASNBot
+	case asn:
+		return DimUAASN
+	case bot:
+		return DimUABot
+	}
+	return DimUserAgent
 }
 
 // SplitBots separates Cloudflare-verified bots (Cat set) from the other

@@ -64,6 +64,7 @@ type Drill struct {
 	From, To, PrevFrom time.Time
 	Cur, Prev          int64
 	Sections           []DrillSection
+	Purpose            *DrillPurpose // traffic by purpose (UA and ASN entries)
 	Err                string
 	At                 time.Time
 }
@@ -223,6 +224,9 @@ func (s *Server) drill(ctx context.Context, z config.Zone, dim, name string, fro
 	qctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	d := buildDrill(qctx, s.Analytics, z, dim, name, from, to)
+	if d.Err == "" {
+		d.Purpose = s.drillPurpose(qctx, z, d)
+	}
 	d.At = s.Now()
 	e.d = d
 	return d

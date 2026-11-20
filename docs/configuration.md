@@ -221,9 +221,19 @@ Short names for networks, used in notifications and the console instead of the r
 
 Names can also be set in the console (Settings → Network names, or *name it* next to any ASN).
 
+## purposes
+
+Re-files user agents in the [traffic-by-purpose](purpose.md) facet: a case-insensitive UA substring and its class — `training`, `search`, `user_action`, `tool`, `mixed`, `undeclared`, or `none` to remove it from every class. Overrides win over the built-in table.
+
+```json
+"purposes": { "rednote-websearch-bot": "search", "MyPartnerFetcher": "tool", "GPTBot": "none" }
+```
+
+Overrides can also be set in the console (Settings → Network names → Traffic purposes).
+
 ## Settings changed in the console
 
-Notifications (channel switches, non-secret parameters, variable names), `thresholds`, `known_faces` additions and `asn_names` can be changed in the console. Those changes live in `settings.json` in the data directory and are applied on top of this file at every load; the watch re-reads them before each round. This file is never modified. See [Web console → Settings](console.md#settings).
+Notifications (channel switches, non-secret parameters, variable names), `thresholds`, `known_faces` additions, `asn_names` and `purposes` can be changed in the console. Those changes live in `settings.json` in the data directory and are applied on top of this file at every load; the watch re-reads them before each round. This file is never modified. See [Web console → Settings](console.md#settings).
 
 ## Environment variables at a glance
 

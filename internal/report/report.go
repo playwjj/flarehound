@@ -131,7 +131,7 @@ func (l lang) finding(f analyze.Finding) string {
 		return fmt.Sprintf(l.t("Path rule %q ", "路径规则 %q "), f.Subject) + l.change(cur, base)
 	case analyze.RuleNewFaceUA:
 		return fmt.Sprintf(l.t("New user agent in Top 10: %q, %s requests (not in yesterday's Top 25)", "新面孔 UA 进入 Top 10：%q，%s 次（不在昨日 Top 25）"),
-			l.uaName(f.Subject, 80), n(cur))
+			l.uaName(f.Subject, 80), n(cur)) + l.purposeTag(f.Purpose)
 	case analyze.RuleNewFaceASN:
 		return fmt.Sprintf(l.t("New ASN in Top 10: %s, %s requests (not in yesterday's Top 25)", "新面孔 ASN 进入 Top 10：%s，%s 次（不在昨日 Top 25）"),
 			f.Subject, n(cur))
@@ -794,6 +794,9 @@ type DailyData struct {
 	ActiveFingerprint string
 	Gaps              []string
 	UnreachableMin    int64 // thresholds.unreachable_min (the 52x judgement's floor)
+	// RecordedFaces are new training crawlers: recorded, not alerted on.
+	RecordedFaces []analyze.Finding
+	Purpose       *PurposeData // traffic by purpose; nil: table off or not measured
 }
 
 // Daily renders the daily report.
@@ -826,6 +829,7 @@ func Daily(language string, d DailyData) string {
 	default:
 		fmt.Fprintf(&b, l.t("Checkpoint over limit: %s\n", "检查点超限：%s\n"), strings.Join(warn, ", "))
 	}
+	b.WriteString(l.purposeShifts(d.Purpose))
 	fmt.Fprintf(&b, "%s %s\n\n", l.t("Window", "窗口"), l.window(d.Window, d.Loc))
 
 	l.twoWindows(&b, d.Cur, d.Base, l.t("vs previous 24h", "对比前 24 小时"), d.UnreachableMin)
@@ -870,6 +874,10 @@ func Daily(language string, d DailyData) string {
 	for _, im := range d.Impostors {
 		fmt.Fprintf(&b, "- %s\n", l.impostor(im))
 	}
+	for _, f := range d.RecordedFaces {
+		fmt.Fprintf(&b, "- %s\n", l.recordedFace(f))
+	}
+	l.purposeSection(&b, d.Purpose)
 
 	b.WriteString("\n" + l.t("Checkpoints:\n", "固定检查点：\n"))
 	switch {

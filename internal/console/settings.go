@@ -296,6 +296,9 @@ func (s *Server) parseChange(r *http.Request) (settingsChange, error) {
 	case "asn_name":
 		keep("asn")
 		keep("name")
+	case "purpose":
+		keep("ua")
+		keep("class")
 	case "restore":
 		keep("version")
 	default:
@@ -493,6 +496,24 @@ func (s *Server) candidate(c settingsChange, cur *config.Overlay, base *config.C
 			names = nil
 		}
 		o.ASNNames = names
+	case "purpose":
+		ua := strings.TrimSpace(f["ua"])
+		ps := map[string]string{}
+		for k, v := range cur.Purposes {
+			if !strings.EqualFold(k, ua) {
+				ps[k] = v
+			}
+		}
+		if cl := strings.TrimSpace(f["class"]); cl != "" {
+			if err := config.CheckPurpose(ua, cl); err != nil {
+				return nil, err
+			}
+			ps[ua] = cl
+		}
+		if len(ps) == 0 {
+			ps = nil
+		}
+		o.Purposes = ps
 	case "restore":
 		v, err := strconv.Atoi(f["version"])
 		if err != nil {
@@ -589,6 +610,9 @@ func diffLines(l lang, before, after *config.Config, ob, oa *config.Overlay) []s
 	if !reflect.DeepEqual(before.ASNLabels(), after.ASNLabels()) {
 		add("asn_names: %v → %v", before.ASNLabels(), after.ASNLabels())
 	}
+	if !reflect.DeepEqual(before.Purposes, after.Purposes) && !(len(before.Purposes) == 0 && len(after.Purposes) == 0) {
+		add("purposes: %v → %v", before.Purposes, after.Purposes)
+	}
 	if !reflect.DeepEqual(before.KnownFaces, after.KnownFaces) {
 		add("known_faces.asns: %v → %v", before.KnownFaces.ASNs, after.KnownFaces.ASNs)
 		add("known_faces.user_agents: %q → %q", before.KnownFaces.UserAgents, after.KnownFaces.UserAgents)
@@ -667,7 +691,7 @@ func (s *Server) settingsApply(w http.ResponseWriter, r *http.Request) {
 		s.renderSettingsReview(w, r, err.Error())
 		return
 	}
-	back := map[string]string{"notify": "/settings/notify", "thresholds": "/settings/thresholds", "restore": "/settings/history", "asn_name": "/settings/asn"}[c.Kind]
+	back := map[string]string{"notify": "/settings/notify", "thresholds": "/settings/thresholds", "restore": "/settings/history", "asn_name": "/settings/asn", "purpose": "/settings/asn"}[c.Kind]
 	if back == "" {
 		back = "/settings/known"
 	}
@@ -942,6 +966,19 @@ func (s *Server) asnNamePage(w http.ResponseWriter, r *http.Request) {
 		p.Next = "/settings/asn"
 	}
 	s.render(w, r, http.StatusOK, "asn_name", p)
+}
+
+// purposePost sets (or, with no class, removes) a purpose override:
+// step-up, audited like every settings change.
+func (s *Server) purposePost(w http.ResponseWriter, r *http.Request) {
+	l := s.L(r)
+	c := settingsChange{Kind: "purpose", Base: s.overlay().Version,
+		Fields: map[string]string{"ua": strings.TrimSpace(truncate(r.PostFormValue("ua"), 300)), "class": strings.TrimSpace(r.PostFormValue("class"))}}
+	msg := l.t("settings_saved")
+	if err := s.saveChange(r, c); err != nil {
+		msg = err.Error()
+	}
+	http.Redirect(w, r, "/settings/asn?ok="+url.QueryEscape(msg), http.StatusSeeOther)
 }
 
 // asnNamePost saves (or, empty, removes) a short name: step-up, audited.

@@ -221,9 +221,19 @@ Web 控制台（v1.3，只读）——见 [Web 控制台](console.md)。
 
 也可以在控制台中设置名称（设置 → ASN 名称，或任意 ASN 旁边的*命名*）。
 
+## purposes {#purposes}
+
+在[流量用途](purpose.md)分面中改判 UA：UA 子串（不区分大小写）与类别——`training`、`search`、`user_action`、`tool`、`mixed`、`undeclared`，或 `none`（从所有类别移除）。覆盖优先于内置映射表。
+
+```json
+"purposes": { "rednote-websearch-bot": "search", "MyPartnerFetcher": "tool", "GPTBot": "none" }
+```
+
+也可以在控制台中设置（设置 → ASN 名称 → 流量用途）。
+
 ## 在控制台中修改的设置 {#settings-changed-in-the-console}
 
-通知（渠道开关、非密钥参数、变量名）、`thresholds`、`known_faces` 的新增项以及 `asn_names` 都可以在控制台中修改。这些修改保存在数据目录下的 `settings.json` 中，每次加载时叠加在本文件之上；看守在每轮开始前重新读取它们。本文件从不会被修改。见 [Web 控制台 → 设置](console.md#settings)。
+通知（渠道开关、非密钥参数、变量名）、`thresholds`、`known_faces` 的新增项、`asn_names` 以及 `purposes` 都可以在控制台中修改。这些修改保存在数据目录下的 `settings.json` 中，每次加载时叠加在本文件之上；看守在每轮开始前重新读取它们。本文件从不会被修改。见 [Web 控制台 → 设置](console.md#settings)。
 
 ## 环境变量一览 {#environment-variables-at-a-glance}
 

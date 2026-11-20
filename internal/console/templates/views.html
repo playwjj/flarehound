@@ -55,14 +55,16 @@
 <td class="r share"><span>{{printf "%.1f%%" .Share}}</span><i class="bar" style="width: {{printf "%.1f" .Share}}%"></i></td></tr>{{end}}
 </tbody></table>{{end}}
 
-{{define "blockedname"}}{{$p := index . 0}}{{$dim := index . 1}}{{$name := index . 2}}{{if or $p.Snapshot (not (drillable $dim $name))}}<span class="mono" title="{{$name}}">{{short $name 80}}</span>{{else}}<a class="mono" title="{{$name}}" href="/movers/drill?z={{$p.Zone.Name}}&amp;dim={{$dim}}&amp;name={{$name}}">{{short $name 80}}</a>{{end}}{{end}}
+{{define "ptag"}}{{with .}} <span class="tag purpose p-{{.Class}}" title="{{.Title}}">{{.Text}}</span>{{end}}{{end}}
+{{define "purposenav"}}{{$p := index . 0}}{{$base := index . 1}}<nav class="seg small{{if $p.Snapshot}} hide{{end}}"><a href="{{$base}}"{{if not $p.Purpose}} class="on"{{end}}>{{t "purpose_all"}}</a>{{range purposeClasses}}<a href="{{$base}}&amp;purpose={{.}}"{{if eq $p.Purpose .}} class="on"{{end}}>{{className .}}</a>{{end}}</nav>{{end}}
+{{define "blockedname"}}{{$p := index . 0}}{{$dim := index . 1}}{{$name := index . 2}}{{if or $p.Snapshot (not (drillable $dim $name))}}<span class="mono" title="{{$name}}">{{short $name 80}}</span>{{else}}<a class="mono" title="{{$name}}" href="/movers/drill?z={{$p.Zone.Name}}&amp;dim={{$dim}}&amp;name={{$name}}">{{short $name 80}}</a>{{end}}{{template "ptag" (purposeTag $dim $name)}}{{end}}
 {{define "moverrows"}}{{$w := index . 0}}{{$rows := index . 1}}
 {{if not $rows}}<p class="muted">{{t "none"}}</p>{{else}}
 <table class="list">
 <thead><tr><th>{{t "name"}}</th><th class="r">{{t "current"}}</th><th class="r">{{t "baseline"}}</th><th class="r">{{t "change"}}</th></tr></thead>
 <tbody>
 {{range $rows}}<tr>
-  <td class="name">{{if or $w.Snap (not (drillable $w.Dim .Name))}}<span class="mono" title="{{.Name}}">{{short .Name 80}}</span>{{else}}<a class="mono" title="{{.Name}}" href="/movers/drill?z={{$w.ZoneName}}&amp;dim={{$w.Dim}}&amp;name={{.Name}}">{{short .Name 80}}</a>{{end}}{{if eq $w.Dim "asn"}}{{template "asninfo" (list .Name $w.Known $w.Here)}}{{end}}{{if not $w.Snap}}{{template "cover" (list $w.ZoneName $w.Dim .Name)}}{{end}}{{if .Known}} <span class="tag">{{t "known"}}</span>{{else}}{{template "knownbtn" (list $w.Dim .Name $w.CSRF $w.Known $w.Here)}}{{end}}{{template "blocklink" (list $w.Dim .Name $w.ZoneName $w.Reason $w.Can)}}</td>
+  <td class="name">{{if or $w.Snap (not (drillable $w.Dim .Name))}}<span class="mono" title="{{.Name}}">{{short .Name 80}}</span>{{else}}<a class="mono" title="{{.Name}}" href="/movers/drill?z={{$w.ZoneName}}&amp;dim={{$w.Dim}}&amp;name={{.Name}}">{{short .Name 80}}</a>{{end}}{{template "ptag" (purposeTag $w.Dim .Name)}}{{if eq $w.Dim "asn"}}{{template "asninfo" (list .Name $w.Known $w.Here)}}{{end}}{{if not $w.Snap}}{{template "cover" (list $w.ZoneName $w.Dim .Name)}}{{end}}{{if .Known}} <span class="tag">{{t "known"}}</span>{{else}}{{template "knownbtn" (list $w.Dim .Name $w.CSRF $w.Known $w.Here)}}{{end}}{{template "blocklink" (list $w.Dim .Name $w.ZoneName $w.Reason $w.Can)}}</td>
   <td class="r">{{if .CurCapped}}&lt; {{end}}{{num .Cur}}</td>
   <td class="r">{{if .BaseCapped}}&lt; {{end}}{{num .Base}}</td>
   <td class="r"><b>{{if or .BaseCapped .CurCapped}}≈{{end}}{{delta .Delta}}</b>{{if .HasPct}}<br><small class="muted">{{pct .Pct}}</small>{{end}}</td>
@@ -77,6 +79,7 @@
   <a href="/movers?z={{$z}}&amp;dim=asn"{{if eq $dim "asn"}} class="on"{{end}}>{{t "dim_asn"}}</a>
   <a href="/movers?z={{$z}}&amp;dim=path"{{if eq $dim "path"}} class="on"{{end}}>{{t "dim_path"}}</a>
 </nav>
+{{if eq $dim "ua"}}{{template "purposenav" (list . (printf "/movers?z=%s&dim=ua" $z))}}{{end}}
 {{if .NoASN}}<div class="banner info">{{t "no_asn_plan"}}</div>{{end}}
 {{with .Movers}}
 {{if not .Has}}<section class="card"><p>{{t "no_data"}}</p></section>{{else}}
@@ -110,13 +113,14 @@
 {{range .Faces.Sections}}
 <section class="card">
 <h2>{{t (print "dim_" .Dim)}}</h2>
+{{if eq .Dim "ua"}}{{template "purposenav" (list $ (printf "/faces?z=%s&days=%d" $z $days))}}{{end}}
 {{if and (eq .Dim "asn") $.NoASN}}<p class="note">{{t "no_asn_plan"}}</p>{{end}}
 {{if eq .Dim "path"}}<p class="note">{{if $pathSince.IsZero}}{{t "path_since_none"}}{{else}}{{tf "path_since" (when $pathSince)}}{{end}} {{t "path_note"}}</p>{{end}}
 {{if not .Faces}}<p class="muted">{{t "none"}}</p>{{else}}
 <table class="list">
 <thead><tr><th>{{t "name"}}</th><th>{{t "first_seen"}}</th><th class="r">{{t "now"}}</th><th class="r">{{t "peak"}}</th></tr></thead>
 <tbody>{{range .Faces}}<tr>
-  <td class="name">{{if drillable .Dim .Name}}<a class="mono" title="{{.Name}}" href="/movers/drill?z={{$.Zone.Name}}&amp;dim={{.Dim}}&amp;name={{.Name}}">{{short .Name 80}}</a>{{else}}<span class="mono" title="{{.Name}}">{{short .Name 80}}</span>{{end}}{{if eq .Dim "asn"}}{{template "asninfo" (list .Name $.CanSettings $.Here)}}{{end}}{{template "cover" (list $.Zone.Name .Dim .Name)}}{{if .Known}} <span class="tag">{{t "known"}}</span>{{else}}{{template "knownbtn" (list .Dim .Name $.Req.CSRF $.CanSettings $.Here)}}{{end}}{{template "blocklink" (list .Dim .Name $.Zone.Name "new face" $.CanWrite)}}</td>
+  <td class="name">{{if drillable .Dim .Name}}<a class="mono" title="{{.Name}}" href="/movers/drill?z={{$.Zone.Name}}&amp;dim={{.Dim}}&amp;name={{.Name}}">{{short .Name 80}}</a>{{else}}<span class="mono" title="{{.Name}}">{{short .Name 80}}</span>{{end}}{{template "ptag" (purposeTag .Dim .Name)}}{{if eq .Dim "asn"}}{{template "asninfo" (list .Name $.CanSettings $.Here)}}{{end}}{{template "cover" (list $.Zone.Name .Dim .Name)}}{{if .Known}} <span class="tag">{{t "known"}}</span>{{else}}{{template "knownbtn" (list .Dim .Name $.Req.CSRF $.CanSettings $.Here)}}{{end}}{{template "blocklink" (list .Dim .Name $.Zone.Name "new face" $.CanWrite)}}</td>
   <td>{{when .FirstSeen}}<br><small class="muted">{{ago .FirstSeen}}</small></td>
   <td class="r">{{if .InCur}}{{num .Cur}}{{else}}<span class="muted">{{t "not_in_top"}}</span>{{end}}</td>
   <td class="r">{{num .MaxCount}}<br><small class="muted">{{t "last_seen"}} {{ago .LastSeen}}</small></td>
@@ -310,9 +314,24 @@
   <dt>{{t "window"}}</dt><dd>{{when .From}}–{{hm .To}}</dd>
   <dt>{{t "current"}}</dt><dd><b>{{num .Cur}}</b></dd>
   <dt>{{t "yesterday"}}</dt><dd>{{num .Prev}} <span class="muted">({{delta (sub .Cur .Prev)}})</span></dd>
+  {{with .Purpose}}{{if eq $.Drill.Dim "ua"}}<dt>{{t "purpose"}}</dt><dd>{{with labelTag .Label}}<span class="tag purpose p-{{.Class}}">{{.Text}}</span> <span class="muted">{{.Title}}</span>{{else}}<span class="muted">{{t "purpose_none"}}</span>{{end}}{{if .NoASN}} <small class="muted">{{t "purpose_no_asn"}}</small>{{end}}</dd>{{end}}{{end}}
 </dl>
 {{end}}
 </section>
+{{with .Purpose}}{{if eq $.Drill.Dim "asn"}}<section class="card"><h2>{{t "drill_purpose"}}</h2>
+{{if .Err}}<p class="bad">{{short .Err 200}}</p>{{else if not .Rows}}<p class="muted">{{t "purpose_none"}}</p>{{else}}
+<table class="list rsp">
+<thead><tr><th>{{t "purpose"}}</th><th class="r">{{t "current"}}</th><th class="r">{{t "share"}}</th><th>{{t "purpose_top"}}</th></tr></thead>
+<tbody>{{range .Rows}}<tr>
+  <td data-label="{{t "purpose"}}"><span class="tag purpose p-{{.Class}}">{{className .Class}}</span></td>
+  <td class="r" data-label="{{t "current"}}">{{num .Count}}</td>
+  <td class="r" data-label="{{t "share"}}">{{printf "%.1f%%" .Share}}</td>
+  <td class="name" data-label="{{t "purpose_top"}}"><span class="mono">{{short .Top 90}}</span></td>
+</tr>{{end}}
+<tr><td class="muted">{{t "purpose_untagged"}}</td><td></td><td class="r muted">{{printf "%.1f%%" .Rest}}</td><td></td></tr>
+</tbody></table>{{end}}
+<p class="note">{{t "purpose_drill_note"}}{{if .NoASN}} {{t "purpose_no_asn"}}{{end}}</p>
+</section>{{end}}{{end}}
 {{range .Sections}}
 <section class="card"><h2>{{t .Key}}</h2>
 {{if .Err}}<p class="bad">{{short .Err 200}}</p>{{else if not .Rows}}<p class="muted">{{t "none"}}</p>{{else}}{{$sd := .Dim}}{{$sb := .Block}}
@@ -320,7 +339,7 @@
 <table class="list rsp">
 <thead><tr><th>{{t "name"}}</th><th class="r">{{t "current"}}</th><th class="r">{{t "share"}}</th><th class="r">{{t "yesterday"}}</th></tr></thead>
 <tbody>{{range .Rows}}<tr>
-  <td class="name" data-label="{{t "name"}}">{{if and $sd (drillable $sd .Name)}}<a class="mono" href="/movers/drill?z={{$z.Name}}&amp;dim={{$sd}}&amp;name={{.Name}}">{{short .Name 90}}</a>{{else}}<span class="mono">{{short .Name 90}}</span>{{end}}{{if eq $sd "ip"}}{{geo .Name}}{{end}}{{if eq $sd "asn"}}{{template "asninfo" (list .Name false "")}}{{end}}{{if $sb}}{{template "blocklink" (list $sb .Name $z.Name "drill-down" $can)}}{{end}}</td>
+  <td class="name" data-label="{{t "name"}}">{{if and $sd (drillable $sd .Name)}}<a class="mono" href="/movers/drill?z={{$z.Name}}&amp;dim={{$sd}}&amp;name={{.Name}}">{{short .Name 90}}</a>{{else}}<span class="mono">{{short .Name 90}}</span>{{end}}{{template "ptag" (purposeTag $sd .Name)}}{{if eq $sd "ip"}}{{geo .Name}}{{end}}{{if eq $sd "asn"}}{{template "asninfo" (list .Name false "")}}{{end}}{{if $sb}}{{template "blocklink" (list $sb .Name $z.Name "drill-down" $can)}}{{end}}</td>
   <td class="r" data-label="{{t "current"}}">{{num .Cur}}</td>
   <td class="r" data-label="{{t "share"}}">{{printf "%.1f%%" .Share}}</td>
   <td class="r" data-label="{{t "yesterday"}}">{{if .PrevKnow}}{{num .Prev}}{{else}}<span class="muted">{{t "not_in_top"}}</span>{{end}}</td>

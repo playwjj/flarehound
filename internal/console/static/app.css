@@ -223,6 +223,11 @@ ul.known li { margin-bottom: .3rem; }
 .net-eyeball { background: var(--ok-bg); color: var(--fg); }
 
 .tag.cover { color: var(--ok); border-color: var(--ok); }
+.tag.purpose { margin-left: .3rem; }
+.tag.p-training, .tag.p-tool { color: var(--watch); border-color: var(--watch); }
+.tag.p-undeclared { color: var(--alert); border-color: var(--alert); }
+.tag.p-search, .tag.p-user_action { color: var(--ok); border-color: var(--ok); }
+nav.seg.small a { font-size: .8rem; }
 .tag.cover.partial { color: var(--watch); border-color: var(--watch); }
 
 p.verdict { padding: .6rem .8rem; border-radius: 8px; background: var(--bg); }

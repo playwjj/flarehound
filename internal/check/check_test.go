@@ -30,6 +30,8 @@ type window struct {
 	cpu                  float64
 	cpu99                float64
 	ua, asn              []cfapi.Face
+	// uaRows: the UA × network × verified-bot grouping (traffic by purpose).
+	uaRows []cfapi.Face
 	// totalAfterSettle, when set, is what a re-read of Total returns.
 	totalAfterSettle int64
 }
@@ -103,6 +105,14 @@ func (f *fakeAPI) Top(_ context.Context, _ string, from, _ time.Time, dim string
 			return []cfapi.Face{{Name: "45.13.7.7", Count: 120}}, nil
 		}
 		return []cfapi.Face{{Name: "45.13.7.7", Count: 300}, {Name: "45.13.7.9", Count: 200}}, nil
+	case cfapi.DimUAASNBot:
+		var out []cfapi.Face
+		for _, r := range w.uaRows {
+			if flt.UserAgent == "" || r.Name == flt.UserAgent {
+				out = append(out, r)
+			}
+		}
+		return out, nil
 	case cfapi.DimClientIPASNBot:
 		return []cfapi.Face{{Name: "66.249.66.1", ASN: 15169, Count: 900, Cat: "Search Engine Crawler"},
 			{Name: "45.13.7.7", ASN: 207990, Count: 300}, {Name: "45.13.7.9", ASN: 207990, Count: 200}}, nil

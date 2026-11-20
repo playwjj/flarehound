@@ -51,6 +51,7 @@
   "report": { "language": "en", "visuals": true },
   "rule_names": {},
   "asn_names": {},
+  "purposes": {},
   "waf_audit": {
     "disabled": false,
     "hosts": [],

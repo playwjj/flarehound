@@ -2,6 +2,28 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.22.0 — 2026-11-20
+
+- **Traffic by purpose: why the traffic comes.** FlareHound split traffic by user agent, network, IP and path, but not by the one property that decides the response: a training crawler, a fetch a person triggered in an assistant and a fetch API serving its customers can be the same size and need opposite answers. Telling them apart took hand knowledge — "is AS45102 Qwen calling the site?" needed a manual breakdown to answer *no: 98 % is a headless Chrome fleet on Alibaba Cloud machines, 1.3 % rednote, no verified bots*. Six classes: **training**, **search**, **user-triggered**, **fetch tools**, **mixed** (Googlebot, Bingbot) and **undeclared automation**. No new data source, no new token, no write path; it never acts.
+  - **Built-in table** (a release snapshot of the community ai.robots.txt list: UA → operator → purpose), never fetched at run time; **overrides** in `purposes` (config) or the console (Settings → Network names → Traffic purposes), audited. Applied when shown, never stored: the archive keeps raw user agents and the report names the table version.
+  - **Trust with every label**: *verified* (≥ 90 % pass `cf.client.bot`), *self-declared*, or *by traits*. **Undeclared automation** is a browser user agent from a hosting / cloud network, or a headless browser — described by its traits, never as an AI operator. It needs the ASN dimension (not judged on Free, and the report says so).
+  - **Daily report**: a *Traffic by purpose* section — each class's share, count, yesterday's share and change, top 3 user agents with trust; a class moving ≥ 10 percentage points is named in the conclusion line. Two extra GraphQL queries per report.
+  - **Alerts**: new user agents carry their purpose. A new **training** crawler that is verified (or that the plan cannot verify) is recorded, not alerted on — archived, logged and listed in the daily report; an unverified self-declared one alerts as before. No threshold changes.
+  - **Console**: purpose badges on user agents (movers, new faces, live faces, blocked board, drill-down); a purpose filter on the movers and new-faces pages; the drill-down shows a user agent's label with trust and a network's traffic split by purpose.
+  - **`flarehound purpose [--hours 24] [--asn N]`** (read token) prints the section for the zone or one network. **`doctor`** shows the table version, entries and overrides; a broken table turns the facet off and everything behaves as before.
+- Docs: [Traffic by purpose](https://playwjj.github.io/flarehound/purpose/).
+
+## v1.22.0 — 2026-11-20
+
+- **Traffic by purpose: why the traffic comes.** FlareHound split traffic by user agent, network, IP and path, but not by the one property that decides the response: a training crawler, a fetch a person triggered in an assistant and a fetch API serving its customers can be the same size and need opposite answers. Telling them apart took hand knowledge — "is AS45102 Qwen calling the site?" needed a manual breakdown to answer *no: 98 % is a headless Chrome fleet on Alibaba Cloud machines, 1.3 % rednote, no verified bots*. Six classes: **training**, **search**, **user-triggered**, **fetch tools**, **mixed** (Googlebot, Bingbot) and **undeclared automation**. No new data source, no new token, no write path; it never acts.
+  - **Built-in table** (a release snapshot of the community ai.robots.txt list: UA → operator → purpose), never fetched at run time; **overrides** in `purposes` (config) or the console (Settings → Network names → Traffic purposes), audited. Applied when shown, never stored: the archive keeps raw user agents and the report names the table version.
+  - **Trust with every label**: *verified* (≥ 90 % pass `cf.client.bot`), *self-declared*, or *by traits*. **Undeclared automation** is a browser user agent from a hosting / cloud network, or a headless browser — described by its traits, never as an AI operator. It needs the ASN dimension (not judged on Free, and the report says so).
+  - **Daily report**: a *Traffic by purpose* section — each class's share, count, yesterday's share and change, top 3 user agents with trust; a class moving ≥ 10 percentage points is named in the conclusion line. Two extra GraphQL queries per report.
+  - **Alerts**: new user agents carry their purpose. A new **training** crawler that is verified (or that the plan cannot verify) is recorded, not alerted on — archived, logged and listed in the daily report; an unverified self-declared one alerts as before. No threshold changes.
+  - **Console**: purpose badges on user agents (movers, new faces, live faces, blocked board, drill-down); a purpose filter on the movers and new-faces pages; the drill-down shows a user agent's label with trust and a network's traffic split by purpose.
+  - **`flarehound purpose [--hours 24] [--asn N]`** (read token) prints the section for the zone or one network. **`doctor`** shows the table version, entries and overrides; a broken table turns the facet off and everything behaves as before.
+- Docs: [Traffic by purpose](https://playwjj.github.io/flarehound/purpose/).
+
 ## v1.21.0 — 2026-11-20
 
 - **Rule simulator, phase 3: partial evaluation and its own track record.**

@@ -200,6 +200,19 @@
 </ul>
 <form method="get" action="/settings/asn/name" class="inline"><input name="asn" placeholder="AS45102" required><input type="hidden" name="next" value="/settings/asn"><button class="small">{{t "asn_name_it"}}</button></form>
 </section>
+<section class="card">
+<h2>{{t "set_purposes"}}</h2>
+<p class="note">{{t "purposes_note"}}{{with .Eff.PurposeTable}}{{if .OK}} {{tf "purpose_table" .Version .Size}}{{end}}{{end}}</p>
+<ul class="known">
+{{range $k, $v := .Base.Purposes}}<li><span class="mono">{{$k}}</span> → <b>{{className $v}}</b> <span class="tag">{{t "from_file"}}</span></li>{{end}}
+{{range $k, $v := .Overlay.Purposes}}<li><span class="mono">{{$k}}</span> → <b>{{className $v}}</b> <span class="tag">{{t "from_console"}}</span>
+  <form method="post" action="/settings/purpose" class="op"><input type="hidden" name="csrf" value="{{$rq.CSRF}}"><input type="hidden" name="ua" value="{{$k}}"><input type="hidden" name="class" value=""><button class="small">{{t "purpose_remove"}}</button></form></li>{{end}}
+</ul>
+<form method="post" action="/settings/purpose" class="inline"><input type="hidden" name="csrf" value="{{$rq.CSRF}}">
+<input name="ua" placeholder="{{t "purpose_ua"}}" required minlength="3" maxlength="300">
+<select name="class">{{range purposeClasses}}<option value="{{.}}">{{className .}}</option>{{end}}<option value="undeclared">{{className "undeclared"}}</option><option value="none">none</option></select>
+<button class="small">{{t "purpose_set"}}</button></form>
+</section>
 {{end}}
 {{template "foot" .}}{{end}}
 

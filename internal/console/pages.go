@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/playwjj/flarehound/internal/purpose"
 	"html"
 	"html/template"
 	"log"
@@ -66,6 +67,7 @@ type page struct {
 	Trend       template.HTML
 	Dim         string
 	Faces       *NewFaces
+	Purpose     string // purpose filter of the UA lists ("" = all)
 	Days        int
 	History     *History
 	Range       string
@@ -196,7 +198,16 @@ func (s *Server) funcs(l lang) template.FuncMap {
 		"verdictKind":   func(e Effect) string { k, _ := e.Verdict(string(l)); return k },
 		"coverOf":       func(zone, dim, name string) *analyze.RuleCover { return s.coverOf(zone, dim, name) },
 		"drillable":     func(dim, name string) bool { _, ok := drillFilter(dim, name); return ok },
-		"choicesFor":    func(p wafkit.Param, plan string) []string { return p.ChoicesFor(plan) },
+		"purposeTag":    func(dim, name string) *PurposeTag { return s.purposeTag(l, dim, name) },
+		"labelTag": func(lb *purpose.Label) *PurposeTag {
+			if lb == nil {
+				return nil
+			}
+			return purposeTagOf(l, *lb)
+		},
+		"className":      func(c string) string { return report.ClassName(string(l), purpose.Class(c)) },
+		"purposeClasses": PurposeClasses,
+		"choicesFor":     func(p wafkit.Param, plan string) []string { return p.ChoicesFor(plan) },
 		"full": func(q map[string]rulesView, phase string) bool {
 			v, ok := q[phase]
 			return ok && v.Limit > 0 && v.Used >= v.Limit
@@ -448,12 +459,29 @@ func (s *Server) buildView(ctx context.Context, view string, q url.Values) (stri
 		default:
 			dim = DimUA
 		}
-		mv, err := BuildMovers(s.Archive, s.eff(), z, dim, 10)
+		pf := ""
+		if dim == DimUA {
+			pf = purposeParam(q.Get("purpose"))
+		}
+		limit := 10
+		if pf != "" {
+			limit = 200 // filter the whole list, then keep ten
+		}
+		mv, err := BuildMovers(s.Archive, s.eff(), z, dim, limit)
 		if err != nil {
 			return "", page{}, err
 		}
+		if pf != "" {
+			t := s.eff().PurposeTable()
+			mv.Up, mv.Down = filterMovers(t, mv.Up, pf), filterMovers(t, mv.Down, pf)
+			mv.Up, mv.Down = mv.Up[:min(len(mv.Up), 10)], mv.Down[:min(len(mv.Down), 10)]
+		}
+		sp := url.Values{"z": {z.Name}, "dim": {dim}}
+		if pf != "" {
+			sp.Set("purpose", pf)
+		}
 		p := page{Title: s.lc(ctx).t("nav_movers"), Zone: z, Nav: "movers", Movers: &mv, Dim: dim, NoASN: dim == DimASN && s.noASN(ctx, z),
-			Refresh: s.Cfg.Console.RefreshSeconds, SnapView: view, SnapParams: url.Values{"z": {z.Name}, "dim": {dim}}.Encode()}
+			Purpose: pf, Refresh: s.Cfg.Console.RefreshSeconds, SnapView: view, SnapParams: sp.Encode()}
 		if mv.Has && s.Analytics != nil {
 			p.Blocked = s.blocked(ctx, z, mv.Window, !s.noASN(ctx, z))
 		}
@@ -526,7 +554,9 @@ func (s *Server) facesPage(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	s.render(w, r, http.StatusOK, "faces", page{Title: s.L(r).t("nav_faces"), Zone: z, Nav: "faces", Faces: &nf, Days: days, NoASN: s.noASN(r.Context(), z),
+	pf := purposeParam(r.URL.Query().Get("purpose"))
+	nf.ByDim[DimUA] = filterFaces(s.eff().PurposeTable(), nf.ByDim[DimUA], pf)
+	s.render(w, r, http.StatusOK, "faces", page{Title: s.L(r).t("nav_faces"), Zone: z, Nav: "faces", Faces: &nf, Days: days, NoASN: s.noASN(r.Context(), z), Purpose: pf,
 		Refresh: s.Cfg.Console.RefreshSeconds})
 }
 

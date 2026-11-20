@@ -339,6 +339,7 @@ func (s *Server) Handler() http.Handler {
 	})))
 	mux.Handle("GET /settings/asn/name", admin(s.requireSettings(s.asnNamePage)))
 	mux.Handle("POST /settings/asn/name", admin(s.requireSettings(s.stepUp(s.asnNamePost))))
+	mux.Handle("POST /settings/purpose", admin(s.requireSettings(s.stepUp(s.purposePost))))
 	for _, tab := range []string{"notify", "thresholds", "known", "asn", "history"} {
 		mux.Handle("GET /settings/"+tab, admin(s.requireSettings(s.settingsPage(tab))))
 	}
