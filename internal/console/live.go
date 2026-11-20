@@ -41,7 +41,13 @@ type LiveView struct {
 	Err        string
 }
 
-const liveFaces = 5 // faces shown under the live tiles
+// Faces shown under the live tiles. User agents are long and wrap to two
+// or three lines; networks fit on one, so more of them fill the same
+// height next to the UA column.
+const (
+	liveFaces    = 5 // user agents
+	liveASNFaces = 8 // networks
+)
 
 type liveEntry struct {
 	mu   sync.Mutex
@@ -184,7 +190,7 @@ func (s *Server) liveView(ctx context.Context, z config.Zone) *LiveView {
 	v.Rows = metricRows(s.eff(), z, cur, base, has)
 	v.Total = cur.Total
 	v.TopUA = shareRows(cur.TopUA[:min(len(cur.TopUA), liveFaces)], cur.Total)
-	v.TopASN = shareRows(cur.TopASN[:min(len(cur.TopASN), liveFaces)], cur.Total)
+	v.TopASN = shareRows(cur.TopASN[:min(len(cur.TopASN), liveASNFaces)], cur.Total)
 	e.view = v
 	return v
 }

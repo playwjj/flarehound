@@ -2,6 +2,14 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.22.1 — 2026-11-20
+
+- **Console home: "loudest now" lists 8 networks.** User agents wrap to two or three lines while networks fit on one, so five of each left the ASN column half as tall as the UA column. The ASN column now shows 8 (the hour's Top 10 is already measured — no extra query); user agents stay at 5.
+
+## v1.22.1 — 2026-11-20
+
+- **Console home: "loudest now" lists 8 networks.** User agents wrap to two or three lines while networks fit on one, so five of each left the ASN column half as tall as the UA column. The ASN column now shows 8 (the hour's Top 10 is already measured — no extra query); user agents stay at 5.
+
 ## v1.22.0 — 2026-11-20
 
 - **Traffic by purpose: why the traffic comes.** FlareHound split traffic by user agent, network, IP and path, but not by the one property that decides the response: a training crawler, a fetch a person triggered in an assistant and a fetch API serving its customers can be the same size and need opposite answers. Telling them apart took hand knowledge — "is AS45102 Qwen calling the site?" needed a manual breakdown to answer *no: 98 % is a headless Chrome fleet on Alibaba Cloud machines, 1.3 % rednote, no verified bots*. Six classes: **training**, **search**, **user-triggered**, **fetch tools**, **mixed** (Googlebot, Bingbot) and **undeclared automation**. No new data source, no new token, no write path; it never acts.
