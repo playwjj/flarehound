@@ -12,13 +12,17 @@ Cloudflare keeps about 31 days of adaptive analytics (firewall events likewise, 
 | Table | Holds | Kept |
 |---|---|---|
 | `snapshots` | One row per zone per window (`hour`, and `day` from the daily report): totals plus the full query set as JSON — cache-status split, top dynamic paths, firewall events per rule, and (from v1.14) the top 50 client IPs with their ASN, Cloudflare-verified bot addresses apart (from v1.14.1), and the top 50 IPs stopped at the edge | Hourly: `archive.hourly_retention_days` (default 400, min 30); daily: forever |
-| `faces` | First and last time each UA / ASN appeared in any Top list, and its peak count | Forever |
-| `alerts` | Every message-producing decision: window, decision, fingerprint, findings | Forever |
+| `faces` | First and last time each UA / ASN appeared in any Top list, and its peak count | Until not seen for `hourly_retention_days` (v1.18; forever before) |
+| `alerts` | Every message-producing decision: window, decision, fingerprint, findings | `hourly_retention_days` (v1.18; forever before) |
 | `block_events` | Audit log of [blocking](blocking.md): block, unblock, expire | Forever |
 | `rule_backups`, `rule_changes` | Snapshots and audit log of the [rule-change module](rules.md) | Forever |
 | `calibration_days` | Per-day [calibration](#calibration) measurements | Forever |
 
-Each intraday round writes the current window (with five extra queries for the breakdowns: cache status, dynamic paths, firewall events, client IPs, IPs stopped at the edge) and the baseline window — the baseline only if it is not archived yet, so a fuller copy is never overwritten. Old hourly snapshots are pruned each round. Archive read/write errors are logged and never stop the watch.
+Each intraday round writes the current window (with five extra queries for the breakdowns: cache status, dynamic paths, firewall events, client IPs, IPs stopped at the edge) and the baseline window — the baseline only if it is not archived yet, so a fuller copy is never overwritten. Each round also prunes, at one cut point (`archive.hourly_retention_days` ago): hourly snapshots older than it, faces last seen before it and archived alerts whose window ended before it. Daily snapshots, the block log, rule backups and rule changes are never pruned — they are small, and the audit is their point. Archive read/write errors are logged and never stop the watch.
+
+### Disk space
+
+SQLite does not shrink a file when rows are deleted; the freed pages are reused by the next inserts, so in steady state (as much pruned as added) the file levels off. An archive **created by v1.18 or later** uses `auto_vacuum=INCREMENTAL`: when one prune removes 1,000 rows or more — typically after lowering `hourly_retention_days` — the freed space is handed back and the file gets smaller. **An archive created earlier keeps its mode**: it levels off but never shrinks, and FlareHound does not rebuild it (to shrink one by hand: stop the services and run `sqlite3 data/archive.db 'VACUUM'`). The same applies to `console.db`. A WAL file (`archive.db-wal`) of a few MB is SQLite's normal checkpoint size, not a leak. `flarehound doctor` shows the sizes and which mode a file has.
 
 ## What it is used for
 

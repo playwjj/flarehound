@@ -70,6 +70,8 @@ The channel is active only when the token variable is non-empty **and** a chat I
 
 Every message is appended as one JSON line — for a bridge that tails the file into a chat, or a log shipper. Relative paths are relative to the working directory (in Docker use `/app/data/…` or `data/…` so it lands on the volume). The directory is created if needed; the file is created with mode `0644` (alerts hold no secrets, and a bridge often runs as a different user than the container), and each record is a single `O_APPEND` write, so a reader never sees half a record.
 
+**Rotation (v1.18).** Before a message is written, a file that has reached **32 MB** is renamed: `alerts.jsonl` → `alerts.jsonl.1` → `.2` → `.3`; the oldest copy is dropped, so at most 3 rotated files are kept. Rotation happens between messages, so every file holds whole lines only. A bridge that tails by name (`tail -F`) follows the new file; one that holds the old descriptor reads it to its end first. The [charts](#charts-and-html-reportvisuals-default-on) saved in `charts/` are removed **90 days** after they were written, once a day with the daily report; the message itself stays in the archive. Neither limit is configurable.
+
 Record fields:
 
 | Field | Meaning |

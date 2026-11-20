@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
@@ -169,7 +170,78 @@ func (Stdout) Send(_ context.Context, m Message) error {
 // channel for consumers that live next to FlareHound (a bridge that
 // tails the file into a chat, a log shipper). Lines are appended with
 // O_APPEND in a single write, so a reader never sees half a record.
-type File struct{ Path string }
+//
+// The file is rotated between messages once it passes JSONLMaxBytes:
+// alerts.jsonl → alerts.jsonl.1 → … → alerts.jsonl.3 (the oldest is
+// dropped). Every file only ever holds whole lines. The charts saved next
+// to it are removed after ChartKeep by PruneCharts (daily).
+type File struct {
+	Path     string
+	MaxBytes int64 // rotation size; 0: JSONLMaxBytes
+}
+
+// Storage limits of the File channel (constants, not settings).
+const (
+	JSONLMaxBytes = 32 << 20            // rotate alerts.jsonl past 32 MB
+	JSONLBackups  = 3                   // keep alerts.jsonl.1 … .3
+	ChartKeep     = 90 * 24 * time.Hour // charts/ PNGs older than this go
+)
+
+// fileMu serialises rotate-and-append within the process (zones send in
+// parallel; two rotations in a row would push a fresh file down).
+var fileMu sync.Mutex
+
+// rotate shifts path → path.1 → … → path.JSONLBackups when path has
+// reached limit bytes. Renames are atomic: a reader tailing by name sees
+// the new file; one holding the old descriptor reads it to its end.
+func rotate(path string, limit int64) error {
+	fi, err := os.Stat(path)
+	if err != nil || fi.Size() < limit {
+		return nil // missing: created by the append
+	}
+	for i := JSONLBackups - 1; i >= 1; i-- {
+		src := fmt.Sprintf("%s.%d", path, i)
+		if _, err := os.Stat(src); err == nil {
+			if err := os.Rename(src, fmt.Sprintf("%s.%d", path, i+1)); err != nil {
+				return err
+			}
+		}
+	}
+	return os.Rename(path, path+".1")
+}
+
+// PruneCharts removes chart PNGs older than keep from the charts/
+// directory next to a JSONL file. They are copies of message
+// attachments; the message itself stays in the archive. It returns how
+// many files went.
+func PruneCharts(jsonlPath string, keep time.Duration, now time.Time) (int, error) {
+	if jsonlPath == "" {
+		return 0, nil
+	}
+	dir := filepath.Join(filepath.Dir(jsonlPath), "charts")
+	ents, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	cut := now.Add(-keep)
+	for _, e := range ents {
+		if !e.Type().IsRegular() || !strings.EqualFold(filepath.Ext(e.Name()), ".png") {
+			continue
+		}
+		fi, err := e.Info()
+		if err != nil || !fi.ModTime().Before(cut) {
+			continue
+		}
+		if os.Remove(filepath.Join(dir, e.Name())) == nil {
+			n++
+		}
+	}
+	return n, nil
+}
 
 func (f File) Name() string { return "file" }
 func (f File) Send(_ context.Context, m Message) error {
@@ -196,6 +268,15 @@ func (f File) Send(_ context.Context, m Message) error {
 	}
 	if err := os.MkdirAll(filepath.Dir(f.Path), 0o755); err != nil {
 		return err
+	}
+	fileMu.Lock()
+	defer fileMu.Unlock()
+	limit := f.MaxBytes
+	if limit <= 0 {
+		limit = JSONLMaxBytes
+	}
+	if err := rotate(f.Path, limit); err != nil {
+		return fmt.Errorf("rotate %s: %w", f.Path, err)
 	}
 	// 0644: alerts carry no secrets, and a bridge tailing the file often
 	// runs as a different user than the container (UID 65534).

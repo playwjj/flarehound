@@ -112,7 +112,7 @@ All channels are optional and can be combined; with none configured, findings ap
 | `notify.webhook_url` | string | `""` | Plain-text webhook URL, kept for compatibility. Prefer `webhook_url_env`. |
 | `notify.telegram_bot_token_env` | string | `""` | Variable holding the Telegram bot token. |
 | `notify.telegram_chat_id` | string | `""` | Telegram chat ID. Telegram is active only when both are set. |
-| `notify.jsonl_file` | string | `""` | Append every message as one JSON line to this file (mode 0644). Also receives a `heartbeat` record every round. |
+| `notify.jsonl_file` | string | `""` | Append every message as one JSON line to this file (mode 0644). Also receives a `heartbeat` record every round. Rotated at 32 MB, 3 rotated copies kept; charts saved next to it are removed after 90 days ([details](channels.md#jsonl-file)). |
 | `notify.heartbeat_url_env` | string | `""` | Variable holding a healthchecks.io-style URL pinged after every round (`/fail` when a zone errored). Startup fails if named but empty. See [heartbeat](channels.md#heartbeat-dead-man-switch). |
 | `notify.slack_webhook_url_env` | string | `""` | Variable holding a Slack incoming-webhook URL. |
 | `notify.discord_webhook_url_env` | string | `""` | Variable holding a Discord webhook URL. |
@@ -175,7 +175,7 @@ With several zones, each zone probes only the `waf_audit.hosts` that belong to i
 |---|---|---|---|
 | `archive.disabled` | bool | `false` | Turn the local SQLite archive off. `-backfill`, `block --for` and the rule-change commands need it. |
 | `archive.file` | string | `<data dir>/archive.db` | Archive path. |
-| `archive.hourly_retention_days` | int | `400` | Days to keep hourly snapshots (about 13 months). Minimum 30. Daily snapshots, faces and alerts are kept forever. |
+| `archive.hourly_retention_days` | int | `400` | Days to keep hourly snapshots (about 13 months), archived alerts and faces not seen since. Minimum 30. Daily snapshots, the block log and rule backups/changes are kept forever. See [disk space](archive.md#disk-space). |
 
 ## geoip
 

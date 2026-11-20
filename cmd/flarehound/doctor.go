@@ -3,7 +3,7 @@ package main
 // flarehound doctor — one command that answers "is this installation
 // healthy and what can it do?": version, configuration, what each token
 // can actually reach (with the missing permission named), capabilities
-// per zone, archive span, state, heartbeat and outbox. Read-only: every
+// per zone, archive span, storage, state, heartbeat and outbox. Read-only: every
 // probe is a GET or an analytics query; nothing is changed.
 
 import (
@@ -270,6 +270,7 @@ func runDoctor(ctx context.Context, cfg *config.Config, cfgPath string, out io.W
 			st.Close()
 		}
 	}
+	doctorStorage(d, cfg)
 	doctorSettings(d, cfg, now)
 	doctorConsole(d, cfg, now)
 

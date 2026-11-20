@@ -2,6 +2,16 @@
 
 All notable changes to FlareHound. Versions follow [semantic versioning](https://semver.org/); every `v*` tag publishes multi-arch Docker images (`linux/amd64`, `linux/arm64`).
 
+## v1.18.0 — 2026-11-20
+
+- **Storage hygiene: nothing FlareHound writes grows without a bound.** The archive already had a retention limit; four outlets did not. All are closed in code — no logrotate, no cron, no new settings:
+  - **`flarehound doctor` shows the data directory**: `archive.db` (and its WAL) with the oldest hourly snapshot and whether large prunes return space, `console.db`, `alerts.jsonl` and its rotated copies, the `charts/` PNGs (count, size, oldest). A WAL of a few MB is SQLite's normal checkpoint size, not a leak.
+  - **JSONL rotation**: past **32 MB**, `alerts.jsonl` → `alerts.jsonl.1` → `.2` → `.3` (the oldest dropped), between messages — every file still holds whole lines only, each written in one `O_APPEND`.
+  - **Charts expire**: the PNG copies in `charts/` next to the JSONL file are removed **90 days** after they were written, once a day with the daily report (a dry run leaves them). The message itself stays in the archive.
+  - **The archive prunes at one cut point**: besides hourly snapshots, **archived alerts** and **faces not seen** for `archive.hourly_retention_days` (default 400) now go too. Daily snapshots, the block log and rule backups/changes are kept for good.
+  - **Space comes back on new databases**: `archive.db` and `console.db` created from now on use `auto_vacuum=INCREMENTAL`; a prune that removes ≥ 1,000 rows (typically after lowering the retention) hands the space back and the file shrinks. **Existing files are not migrated**: they level off but do not shrink (`doctor` says which kind a file is; [Disk space](https://playwjj.github.io/flarehound/archive/#disk-space) has the manual `VACUUM`).
+  - **`docker-compose.yml` caps container logs**: every service uses the `json-file` driver with `max-size: 10m`, `max-file: 3`.
+
 ## v1.17.0 — 2026-11-20
 
 - **IP location.** Every IP FlareHound shows now carries the country it is registered or routed in — the cheapest piece of context a block decision was missing (a residential address and a data-centre address call for different handling). Display only: it takes no part in detection, alerts, severity or block plans, and it is looked up when shown, never archived.

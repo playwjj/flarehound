@@ -10,6 +10,7 @@ FlareHound states its limits up front rather than letting you discover them.
 - **No referer dimension.** Traffic cannot be split by referring page, so "forged referer bypass" cannot be detected from analytics.
 - **Worker CPU** is available only as quantiles (FlareHound uses P50), not as a total; any cost reading is an estimate.
 - **Retention.** Cloudflare keeps about 31 days. `-backfill` can recover at most the last 30 days; anything older cannot be rebuilt. The archive holds hourly aggregates, never individual requests.
+- **Database files level off, older ones never shrink.** Pruned rows free pages that new rows reuse. Only `archive.db` / `console.db` files created by v1.18 or later give space back to the disk after a large prune (for example after lowering `archive.hourly_retention_days`); files from earlier versions are not rebuilt and keep their size. See [disk space](archive.md#disk-space).
 
 ## Plans
 

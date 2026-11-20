@@ -1,8 +1,17 @@
+# Container logs (Docker's json-file driver) are capped per service:
+# 3 files of 10 MB. FlareHound logs a few lines an hour.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   flarehound:
     build: .
     image: passport888/flarehound:latest
     restart: unless-stopped
+    logging: *logging
     environment:
       # Read-only Cloudflare API token. Never put it in config.json.
       CF_API_TOKEN: ${CF_API_TOKEN:?set CF_API_TOKEN to a read-only Cloudflare API token}
@@ -23,6 +32,7 @@ services:
     image: passport888/flarehound:latest
     profiles: ["admin"]
     restart: unless-stopped
+    logging: *logging
     command: ["-config", "/app/config.json", "enforce"]
     healthcheck:
       test: ["CMD", "flarehound", "-config", "/app/config.json", "health", "--file", "heartbeat-enforce"]
@@ -45,6 +55,7 @@ services:
     image: passport888/flarehound:latest
     profiles: ["console"]
     restart: unless-stopped
+    logging: *logging
     command: ["-config", "/app/config.json", "console", "--listen", "0.0.0.0:8640"]
     ports:
       - "127.0.0.1:8640:8640"

@@ -58,6 +58,7 @@ Run it first after installing. It prints, read-only:
 - per zone: analytics reachable (with the last hour's request count), the plan's capabilities (ASN breakdown, firewall events and how long they are kept), Worker metrics;
 - a **capability matrix** — hourly watch, WAF audit, calibration, one-click blocking, rule changes, cache rules — each ✓ or ✗ **with the missing permission named**;
 - the last evaluated window, any open anomaly, the next hourly round and daily report, the heartbeat age, the archive span, the measured samples behind each newer metric's baseline (and how many days a line still accumulating has to go), and pending outbox messages;
+- **storage**: what the data directory holds — `archive.db` (and its WAL) with the oldest hourly snapshot and whether large prunes return space to the disk, `console.db`, the JSONL file and its rotated copies, the `charts/` PNGs (count, size, oldest) — so a slow build-up is visible;
 - the [IP location](configuration.md#geoip) library: loaded (type, build date, file date, networks), not found (the feature is off — not a problem), or present but unusable (✗).
 
 Exit code 1 when something required is missing. Write permissions are probed with read-only calls, so an edit right is only proven by a real change.

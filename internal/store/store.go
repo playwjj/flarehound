@@ -142,7 +142,10 @@ func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	dsn := "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)"
+	// auto_vacuum comes first: it only takes on a database that has no
+	// tables yet, so a new archive gets it and an existing one (created
+	// before v1.18, auto_vacuum NONE) keeps its mode — no migration.
+	dsn := "file:" + path + "?_pragma=auto_vacuum(INCREMENTAL)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -323,14 +326,108 @@ func (s *Store) Alerts(zone string, from, to time.Time) ([]Alert, error) {
 	return out, rows.Err()
 }
 
-// Prune drops hourly snapshots whose window started before `before`.
-// Daily rollups, faces and alerts are kept for good (they are tiny).
-func (s *Store) Prune(before time.Time) (int64, error) {
-	res, err := s.db.Exec(`DELETE FROM snapshots WHERE kind = 'hour' AND from_ts < ?`, before.Unix())
+// PruneStats says what Prune removed.
+type PruneStats struct {
+	Hours, Faces, Alerts int64
+	Reclaimed            bool // incremental_vacuum ran (archive created with auto_vacuum)
+}
+
+// Total is the number of rows removed.
+func (p PruneStats) Total() int64 { return p.Hours + p.Faces + p.Alerts }
+
+// VacuumAfter is how many rows one prune must remove before it also
+// hands the freed pages back to the file system: a routine round frees a
+// handful of pages that the next inserts reuse anyway; a shortened
+// retention frees thousands at once.
+const VacuumAfter = 1000
+
+// Prune applies the archive retention at one cut point (`before`, from
+// archive.hourly_retention_days): hourly snapshots whose window started
+// before it, faces last seen before it and archived alerts whose window
+// ended before it. Daily rollups, the block audit log and the rule
+// backups and change records are kept for good (small, and the audit is
+// their point). When many rows went, the freed space is returned to the
+// file system — on archives created with auto_vacuum (v1.18+); older
+// files keep their size and reuse the pages.
+func (s *Store) Prune(before time.Time) (PruneStats, error) {
+	var ps PruneStats
+	cut := before.Unix()
+	tx, err := s.db.Begin()
 	if err != nil {
-		return 0, err
+		return ps, err
 	}
-	return res.RowsAffected()
+	defer tx.Rollback()
+	for _, q := range []struct {
+		n   *int64
+		sql string
+	}{
+		{&ps.Hours, `DELETE FROM snapshots WHERE kind = 'hour' AND from_ts < ?`},
+		{&ps.Faces, `DELETE FROM faces WHERE last_seen < ?`},
+		{&ps.Alerts, `DELETE FROM alerts WHERE window_to < ?`},
+	} {
+		res, err := tx.Exec(q.sql, cut)
+		if err != nil {
+			return PruneStats{}, err
+		}
+		*q.n, _ = res.RowsAffected()
+	}
+	if err := tx.Commit(); err != nil {
+		return PruneStats{}, err
+	}
+	if ps.Total() >= VacuumAfter {
+		ok, err := IncrementalVacuum(s.db)
+		if err != nil {
+			return ps, fmt.Errorf("incremental vacuum: %w", err)
+		}
+		ps.Reclaimed = ok
+	}
+	return ps, nil
+}
+
+// IncrementalVacuum returns a database's free pages to the file system
+// when it was created with auto_vacuum=INCREMENTAL (false otherwise: the
+// pages stay in the file for reuse), then checkpoints the WAL so the
+// main file actually shrinks.
+func IncrementalVacuum(db *sql.DB) (bool, error) {
+	var mode int
+	if err := db.QueryRow(`PRAGMA auto_vacuum`).Scan(&mode); err != nil {
+		return false, err
+	}
+	if mode != 2 {
+		return false, nil
+	}
+	// The pragma frees pages as it is stepped: drain it.
+	rows, err := db.Query(`PRAGMA incremental_vacuum`)
+	if err != nil {
+		return false, err
+	}
+	for rows.Next() {
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return false, err
+	}
+	rows.Close()
+	_, err = db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+	return true, err
+}
+
+// AutoVacuum reports the archive's auto_vacuum mode (0 none, 1 full,
+// 2 incremental).
+func (s *Store) AutoVacuum() (int, error) {
+	var mode int
+	err := s.db.QueryRow(`PRAGMA auto_vacuum`).Scan(&mode)
+	return mode, err
+}
+
+// OldestHour returns the start of the oldest archived hourly snapshot,
+// across zones (zero when there is none).
+func (s *Store) OldestHour() (time.Time, error) {
+	var v sql.NullInt64
+	if err := s.db.QueryRow(`SELECT MIN(from_ts) FROM snapshots WHERE kind = 'hour'`).Scan(&v); err != nil || !v.Valid {
+		return time.Time{}, err
+	}
+	return time.Unix(v.Int64, 0).UTC(), nil
 }
 
 // Stats summarises the archive for one zone.

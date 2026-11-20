@@ -15,6 +15,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/playwjj/flarehound/internal/store"
 )
 
 // The console keeps its accounts in its own SQLite file, apart from the
@@ -145,7 +147,9 @@ func OpenDB(path string) (*DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	dsn := "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
+	// auto_vacuum first: it takes on a new file only (v1.18+); an older
+	// console.db keeps its mode.
+	dsn := "file:" + path + "?_pragma=auto_vacuum(INCREMENTAL)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -1022,8 +1026,18 @@ func (d *DB) Prune() (PruneStats, error) {
 		return ps, err
 	}
 	_, _ = d.db.Exec(`DELETE FROM password_resets WHERE expires_at <= ?`, now.Add(-7*24*time.Hour).Unix())
-	err := exec(&ps.OAuth, `DELETE FROM oauth_states WHERE expires_at <= ?`, now.Unix())
-	return ps, err
+	if err := exec(&ps.OAuth, `DELETE FROM oauth_states WHERE expires_at <= ?`, now.Unix()); err != nil {
+		return ps, err
+	}
+	// A big sweep (a year of audit at once, many dropped snapshot pages)
+	// returns its space to the file system on files created with
+	// auto_vacuum; routine hourly sweeps leave the pages for reuse.
+	if ps.Sessions+ps.Snapshots+ps.Audit+ps.Effects+ps.OAuth >= store.VacuumAfter {
+		if _, err := store.IncrementalVacuum(d.db); err != nil {
+			return ps, fmt.Errorf("incremental vacuum: %w", err)
+		}
+	}
+	return ps, nil
 }
 
 // --- password reset by e-mail (v1.7.2) ---

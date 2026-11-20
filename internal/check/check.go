@@ -706,6 +706,22 @@ func (r *Runner) approxAttempts(zoneID string, t block.Target, from, to time.Tim
 	return a, ok && a.Hours > 0
 }
 
+// pruneCharts drops the JSONL channel's chart copies older than
+// notify.ChartKeep — once a day, with the daily report (a dry run leaves
+// the data directory alone). Zones share the directory; the second
+// zone's pass finds nothing left to do.
+func (r *Runner) pruneCharts() {
+	if r.DryRun || r.Cfg.Notify.JSONLFile == "" {
+		return
+	}
+	n, err := notify.PruneCharts(r.Cfg.Notify.JSONLFile, notify.ChartKeep, r.now())
+	if err != nil {
+		log.Printf("charts cleanup: %v", err)
+	} else if n > 0 {
+		log.Printf("charts cleanup: removed %d chart(s) older than %d days", n, int(notify.ChartKeep.Hours()/24))
+	}
+}
+
 // Daily builds and sends the daily report (SPEC 7.1 / 7.4): the last
 // 24 hours against the 24 hours before, with fixed checkpoints. It is
 // a scheduled report, so it is always sent; problems expand, a clean
@@ -718,6 +734,7 @@ func (r *Runner) Daily(ctx context.Context, zone config.Zone) error {
 	}
 	bw := w.Shift(-24 * time.Hour)
 	z := zone.ZoneID
+	r.pruneCharts()
 
 	cur, err := r.fetch(ctx, zone, w, currentTop)
 	if err != nil {
@@ -1039,10 +1056,11 @@ func (r *Runner) archiveRound(ctx context.Context, zone config.Zone, w, bw sched
 	}
 
 	cutoff := r.now().Add(-time.Duration(r.Cfg.Archive.HourlyRetentionDays) * 24 * time.Hour)
-	if n, err := r.Store.Prune(cutoff); err != nil {
+	if ps, err := r.Store.Prune(cutoff); err != nil {
 		logErr("prune", err)
-	} else if n > 0 {
-		log.Printf("zone %s: archive pruned %d hourly snapshots older than %s", zone.Name, n, cutoff.Format("2006-01-02"))
+	} else if ps.Total() > 0 {
+		log.Printf("zone %s: archive pruned %d hourly snapshots, %d faces, %d alerts older than %s%s", zone.Name,
+			ps.Hours, ps.Faces, ps.Alerts, cutoff.Format("2006-01-02"), map[bool]string{true: "; free space returned", false: ""}[ps.Reclaimed])
 	}
 	return &snap
 }

@@ -86,9 +86,9 @@ func TestAlertsPruneStats(t *testing.T) {
 	_ = s.PutSnapshot("z", Hour, old, old.Add(time.Hour), Snapshot{})
 	_ = s.PutSnapshot("z", Day, old, old.Add(24*time.Hour), Snapshot{})
 	_ = s.PutSnapshot("z", Hour, h0, h0.Add(time.Hour), Snapshot{})
-	n, err := s.Prune(h0.Add(-400 * 24 * time.Hour))
-	if err != nil || n != 1 {
-		t.Fatalf("pruned %d, %v", n, err)
+	ps, err := s.Prune(h0.Add(-400 * 24 * time.Hour))
+	if err != nil || ps.Hours != 1 {
+		t.Fatalf("pruned %+v, %v", ps, err)
 	}
 	st, err := s.Stats("z")
 	if err != nil || st.Hours != 1 || st.Days != 1 || st.Alerts != 2 || !st.Oldest.Equal(old) {
